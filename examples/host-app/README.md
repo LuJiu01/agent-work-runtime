@@ -1,5 +1,9 @@
 # No-UI host example
 
+For dependency scheduling, see [source changes and task graphs](../../docs/reference/source-changes.md)
+and `orchestrator.py`. It composes a replaceable executor with the existing workflow,
+bounded parallelism and durable dispatch lookup; source work state remains in AWR.
+
 This standard-library Python 3.11+ example calls a pinned native AWR executable by
 absolute path and argv. It uses no shell, model, daemon, installed hooks or private
 SQLite API. Python runs the example host; it is not an AWR end-user dependency.

@@ -288,7 +288,7 @@ impl Store {
         let claimed: bool = self.conn.query_row("SELECT EXISTS(SELECT 1 FROM claims WHERE project_id=?1 AND work_item_id=?2 AND status='active' AND released_at IS NULL AND (expires_at IS NULL OR expires_at>?3))", rusqlite::params![project.to_string(), work.to_string(), now_millis()?], |r|r.get(0)).map_err(db_error)?;
         if claimed {
             return Err(Error::ClaimConflict(
-                "release the active execution before archiving or restoring work".into(),
+                "release the active execution before changing its planning contract or archive state".into(),
             ));
         }
         Ok(())

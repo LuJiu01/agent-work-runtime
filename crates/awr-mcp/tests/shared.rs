@@ -143,6 +143,163 @@ fn start_args(
 }
 
 #[tokio::test]
+async fn source_changes_preserve_client_scope_reviewed_versions_and_explicit_draft_activation() {
+    let a = ProjectFixture::new("Write the team guide");
+    let b = ProjectFixture::new("Write the other guide");
+    let beta_before = b.revision();
+    let config = registry(&a, &b);
+    let mut server = Server::start(&config).await;
+    let input = json!({"project":"alpha","request_id":"new-reviewed-draft","reason":"Add the reviewed appendix","change":{"kind":"create","title":"Prepare the appendix","fields":{"goal":"GUIDE","acceptance":["The appendix is reviewed"],"next_action":"Draft the appendix"}}});
+    let before = a.revision();
+    let preview = ok(server
+        .call(WRITER, "awr_change_preview", input.clone())
+        .await);
+    assert_eq!(a.revision(), before);
+    let mut apply = input.clone();
+    apply["expected_revision"] = preview["project_revision"].clone();
+    apply["expected_preview"] = preview["preview"]["fingerprint"].clone();
+    let readonly = server.call(READER, "awr_change_apply", apply.clone()).await;
+    assert_eq!(readonly["isError"], true);
+    error(
+        server
+            .call(COLLEAGUE, "awr_change_apply", apply.clone())
+            .await,
+        "SourceConflict",
+    );
+    let created = ok(server.call(WRITER, "awr_change_apply", apply.clone()).await);
+    let key = created["external_key"].as_str().unwrap();
+    let revision = a.revision();
+    let private_status =
+        json!({"project":"alpha","kind":"create","request_id":"new-reviewed-draft"});
+    assert_eq!(
+        ok(server
+            .call(COLLEAGUE, "awr_change_status", private_status.clone())
+            .await)["found"],
+        false
+    );
+    let mut beta_status = private_status.clone();
+    beta_status["project"] = json!("beta");
+    assert_eq!(
+        ok(server.call(WRITER, "awr_change_status", beta_status).await)["found"],
+        false
+    );
+    assert_eq!(
+        ok(server.call(WRITER, "awr_change_apply", apply).await)["already_recorded"],
+        true
+    );
+    assert_eq!(a.revision(), revision);
+    let graph = ok(server
+        .call(
+            WRITER,
+            "awr_work_graph",
+            json!({"project":"alpha","roots":[key]}),
+        )
+        .await);
+    let node = &graph["nodes"][0];
+    assert_eq!(node["status"], "draft");
+    assert_eq!(node["ready"], false);
+    let activate = json!({"project":"alpha","request_id":"activate-appendix","reason":"Accept the explicit appendix plan","change":{"kind":"edit","change":{"operation":"activate_draft","work":key,"source_fingerprint":node["source_ref"]["source_fingerprint"]}}});
+    let p = ok(server
+        .call(WRITER, "awr_change_preview", activate.clone())
+        .await);
+    // Another client can claim independent work; that still invalidates the reviewed revision.
+    ok(server
+        .call(
+            COLLEAGUE,
+            "awr_session_start",
+            start_args("alpha", "NEXT", "independent", a.revision(), true),
+        )
+        .await);
+    let mut activation = activate.clone();
+    activation["expected_revision"] = p["project_revision"].clone();
+    activation["expected_preview"] = p["preview"]["fingerprint"].clone();
+    error(
+        server
+            .call(WRITER, "awr_change_apply", activation.clone())
+            .await,
+        "RevisionConflict",
+    );
+    let p = ok(server.call(WRITER, "awr_change_preview", activate).await);
+    activation["expected_revision"] = p["project_revision"].clone();
+    activation["expected_preview"] = p["preview"]["fingerprint"].clone();
+    ok(server.call(WRITER, "awr_change_apply", activation).await);
+    let graph = ok(server
+        .call(
+            WRITER,
+            "awr_work_graph",
+            json!({"project":"alpha","roots":[key]}),
+        )
+        .await);
+    assert_eq!(graph["nodes"][0]["ready"], true);
+    assert_eq!(b.revision(), beta_before);
+    server.stop().await;
+}
+
+#[tokio::test]
+async fn partial_source_batch_is_queryable_after_restart_and_recovers_without_repeating_the_write()
+{
+    let a = ProjectFixture::new("Write the team guide");
+    let b = ProjectFixture::new("Write the other guide");
+    let config = registry(&a, &b);
+    let mut server = Server::start(&config).await;
+    let store = Store::open_readonly(&a.root.join(".awr/state.db")).unwrap();
+    let source = store.work_item(a.id, "W").unwrap().source;
+    drop(store);
+    let input = json!({"project":"alpha","request_id":"save-dependency-plan","reason":"Apply both reviewed task drafts","change":{"kind":"batch","change":{"kind":"ledger","source_id":source.id,"source_fingerprint":source.fingerprint,"operations":[
+        {"operation":"import","external_key":"APPENDIX","title":"Draft appendix","duplicate":"fail","fields":{"depends_on":["INPUT"]}},
+        {"operation":"import","external_key":"INPUT","title":"Review input","duplicate":"fail","fields":{}}
+    ]}}});
+    let p = ok(server
+        .call(WRITER, "awr_change_preview", input.clone())
+        .await);
+    let mut apply = input;
+    apply["expected_revision"] = p["project_revision"].clone();
+    apply["expected_preview"] = p["preview"]["fingerprint"].clone();
+    let db = rusqlite::Connection::open(a.root.join(".awr/state.db")).unwrap();
+    db.execute_batch("CREATE TRIGGER fail_source_index BEFORE UPDATE OF fingerprint ON sources WHEN NEW.fingerprint<>OLD.fingerprint BEGIN SELECT RAISE(ABORT,'synthetic index interruption'); END;").unwrap();
+    let failed = server.call(WRITER, "awr_change_apply", apply).await;
+    assert_eq!(failed["isError"], true);
+    assert_eq!(failed["structuredContent"]["source_write_performed"], true);
+    assert_eq!(failed["structuredContent"]["status"], "pending_recovery");
+    let after_write = fs::read(a.root.join("work.yaml")).unwrap();
+    db.execute_batch("DROP TRIGGER fail_source_index;").unwrap();
+    drop(db);
+    server.stop().await;
+    server = Server::start(&config).await;
+    let status = ok(server
+        .call(
+            WRITER,
+            "awr_change_status",
+            json!({"project":"alpha","kind":"batch","request_id":"save-dependency-plan"}),
+        )
+        .await);
+    assert_eq!(status["status"], "pending_recovery");
+    let recover = json!({"project":"alpha","kind":"batch","request_id":"save-dependency-plan","expected_revision":a.revision()});
+    let recovered = ok(server
+        .call(WRITER, "awr_change_recover", recover.clone())
+        .await);
+    assert_eq!(recovered["status"], "completed");
+    assert_eq!(recovered["source_write_performed"], false);
+    assert_eq!(fs::read(a.root.join("work.yaml")).unwrap(), after_write);
+    let revision = a.revision();
+    assert_eq!(
+        ok(server.call(WRITER, "awr_change_recover", recover).await)["already_recorded"],
+        true
+    );
+    assert_eq!(a.revision(), revision);
+    let graph = ok(server
+        .call(
+            WRITER,
+            "awr_work_graph",
+            json!({"project":"alpha","roots":["INPUT"]}),
+        )
+        .await);
+    assert_eq!(graph["nodes"].as_array().unwrap().len(), 2);
+    assert_eq!(graph["graph_valid"], true);
+    server.stop().await;
+}
+
+#[tokio::test]
 async fn official_sdk_clients_discover_and_call_the_same_http_endpoint() {
     let a = ProjectFixture::new("Write the team guide");
     let b = ProjectFixture::new("Write the other guide");

@@ -424,6 +424,16 @@ fn catalog() -> Vec<Capability> {
             ],
         ),
         (
+            "work.graph",
+            true,
+            &["work graph"],
+            &[
+                "complete_dependency_closure",
+                "source_bound_impact",
+                "no_execution_admission",
+            ],
+        ),
+        (
             "completion.prepare",
             true,
             &["work prepare-completion"],

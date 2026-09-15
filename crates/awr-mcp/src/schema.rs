@@ -1,7 +1,7 @@
 use rmcp::model::{Tool, ToolAnnotations};
 use serde_json::{Value, json};
 
-pub const TOOL_NAMES: [&str; 24] = [
+pub const TOOL_NAMES: [&str; 29] = [
     "awr_project_status",
     "awr_work_ready",
     "awr_work_get",
@@ -26,6 +26,11 @@ pub const TOOL_NAMES: [&str; 24] = [
     "awr_completion_prepare",
     "awr_work_assess",
     "awr_work_manage",
+    "awr_work_graph",
+    "awr_change_preview",
+    "awr_change_apply",
+    "awr_change_status",
+    "awr_change_recover",
 ];
 
 fn workflow_tools() -> Vec<Tool> {
@@ -77,6 +82,78 @@ fn workflow_tools() -> Vec<Tool> {
             ),
             true,
             false,
+        ),
+    ]
+}
+
+fn change_tools() -> Vec<Tool> {
+    let fields = json!({"type":"object","description":"Explicit source fields; identity, lifecycle and verification fields are guarded by the domain writer."});
+    let change = json!({"oneOf":[
+        object(json!({"kind":{"const":"create"},"title":text(),"source_id":optional(text()),"fields":fields}), &["kind","title"]),
+        object(json!({"kind":{"const":"batch"},"change":{"type":"object","description":"Existing BatchChange: kind=ledger with source_id, source_fingerprint and operations (fields/import/archive); or kind=related with changes (document/adopt/ledger). See source-changes reference for exact variants."}}), &["kind","change"]),
+        object(json!({"kind":{"const":"edit"},"change":{"oneOf":[
+            object(json!({"operation":{"const":"fields"},"kind":{"const":"work_item"},"target":text(),"source_fingerprint":text(),"fields":fields}), &["operation","kind","target","source_fingerprint","fields"]),
+            object(json!({"operation":{"const":"activate_draft"},"work":text(),"source_fingerprint":text()}), &["operation","work","source_fingerprint"])
+        ]}}), &["kind","change"])
+    ]});
+    let key = json!({"type":"string","minLength":1,"maxLength":256});
+    let kind = json!({"type":"string","enum":["create","batch","edit"]});
+    vec![
+        tool(
+            "awr_work_graph",
+            "Inspect required dependencies, affected dependents, readiness and claims. Roots select changed work plus affected dependents and required ancestors; closure is never silently truncated. The host owns execution and concurrency.",
+            object(
+                json!({"roots":strings(),"branch":branch(),"limit":{"type":"integer","minimum":1,"maximum":1000,"default":100}}),
+                &[],
+            ),
+            true,
+            false,
+        ),
+        tool(
+            "awr_change_preview",
+            "Preview a source-backed create, batch or edit on a read-only snapshot. Choose a stable request_id for this change; preserve it on apply/status/recover. Consume the exact returned preview before applying.",
+            object(
+                json!({"request_id":key,"reason":text(),"change":change}),
+                &["request_id", "reason", "change"],
+            ),
+            true,
+            false,
+        ),
+        tool(
+            "awr_change_apply",
+            "Apply the exact reviewed source preview at expected_revision. Uses the source-change journal, queried by awr_change_status, not awr_operation_get. Changed sources/revisions or occupied planning contracts conflict; drafts do not become executable automatically.",
+            object(
+                json!({"request_id":key,"reason":text(),"change":change,"expected_revision":revision(),"expected_preview":text()}),
+                &[
+                    "request_id",
+                    "reason",
+                    "change",
+                    "expected_revision",
+                    "expected_preview",
+                ],
+            ),
+            false,
+            true,
+        ),
+        tool(
+            "awr_change_status",
+            "Inspect this client's durable source-change outcome, including pending recovery when sources are stale. Use the original kind and request_id. A missing receipt does not prove no external work occurred.",
+            object(
+                json!({"request_id":key,"kind":kind}),
+                &["request_id", "kind"],
+            ),
+            true,
+            false,
+        ),
+        tool(
+            "awr_change_recover",
+            "Explicitly recover the original source-change journal after inspecting its outcome. Uses the same client, kind and request_id; never starts an Agent. Related-file changes are recoverable, not a filesystem transaction.",
+            object(
+                json!({"request_id":key,"kind":kind,"expected_revision":revision()}),
+                &["request_id", "kind", "expected_revision"],
+            ),
+            false,
+            true,
         ),
     ]
 }
@@ -246,12 +323,14 @@ pub fn tools() -> Vec<Tool> {
     catalog.extend(lifecycle_tools());
     catalog.extend(continuity_tools());
     catalog.extend(workflow_tools());
+    catalog.extend(change_tools());
     for entry in &mut catalog {
         if entry
             .annotations
             .as_ref()
             .is_some_and(|a| a.read_only_hint == Some(false))
             && entry.name != "awr_operation_recover"
+            && !crate::changes::NAMES.contains(&entry.name.as_ref())
         {
             let schema = std::sync::Arc::make_mut(&mut entry.input_schema);
             schema["properties"].as_object_mut().unwrap().insert("request_id".into(),json!({"type":"string","minLength":1,"maxLength":256,"description":"Stable identity chosen before the first attempt. Required for shared HTTP writes; reuse exactly the same ID and arguments after a lost response."}));

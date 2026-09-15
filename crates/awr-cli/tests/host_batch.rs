@@ -249,6 +249,28 @@ fn dependency_graph_is_checked_for_the_whole_batch() {
     h.request("restore-scope",json!([{"operation":"archive","target":"W","archived":false},{"operation":"archive","target":"D","archived":false}]));
     h.accept(&h.preview());
 }
+
+#[test]
+fn cyclic_or_missing_required_dependencies_never_reach_source_bytes() {
+    for markdown in [false, true] {
+        let h = Host::new(markdown);
+        let before = h.text(h.file);
+        h.request(
+            "missing-reference",
+            json!([{"operation":"fields","target":"W","fields":{"depends_on":["MISSING"]}}]),
+        );
+        h.error(
+            &["batch", "change", "--input", "batch.json"],
+            "InvalidInput",
+        );
+        h.request("cyclic-reference",json!([{"operation":"fields","target":"W","fields":{"depends_on":["D"]}},{"operation":"fields","target":"D","fields":{"depends_on":["W"]}}]));
+        h.error(
+            &["batch", "change", "--input", "batch.json"],
+            "InvalidInput",
+        );
+        assert_eq!(h.text(h.file), before);
+    }
+}
 #[test]
 fn real_index_failure_leaves_a_recoverable_receipt_and_blocks_other_source_writers() {
     let h = Host::new(false);

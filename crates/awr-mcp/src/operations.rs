@@ -61,6 +61,9 @@ pub(crate) fn is_read_only(name: &str) -> bool {
             | "awr_work_prepare"
             | "awr_completion_prepare"
             | "awr_work_assess"
+            | "awr_work_graph"
+            | "awr_change_preview"
+            | "awr_change_status"
             | "awr_context_compile"
             | "awr_search"
             | "awr_projects_list"
@@ -81,6 +84,9 @@ pub(crate) fn call_as(
     }
     ensure_public_value(&Value::Object(args.clone()))?;
     let client = principal.unwrap_or("stdio");
+    if crate::changes::NAMES.contains(&name) {
+        return crate::changes::call(root, name, Value::Object(args), client);
+    }
     if name == "awr_operation_get" {
         return crate::requests::inspect(root, Value::Object(args), client);
     }
@@ -189,6 +195,7 @@ pub(crate) fn call(root: &Path, name: &str, args: JsonObject) -> Result<CallTool
             awr_runtime::prepare_completion(&view.store, root, &parse(args)?)?
         }
         "awr_work_assess" => awr_runtime::assess_management(&view.store, root, &parse(args)?)?,
+        "awr_work_graph" => awr_runtime::work_graph(&view.store, root, &parse(args)?)?,
         "awr_search" => search(&mut view, parse(args)?)?,
         _ => return Err(Error::Unsupported(name.into())),
     };

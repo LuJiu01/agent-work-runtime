@@ -25,6 +25,8 @@ mod read;
 mod resume;
 mod work_action;
 mod work_create;
+mod work_graph;
+pub use work_graph::{WorkGraphRequest, work_graph};
 mod workflow;
 pub use artifact::ArtifactFile;
 use awr_store::Store;

@@ -258,6 +258,7 @@ pub fn create_work(
         &input.title,
         &input.fields,
     )?;
+    crate::work_graph::validate_graph_snapshot(store, &root, &source, &prepared.after)?;
     let plan = Plan {
         version: 1,
         project_id: project.id,

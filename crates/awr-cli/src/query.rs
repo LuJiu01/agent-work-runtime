@@ -7,6 +7,15 @@ use std::{collections::BTreeMap, path::Path};
 
 #[derive(Debug, Subcommand)]
 pub enum WorkCommand {
+    /// Inspect dependencies, impact, readiness and claims without admitting execution.
+    Graph {
+        #[arg(long)]
+        root: Vec<String>,
+        #[arg(long)]
+        branch: Option<String>,
+        #[arg(long, default_value_t = 100)]
+        limit: usize,
+    },
     /// Explain management requirements without changing execution or completion policy.
     Assess(crate::management::AssessArgs),
     /// Record attributed observations and retain continuous management after upgrade.
@@ -436,6 +445,29 @@ pub fn ready(
 
 pub fn work(root: &Path, command: &WorkCommand, json_output: bool) -> Result<()> {
     match command {
+        WorkCommand::Graph {
+            root: roots,
+            branch,
+            limit,
+        } => {
+            let query = QueryProject::open_read(root, false)?;
+            let mut value = awr_runtime::work_graph(
+                &query.store,
+                root,
+                &awr_runtime::WorkGraphRequest {
+                    roots: roots.clone(),
+                    branch: branch.clone(),
+                    limit: *limit,
+                },
+            )?;
+            query.check_revision()?;
+            query.finish()?;
+            for (k, v) in query.metadata().as_object().unwrap() {
+                value[k] = v.clone();
+            }
+            println!("{}", serde_json::to_string_pretty(&value)?);
+            Ok(())
+        }
         WorkCommand::Assess(args) => crate::management::assess(root, args),
         WorkCommand::Manage(args) => crate::management::manage(root, args),
         WorkCommand::Prepare(args) => crate::work_prepare::prepare(root, args, json_output),
