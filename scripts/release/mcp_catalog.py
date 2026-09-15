@@ -8,6 +8,7 @@ STDIO_TOOLS = frozenset({
     "awr_session_wait", "awr_session_reply", "awr_operation_get",
     "awr_operation_recover", "awr_source_reindex",
     "awr_work_prepare", "awr_completion_prepare",
+    "awr_work_assess", "awr_work_manage",
 })
 
 

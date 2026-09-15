@@ -7,6 +7,10 @@ use std::{collections::BTreeMap, path::Path};
 
 #[derive(Debug, Subcommand)]
 pub enum WorkCommand {
+    /// Explain management requirements without changing execution or completion policy.
+    Assess(crate::management::AssessArgs),
+    /// Record attributed observations and retain continuous management after upgrade.
+    Manage(crate::management::ManageArgs),
     /// Prepare readiness and the required context together; does not acknowledge consumption.
     Prepare(crate::work_prepare::PrepareArgs),
     /// Validate a real report and derive evidence metadata without registering or completing.
@@ -432,6 +436,8 @@ pub fn ready(
 
 pub fn work(root: &Path, command: &WorkCommand, json_output: bool) -> Result<()> {
     match command {
+        WorkCommand::Assess(args) => crate::management::assess(root, args),
+        WorkCommand::Manage(args) => crate::management::manage(root, args),
         WorkCommand::Prepare(args) => crate::work_prepare::prepare(root, args, json_output),
         WorkCommand::PrepareCompletion(args) => {
             crate::work_prepare::completion(root, args, json_output)

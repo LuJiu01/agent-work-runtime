@@ -16,6 +16,7 @@ mod event_append;
 mod execution;
 mod host_save;
 mod intake_plan;
+mod management;
 mod mutation;
 mod onboarding;
 mod query;

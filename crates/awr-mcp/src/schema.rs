@@ -1,7 +1,7 @@
 use rmcp::model::{Tool, ToolAnnotations};
 use serde_json::{Value, json};
 
-pub const TOOL_NAMES: [&str; 22] = [
+pub const TOOL_NAMES: [&str; 24] = [
     "awr_project_status",
     "awr_work_ready",
     "awr_work_get",
@@ -24,10 +24,40 @@ pub const TOOL_NAMES: [&str; 22] = [
     "awr_source_reindex",
     "awr_work_prepare",
     "awr_completion_prepare",
+    "awr_work_assess",
+    "awr_work_manage",
 ];
 
 fn workflow_tools() -> Vec<Tool> {
     vec![
+        tool(
+            "awr_work_assess",
+            "Assess management intensity from source contracts and retained runtime/host observations. Unknown facts stay unknown; classification never grants execution or changes completion policy.",
+            object(json!({"work":text(),"branch":branch()}), &["work"]),
+            true,
+            false,
+        ),
+        tool(
+            "awr_work_manage",
+            "Record attributed host observations and an explainable management decision for the same task. Requires the current contract fingerprint, session and stable request key. Never automatically downgrades continuous management.",
+            object(
+                json!({"work":text(),"session":text(),"expected_revision":revision(),"request_key":text(),"contract_fingerprint":text(),"observation":object(json!({
+                "observed_at":{"type":"integer","minimum":0},"note":text(),
+                "single_outcome":optional(json!({"type":"boolean"})),"bounded_scope":optional(json!({"type":"boolean"})),"single_executor":optional(json!({"type":"boolean"})),"no_deferred_wait":optional(json!({"type":"boolean"})),
+                "independently_schedulable_units":optional(json!({"type":"integer","minimum":1})),"plan_valid":optional(json!({"type":"boolean"})),"outcome_known":optional(json!({"type":"boolean"})),"active_elapsed_ms":optional(json!({"type":"integer","minimum":0})),"completed_rework_cycles":optional(json!({"type":"integer","minimum":0}))
+            }), &["observed_at","note"])}),
+                &[
+                    "work",
+                    "session",
+                    "expected_revision",
+                    "request_key",
+                    "contract_fingerprint",
+                    "observation",
+                ],
+            ),
+            false,
+            false,
+        ),
         tool(
             "awr_work_prepare",
             "Read readiness and the required context together. Consume the returned context before checkpointing; preparation does not claim work or change completion requirements.",

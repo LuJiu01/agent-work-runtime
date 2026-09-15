@@ -52,11 +52,23 @@ pub fn prepare_work(store: &mut Store, root: &Path, request: &PrepareWorkRequest
         .unwrap_or_default();
     let waiting = waits.iter().any(|w| w.status == "waiting_user");
     let work = &readiness.work.item;
+    let management = crate::assess_management(
+        store,
+        root,
+        &crate::AssessManagementRequest {
+            work: request.work.clone(),
+            branch: Some(
+                branch
+                    .map(|id| id.to_string())
+                    .unwrap_or_else(|| "main".into()),
+            ),
+        },
+    )?;
     Ok(json!({"version":1,"stage":"prepared","work":{
         "id":work.meta.id,"external_key":work.meta.external_key,"status":work.status,
         "revision":work.meta.revision,"source_ref":work.meta.source_ref,"next_action":work.next_action},
         "ready":readiness.ready,"diagnostics":readiness.diagnostics,"active_claims":readiness.active_claims,
-        "context":context,"context_consumed":false,"completion_claimed":false,
+        "context":context,"context_consumed":false,"completion_claimed":false,"management":management,
         "continuity":{"state":if waiting {"waiting_user"}else{"available"},"waits":waits},
         "next_action":if waiting {"resolve_persistent_wait_before_resuming"} else if !complete {"resolve_required_context_gaps"} else if !readiness.ready {"inspect_readiness_and_current_claim"} else {"consume_context_then_start_or_resume_session"}}))
 }

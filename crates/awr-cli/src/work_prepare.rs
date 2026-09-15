@@ -51,6 +51,9 @@ fn output(mut value: Value, query: &crate::query::QueryProject, json_output: boo
         );
         if let Some(context) = value["context"]["work_context"]["rendered_context"].as_str() {
             println!("{context}");
+            if let Some(management) = value.get("management") {
+                println!("Management: {}", serde_json::to_string_pretty(management)?);
+            }
         } else {
             println!("{}", serde_json::to_string_pretty(&value)?);
         }

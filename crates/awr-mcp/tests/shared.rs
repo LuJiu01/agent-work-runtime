@@ -684,3 +684,74 @@ async fn authorized_source_refresh_is_available_at_the_shared_endpoint() {
     assert_eq!(work["work"]["title"], "Review the updated guide");
     server.stop().await;
 }
+
+#[tokio::test]
+async fn management_is_client_bound_and_recovers_an_unknown_response_without_repeating() {
+    let a = ProjectFixture::new("Coordinate the guide");
+    let b = ProjectFixture::new("Other project guide");
+    let config = registry(&a, &b);
+    let mut server = Server::start(&config).await;
+    let started = ok(server
+        .call(
+            WRITER,
+            "awr_session_start",
+            start_args("alpha", "W", "management", a.revision(), true),
+        )
+        .await);
+    let assessment = ok(server
+        .call(
+            READER,
+            "awr_work_assess",
+            json!({"project":"alpha","work":"W"}),
+        )
+        .await);
+    let args = json!({"project":"alpha","work":"W","session":started["session"]["id"],"expected_revision":a.revision(),
+        "request_id":"management-receipt","request_key":"planning-observation","contract_fingerprint":assessment["contract_fingerprint"],
+        "observation":{"observed_at":now_millis().unwrap(),"note":"Two independently schedulable fixture deliverables","independently_schedulable_units":2}});
+    error(
+        server.call(READER, "awr_work_manage", args.clone()).await,
+        "RuleViolation",
+    );
+    error(
+        server
+            .call(COLLEAGUE, "awr_work_manage", args.clone())
+            .await,
+        "RuleViolation",
+    );
+    let source = fs::read(a.root.join("work.yaml")).unwrap();
+    let conn = rusqlite::Connection::open(a.root.join(".awr/state.db")).unwrap();
+    conn.execute_batch("CREATE TRIGGER fixture_management_response BEFORE INSERT ON events WHEN new.event_type='mcp.operation_finished' BEGIN SELECT RAISE(ABORT,'synthetic management response failure'); END;").unwrap();
+    let lost = server.call(WRITER, "awr_work_manage", args.clone()).await;
+    assert_eq!(lost["structuredContent"]["write_outcome"], "unknown");
+    let revision = a.revision();
+    server.call(WRITER, "awr_work_manage", args.clone()).await;
+    assert_eq!(a.revision(), revision);
+    let receipt = ok(server
+        .call(
+            WRITER,
+            "awr_operation_get",
+            json!({"project":"alpha","request_id":"management-receipt"}),
+        )
+        .await);
+    assert_eq!(
+        receipt["domain_receipts"][0]["event_type"],
+        "management.assessed"
+    );
+    conn.execute_batch("DROP TRIGGER fixture_management_response;")
+        .unwrap();
+    drop(conn);
+    server.stop().await;
+    let mut server = Server::start(&config).await;
+    let recovered=ok(server.call(WRITER,"awr_operation_recover",json!({"project":"alpha","request_id":"management-receipt","expected_revision":a.revision()})).await);
+    assert_eq!(recovered["write_outcome"], "committed");
+    let assessed = ok(server
+        .call(
+            READER,
+            "awr_work_assess",
+            json!({"project":"alpha","work":"W"}),
+        )
+        .await);
+    assert_eq!(assessed["decision"]["mode"], "continuous");
+    assert_eq!(fs::read(a.root.join("work.yaml")).unwrap(), source);
+    server.stop().await;
+}

@@ -10,6 +10,7 @@ mod events;
 mod evidence;
 mod execution;
 mod handoff;
+mod management;
 mod mcp;
 pub use mcp::with_mcp_operation;
 mod mutation;

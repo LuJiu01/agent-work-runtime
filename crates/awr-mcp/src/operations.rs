@@ -60,6 +60,7 @@ pub(crate) fn is_read_only(name: &str) -> bool {
             | "awr_work_get"
             | "awr_work_prepare"
             | "awr_completion_prepare"
+            | "awr_work_assess"
             | "awr_context_compile"
             | "awr_search"
             | "awr_projects_list"
@@ -151,6 +152,14 @@ pub(crate) fn call(root: &Path, name: &str, args: JsonObject) -> Result<CallTool
         "awr_work_transition" => return transition(root, parse(args)?),
         "awr_event_append" => return append_event(root, parse(args)?),
         "awr_evidence_record" => return evidence(root, parse(args)?),
+        "awr_work_manage" => {
+            let mut store = Store::open_existing(&database(root)?)?;
+            return Ok(CallToolResult::structured(awr_runtime::manage_work(
+                &mut store,
+                root,
+                &parse(args)?,
+            )?));
+        }
         _ => (),
     }
     if name == "awr_project_status" {
@@ -179,6 +188,7 @@ pub(crate) fn call(root: &Path, name: &str, args: JsonObject) -> Result<CallTool
         "awr_completion_prepare" => {
             awr_runtime::prepare_completion(&view.store, root, &parse(args)?)?
         }
+        "awr_work_assess" => awr_runtime::assess_management(&view.store, root, &parse(args)?)?,
         "awr_search" => search(&mut view, parse(args)?)?,
         _ => return Err(Error::Unsupported(name.into())),
     };

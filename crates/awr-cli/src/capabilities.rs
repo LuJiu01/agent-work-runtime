@@ -414,6 +414,16 @@ fn catalog() -> Vec<Capability> {
             ],
         ),
         (
+            "work.management",
+            true,
+            &["work assess", "work manage"],
+            &[
+                "attributed_observations",
+                "no_automatic_downgrade",
+                "completion_policy_unchanged",
+            ],
+        ),
+        (
             "completion.prepare",
             true,
             &["work prepare-completion"],

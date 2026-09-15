@@ -17,6 +17,7 @@ pub use host_save::{
 };
 mod execution;
 mod fs_sync;
+mod management;
 mod mutation;
 mod mutation_apply;
 mod organization;
@@ -33,6 +34,7 @@ pub use branch_close::{CloseBranchRequest, close_branch};
 pub use completion::{CompleteWorkRequest, complete_work};
 pub use doctor::{ProjectDoctorReport, diagnose_project};
 pub use execution::{inspect_execution, inspect_work_executions, render_execution_observations};
+pub use management::{AssessManagementRequest, ManageWorkRequest, assess_management, manage_work};
 pub use mutation::{
     CreateProposalRequest, ProposalReport, ReviewProposalAction, ReviewProposalRequest,
     create_proposal, review_proposal,
