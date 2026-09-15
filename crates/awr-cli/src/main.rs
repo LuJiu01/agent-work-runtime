@@ -16,6 +16,7 @@ mod event_append;
 mod execution;
 mod host_save;
 mod intake_plan;
+mod management;
 mod mutation;
 mod onboarding;
 mod query;
@@ -29,6 +30,7 @@ mod source_changes;
 mod source_relocation;
 mod work_action;
 mod work_create;
+mod work_prepare;
 
 #[derive(Debug, Parser)]
 #[command(
@@ -306,7 +308,13 @@ fn main() -> std::process::ExitCode {
                     serde_json::to_string(&error.report()).expect("error report serializes")
                 );
             } else {
-                eprintln!("{}: {}", error.code(), error.report().message);
+                let report = error.report();
+                eprintln!(
+                    "{}: {}{}",
+                    report.code,
+                    report.message,
+                    awr_core::render_diagnostic_details(report.details.as_ref())
+                );
             }
             std::process::ExitCode::from(1)
         }

@@ -7,6 +7,23 @@ use std::{collections::BTreeMap, path::Path};
 
 #[derive(Debug, Subcommand)]
 pub enum WorkCommand {
+    /// Inspect dependencies, impact, readiness and claims without admitting execution.
+    Graph {
+        #[arg(long)]
+        root: Vec<String>,
+        #[arg(long)]
+        branch: Option<String>,
+        #[arg(long, default_value_t = 100)]
+        limit: usize,
+    },
+    /// Explain management requirements without changing execution or completion policy.
+    Assess(crate::management::AssessArgs),
+    /// Record attributed observations and retain continuous management after upgrade.
+    Manage(crate::management::ManageArgs),
+    /// Prepare readiness and the required context together; does not acknowledge consumption.
+    Prepare(crate::work_prepare::PrepareArgs),
+    /// Validate a real report and derive evidence metadata without registering or completing.
+    PrepareCompletion(crate::work_prepare::CompletionArgs),
     /// Preview or accept one new source-backed, non-executable task draft.
     Create(crate::work_create::CreateArgs),
     /// Read the durable outcome for a stable creation request without applying it.
@@ -428,6 +445,35 @@ pub fn ready(
 
 pub fn work(root: &Path, command: &WorkCommand, json_output: bool) -> Result<()> {
     match command {
+        WorkCommand::Graph {
+            root: roots,
+            branch,
+            limit,
+        } => {
+            let query = QueryProject::open_read(root, false)?;
+            let mut value = awr_runtime::work_graph(
+                &query.store,
+                root,
+                &awr_runtime::WorkGraphRequest {
+                    roots: roots.clone(),
+                    branch: branch.clone(),
+                    limit: *limit,
+                },
+            )?;
+            query.check_revision()?;
+            query.finish()?;
+            for (k, v) in query.metadata().as_object().unwrap() {
+                value[k] = v.clone();
+            }
+            println!("{}", serde_json::to_string_pretty(&value)?);
+            Ok(())
+        }
+        WorkCommand::Assess(args) => crate::management::assess(root, args),
+        WorkCommand::Manage(args) => crate::management::manage(root, args),
+        WorkCommand::Prepare(args) => crate::work_prepare::prepare(root, args, json_output),
+        WorkCommand::PrepareCompletion(args) => {
+            crate::work_prepare::completion(root, args, json_output)
+        }
         WorkCommand::Create(args) => crate::work_create::create(root, args, json_output),
         WorkCommand::CreateStatus(args) => crate::work_create::status(root, args, json_output),
         WorkCommand::CreateRecover(args) => crate::work_create::recover(root, args, json_output),
@@ -484,6 +530,7 @@ pub fn work(root: &Path, command: &WorkCommand, json_output: bool) -> Result<()>
             value["dependency_cycles"] = json!(work.dependencies.cycle_keys);
             value["decisions"]=json!(decisions.iter().map(|d|json!({"external_key":d.decision.item.meta.external_key,"summary":short(&d.decision.item.decision),"relevance":d.relevance,"reasons":d.reasons,"source_ref":d.decision.item.meta.source_ref})).collect::<Vec<_>>());
             value["evidence"]=json!(evidence.iter().map(|e|json!({"external_key":e.evidence.item.external_key,"summary":short(&e.evidence.item.summary),"level":e.evidence.item.level,"currency":e.currency,"missing_bindings":e.missing_bindings,"locator":e.evidence.item.locator,"source_sha":e.evidence.item.source_sha,"reasons":e.reasons})).collect::<Vec<_>>());
+            value["evidence_groups"] = json!(awr_core::evidence_groups(&evidence));
             value["evidence_currency_basis"] =
                 json!({"requested_source_sha":source_sha,"branch_id":branch_id});
             query.check_revision()?;
@@ -525,6 +572,19 @@ pub fn work(root: &Path, command: &WorkCommand, json_output: bool) -> Result<()>
                     work.work.item.meta.source_ref.source_revision,
                     work.work.source.freshness
                 );
+                for group in value["evidence_groups"].as_array().unwrap() {
+                    println!("Evidence: {}", group["locator"].as_str().unwrap());
+                    for record in group["records"].as_array().unwrap() {
+                        println!(
+                            "  {}: {} / {}; source SHA: {}; missing bindings: {}",
+                            record["external_key"].as_str().unwrap(),
+                            record["level"].as_str().unwrap(),
+                            record["currency"].as_str().unwrap(),
+                            record["source_sha"].as_str().unwrap_or("unknown"),
+                            record["missing_bindings"]
+                        );
+                    }
+                }
             }
             query.finish()
         }

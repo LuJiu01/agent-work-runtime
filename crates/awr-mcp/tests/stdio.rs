@@ -181,6 +181,322 @@ fn action(f: &Fixture, session: Id, action: &str) -> Value {
     json!({"work":"W","session":session,"action":action,"expected_revision":f.rev(),"reason":"Apply the reviewed work change"})
 }
 
+fn small_observation() -> Value {
+    json!({"observed_at":now_millis().unwrap(),"note":"Synthetic bounded analysis with one executor and no deferred work",
+        "single_outcome":true,"bounded_scope":true,"single_executor":true,"no_deferred_wait":true,
+        "independently_schedulable_units":1,"plan_valid":true,"outcome_known":true})
+}
+
+#[tokio::test]
+async fn bounded_exploration_can_be_lightweight_with_explicit_observations_and_limits_as_acceptance()
+ {
+    let f = Fixture::new();
+    fs::write(
+        f.root.join("work.yaml"),
+        WORK.replace(
+            "title: Prepare customer analysis",
+            "title: Explore source quality\n  kind: exploration",
+        )
+        .replace(
+            "Deliver the reviewed analysis",
+            "Explain observations and remaining unknowns",
+        ),
+    )
+    .unwrap();
+    f.reindex();
+    let client = f.client().await;
+    let session = f.session("W", true, None).session;
+    let a = success(call(&client, "awr_work_assess", json!({"work":"W"})).await);
+    let saved=success(call(&client,"awr_work_manage",json!({"work":"W","session":session.id,"expected_revision":f.rev(),"request_key":"exploration","contract_fingerprint":a["contract_fingerprint"],"observation":small_observation()})).await);
+    assert_eq!(saved["assessment"]["decision"]["mode"], "lightweight");
+    let prepared = success(
+        call(
+            &client,
+            "awr_work_prepare",
+            json!({"work":"W","session":session.id}),
+        )
+        .await,
+    );
+    assert!(
+        prepared["context"]["work_context"]["rendered_context"]
+            .as_str()
+            .unwrap()
+            .contains("Explain observations and remaining unknowns")
+    );
+    assert_eq!(
+        prepared["management"]["decision"]["completion_policy"],
+        "unchanged_source_policy"
+    );
+    client.cancel().await.unwrap();
+}
+#[tokio::test]
+async fn management_preserves_identity_replay_current_contract_and_completion_guards() {
+    let f = Fixture::new();
+    let client = f.client().await;
+    let session = f.session("W", true, None).session;
+    let before = fs::read(f.root.join("work.yaml")).unwrap();
+    let assessment = success(call(&client, "awr_work_assess", json!({"work":"W"})).await);
+    assert_eq!(assessment["decision"]["mode"], "undetermined");
+    let mut args = json!({"work":"W","session":session.id,"expected_revision":f.rev(),"request_key":"small",
+        "contract_fingerprint":assessment["contract_fingerprint"],"observation":small_observation()});
+    args["observation"]["active_elapsed_ms"] = json!(1800000);
+    args["observation"]["completed_rework_cycles"] = json!(3);
+    let saved = success(call(&client, "awr_work_manage", args.clone()).await);
+    assert_eq!(saved["assessment"]["decision"]["mode"], "lightweight");
+    assert_eq!(
+        saved["assessment"]["decision"]["reevaluation_signals"]
+            .as_array()
+            .unwrap()
+            .len(),
+        2
+    );
+    let state = f.logical_state();
+    let replay = success(call(&client, "awr_work_manage", args.clone()).await);
+    assert_eq!(replay["event"]["id"], saved["event"]["id"]);
+    assert_eq!(state, f.logical_state());
+    args["observation"]["note"] = json!("changed request content");
+    error(
+        call(&client, "awr_work_manage", args).await,
+        "SourceConflict",
+    );
+    let current = success(call(&client, "awr_work_assess", json!({"work":"W"})).await);
+    assert_eq!(current["work_id"], assessment["work_id"]);
+    assert_eq!(current["decision"]["mode"], "lightweight");
+    assert_eq!(current["observer"], session.agent_id);
+    error(
+        call(
+            &client,
+            "awr_work_transition",
+            action(&f, session.id, "complete"),
+        )
+        .await,
+        "EvidenceMissing",
+    );
+    assert_eq!(fs::read(f.root.join("work.yaml")).unwrap(), before);
+    error(call(&client,"awr_event_append",json!({"expected_revision":f.rev(),"work":"W","session":session.id,"event_type":"management.assessed","summary":"forge a mode","payload":{}})).await,"InvalidInput");
+    client.cancel().await.unwrap();
+}
+
+#[tokio::test]
+async fn a_real_wait_upgrades_the_same_task_and_reply_does_not_downgrade_it() {
+    let f = Fixture::new();
+    let client = f.client().await;
+    let started=success(call(&client,"awr_session_start",json!({"work":"W","conversation":"waiting-management","agent":"coordinator","provider":"fixture","model":"fixture","claim":true,"expected_revision":f.rev()})).await);
+    let session: Session = serde_json::from_value(started["session"].clone()).unwrap();
+    let assessment = success(call(&client, "awr_work_assess", json!({"work":"W"})).await);
+    success(call(&client,"awr_work_manage",json!({"work":"W","session":session.id,"expected_revision":f.rev(),"request_key":"before-wait","contract_fingerprint":assessment["contract_fingerprint"],"observation":small_observation()})).await);
+    let ctx = success(
+        call(
+            &client,
+            "awr_work_prepare",
+            json!({"work":"W","session":session.id,"source_sha":SHA}),
+        )
+        .await,
+    );
+    assert!(
+        ctx["context"]["work_context"]["rendered_context"]
+            .as_str()
+            .unwrap()
+            .contains(CRITERION)
+    );
+    let wait=success(call(&client,"awr_session_wait",json!({"session":session.id,"expected_revision":f.rev(),"question":"Which reporting period should this analysis cover?","context_hash":ctx["context"]["work_context"]["context_hash"],"digest":"Input period remains unresolved","next_action":"Continue after the period is supplied","open_loops":["reporting period"]})).await);
+    let waiting = success(call(&client, "awr_work_assess", json!({"work":"W"})).await);
+    assert_eq!(waiting["decision"]["mode"], "continuous");
+    assert_eq!(waiting["work_id"], assessment["work_id"]);
+    success(call(&client,"awr_session_reply",json!({"wait":wait["wait"]["id"],"expected_revision":f.rev(),"reply":"Use the previous full quarter."})).await);
+    success(call(&client,"awr_work_manage",json!({"work":"W","session":session.id,"expected_revision":f.rev(),"request_key":"after-wait","contract_fingerprint":waiting["contract_fingerprint"],"observation":small_observation()})).await);
+    let after = success(call(&client, "awr_work_assess", json!({"work":"W"})).await);
+    assert_eq!(after["decision"]["mode"], "continuous");
+    assert_eq!(
+        after["decision"]["completion_policy"],
+        "unchanged_source_policy"
+    );
+    assert!(
+        after["decision"]["reasons"]
+            .as_array()
+            .unwrap()
+            .iter()
+            .any(|r| r["basis"] == "runtime_history")
+    );
+    client.cancel().await.unwrap();
+}
+
+#[tokio::test]
+async fn changed_scope_unknown_results_and_missing_acceptance_remain_explicit() {
+    let f = Fixture::new();
+    let client = f.client().await;
+    let session = f.session("W", true, None).session;
+    let first = success(call(&client, "awr_work_assess", json!({"work":"W"})).await);
+    let mut input = json!({"work":"W","session":session.id,"expected_revision":f.rev(),"request_key":"initial","contract_fingerprint":first["contract_fingerprint"],"observation":small_observation()});
+    success(call(&client, "awr_work_manage", input.clone()).await);
+    let source = WORK
+        .replace(
+            "acceptance: [Deliver the reviewed analysis]",
+            "acceptance: [Explain observations and remaining unknowns]",
+        )
+        .replace(
+            "title: Prepare customer analysis",
+            "title: Explore available data\n  kind: exploration",
+        );
+    fs::write(f.root.join("work.yaml"), &source).unwrap();
+    f.reindex();
+    let changed = success(call(&client, "awr_work_assess", json!({"work":"W"})).await);
+    assert_eq!(changed["decision"]["mode"], "continuous");
+    assert!(changed["observation"].is_null());
+    input["expected_revision"] = json!(f.rev());
+    input["request_key"] = json!("stale-contract");
+    error(
+        call(&client, "awr_work_manage", input.clone()).await,
+        "SourceConflict",
+    );
+    input["contract_fingerprint"] = changed["contract_fingerprint"].clone();
+    input["observation"]["outcome_known"] = json!(false);
+    input["request_key"] = json!("unknown-result");
+    let saved = success(call(&client, "awr_work_manage", input.clone()).await);
+    assert_eq!(saved["assessment"]["decision"]["mode"], "continuous");
+    input["expected_revision"] = json!(f.rev());
+    input["request_key"] = json!("known-again");
+    input["observation"]["outcome_known"] = json!(true);
+    success(call(&client, "awr_work_manage", input).await);
+    let retained = success(call(&client, "awr_work_assess", json!({"work":"W"})).await);
+    assert_eq!(retained["decision"]["mode"], "continuous");
+    assert_eq!(retained["observation"]["outcome_known"], true);
+    fs::write(
+        f.root.join("work.yaml"),
+        source.replace(
+            "acceptance: [Explain observations and remaining unknowns]",
+            "acceptance: []",
+        ),
+    )
+    .unwrap();
+    f.reindex();
+    let missing = success(call(&client, "awr_work_assess", json!({"work":"W"})).await);
+    assert!(
+        missing["admission_gaps"]
+            .as_array()
+            .unwrap()
+            .contains(&json!("source_acceptance_missing_or_ambiguous"))
+    );
+    error(
+        call(
+            &client,
+            "awr_work_prepare",
+            json!({"work":"W","session":session.id}),
+        )
+        .await,
+        "ContextIncomplete",
+    );
+    client.cancel().await.unwrap();
+}
+
+#[tokio::test]
+async fn preparation_composes_the_same_required_context_without_runtime_writes() {
+    let f = Fixture::new();
+    let client = f.client().await;
+    let before = f.logical_state();
+    let old_work = success(
+        call(
+            &client,
+            "awr_work_get",
+            json!({"work":"W","source_sha":SHA}),
+        )
+        .await,
+    );
+    let old_context = success(
+        call(
+            &client,
+            "awr_context_compile",
+            json!({"work":"W","detached":true,"source_sha":SHA}),
+        )
+        .await,
+    );
+    let new = success(
+        call(
+            &client,
+            "awr_work_prepare",
+            json!({"work":"W","source_sha":SHA}),
+        )
+        .await,
+    );
+    assert_eq!(new["context"]["work_context"], old_context["work_context"]);
+    assert_eq!(new["ready"], old_work["work"]["ready"]);
+    assert_eq!(new["context_consumed"], false);
+    assert_eq!(new["read_only"], true);
+    assert_eq!(f.logical_state(), before);
+    error(
+        call(&client, "awr_work_prepare", json!({"work":"W","budget":1})).await,
+        "BudgetExceeded",
+    );
+    assert_eq!(f.logical_state(), before);
+    client.cancel().await.unwrap();
+}
+
+#[tokio::test]
+async fn report_preflight_derives_bytes_and_coverage_without_recording_evidence() {
+    use sha2::{Digest, Sha256};
+    let f = Fixture::new();
+    let client = f.client().await;
+    let before = f.logical_state();
+    let mut report = json!({"version":1,"work_item":"W","source_sha":SHA,"command":"review fixture","scope":["W"],"verified_at":now_millis().unwrap(),
+        "checks":[{"name":"review","passed":true,"details":"fixture reviewed","criteria":[CRITERION]}]});
+    let bytes = serde_json::to_vec(&report).unwrap();
+    fs::write(f.root.join("report.json"), &bytes).unwrap();
+    let args = json!({"work":"W","report":"report.json","evidence_key":"E","source_sha":SHA,"level":"locally_verified"});
+    let result = success(call(&client, "awr_completion_prepare", args.clone()).await);
+    assert_eq!(
+        result["report_sha256"],
+        format!("{:x}", Sha256::digest(&bytes))
+    );
+    assert_eq!(
+        result["completion"]["acceptance"][0]["criterion"],
+        CRITERION
+    );
+    assert_eq!(result["completion_claimed"], false);
+    assert_eq!(result["verification_executed"], false);
+    report["checks"][0]["criteria"] = json!([]);
+    fs::write(f.root.join("report.json"), report.to_string()).unwrap();
+    error(
+        call(&client, "awr_completion_prepare", args.clone()).await,
+        "EvidenceMissing",
+    );
+    report["checks"][0].as_object_mut().unwrap().remove("name");
+    fs::write(f.root.join("report.json"), report.to_string()).unwrap();
+    let err = error(
+        call(&client, "awr_completion_prepare", args).await,
+        "InvalidInput",
+    );
+    assert_eq!(err["details"]["location"]["locator"], "report.json");
+    assert_eq!(f.logical_state(), before);
+    client.cancel().await.unwrap();
+}
+
+#[tokio::test]
+async fn source_reindex_exposes_the_same_structured_diagnostic_over_mcp() {
+    let f = Fixture::new();
+    let client = f.client().await;
+    fs::write(
+        f.root.join("work.yaml"),
+        "work_items:\n- id: W\n  title: [类型错误]\n",
+    )
+    .unwrap();
+    let result = call(
+        &client,
+        "awr_source_reindex",
+        json!({"expected_revision":f.rev()}),
+    )
+    .await;
+    assert_eq!(result.is_error, Some(true));
+    let value = body(&result);
+    let report = value.get("index").unwrap_or(&value);
+    assert_eq!(report["ok"], false);
+    assert_eq!(report["projection_complete"], false);
+    let details = &report["issues"][0]["details"];
+    assert_eq!(details["rule"], "ledger.string");
+    assert_eq!(details["location"]["pointer"], "/work_items/0/title");
+    assert_eq!(details["location"]["line"], 3);
+    client.cancel().await.unwrap();
+}
+
 #[tokio::test]
 async fn project_organization_guides_repairs_and_preserves_readonly_mcp_state() {
     let f = Fixture::new();
@@ -244,6 +560,9 @@ async fn stdio_discovers_tools_and_survives_protocol_and_argument_errors() {
     );
     for tool in &tools {
         let read = ![
+            "awr_change_apply",
+            "awr_change_recover",
+            "awr_work_manage",
             "awr_work_transition",
             "awr_event_append",
             "awr_evidence_record",
@@ -290,6 +609,157 @@ async fn stdio_discovers_tools_and_survives_protocol_and_argument_errors() {
     success(call(&client, "awr_project_status", json!({})).await);
     client.cancel().await.unwrap();
     assert_eq!(f.logical_state(), before);
+}
+
+#[tokio::test]
+async fn source_preview_create_edit_and_graph_use_one_durable_domain_identity() {
+    let f = Fixture::new();
+    let client = f.client().await;
+    let before = f.logical_state();
+    let source_before = fs::read(f.root.join("work.yaml")).unwrap();
+    let input = json!({"request_id":"reviewed-follow-up","reason":"Add a bounded follow-up draft","change":{"kind":"create","title":"Review the customer follow-up","fields":{"depends_on":["W"],"next_action":"Review the draft","acceptance":["The follow-up has a reviewed conclusion"]}}});
+    let preview = success(call(&client, "awr_change_preview", input.clone()).await);
+    assert_eq!(preview["read_only"], true);
+    assert_eq!(preview["runtime_write_performed"], false);
+    assert_eq!(f.logical_state(), before);
+    assert_eq!(fs::read(f.root.join("work.yaml")).unwrap(), source_before);
+    let mut apply = input.clone();
+    apply["expected_revision"] = preview["project_revision"].clone();
+    apply["expected_preview"] = preview["preview"]["fingerprint"].clone();
+    let created = success(call(&client, "awr_change_apply", apply.clone()).await);
+    assert_eq!(created["status"], "completed");
+    let revision = f.rev();
+    assert_eq!(
+        success(call(&client, "awr_change_apply", apply.clone()).await)["already_recorded"],
+        true
+    );
+    assert_eq!(f.rev(), revision);
+    let key = created["external_key"].as_str().unwrap();
+    let graph = success(call(&client, "awr_work_graph", json!({"roots":["W"]})).await);
+    let nodes = graph["nodes"].as_array().unwrap();
+    assert!(
+        nodes
+            .iter()
+            .any(|n| n["key"] == key && n["status"] == "draft" && n["ready"] == false)
+    );
+    assert!(nodes.iter().any(|n| n["key"] == "D"));
+    assert!(!nodes.iter().any(|n| n["key"] == "NEXT"));
+    assert!(
+        graph["affected"]
+            .as_array()
+            .unwrap()
+            .iter()
+            .any(|n| n == key)
+    );
+    error(
+        call(&client, "awr_work_graph", json!({"roots":["W"],"limit":1})).await,
+        "BudgetExceeded",
+    );
+    apply["change"]["title"] = json!("Different request body");
+    error(
+        call(&client, "awr_change_apply", apply).await,
+        "SourceConflict",
+    );
+    let status = success(
+        call(
+            &client,
+            "awr_change_status",
+            json!({"kind":"create","request_id":"reviewed-follow-up"}),
+        )
+        .await,
+    );
+    assert_eq!(status["external_key"], key);
+    assert_eq!(status["journal"], "source_change");
+    let work = f.store().0.work_item(f.store().1.id, key).unwrap();
+    let edit = json!({"request_id":"refine-follow-up","reason":"Clarify the next review action","change":{"kind":"edit","change":{"operation":"fields","kind":"work_item","target":key,"source_fingerprint":work.source.fingerprint,"fields":{"next_action":"Review the conclusion with the customer"}}}});
+    let p = success(call(&client, "awr_change_preview", edit.clone()).await);
+    let mut edit_apply = edit;
+    edit_apply["expected_revision"] = p["project_revision"].clone();
+    edit_apply["expected_preview"] = p["preview"]["fingerprint"].clone();
+    success(call(&client, "awr_change_apply", edit_apply).await);
+    assert_eq!(
+        f.store()
+            .0
+            .work_item(f.store().1.id, key)
+            .unwrap()
+            .item
+            .next_action,
+        "Review the conclusion with the customer"
+    );
+    client.cancel().await.unwrap();
+}
+
+#[tokio::test]
+async fn whole_graph_preflight_rejects_missing_cycles_and_claimed_contract_changes() {
+    let f = Fixture::new();
+    let client = f.client().await;
+    let source = f.store().0.work_item(f.store().1.id, "W").unwrap().source;
+    let request = |id: &str, operations: Value| json!({"request_id":id,"reason":"Review the dependency plan","change":{"kind":"batch","change":{"kind":"ledger","source_id":source.id,"source_fingerprint":source.fingerprint,"operations":operations}}});
+    let before = f.logical_state();
+    let source_before = fs::read(f.root.join("work.yaml")).unwrap();
+    let missing = error(
+        call(
+            &client,
+            "awr_change_preview",
+            request(
+                "missing",
+                json!([{"operation":"fields","target":"W","fields":{"depends_on":["absent"]}}]),
+            ),
+        )
+        .await,
+        "InvalidInput",
+    );
+    assert_eq!(missing["details"]["rule"], "work_graph.required_reference");
+    assert!(
+        missing["details"]["location"]["locator"]
+            .as_str()
+            .unwrap()
+            .contains("work.yaml")
+    );
+    let cycle = error(
+        call(
+            &client,
+            "awr_change_preview",
+            request(
+                "cycle",
+                json!([{"operation":"fields","target":"D","fields":{"depends_on":["W"]}}]),
+            ),
+        )
+        .await,
+        "InvalidInput",
+    );
+    assert_eq!(cycle["details"]["rule"], "work_graph.acyclic");
+    assert_eq!(f.logical_state(), before);
+    assert_eq!(fs::read(f.root.join("work.yaml")).unwrap(), source_before);
+    let input = request(
+        "ordered-plan",
+        json!([
+            {"operation":"import","external_key":"FOLLOW","title":"Review follow-up","duplicate":"fail","fields":{"depends_on":["RESEARCH"]}},
+            {"operation":"import","external_key":"RESEARCH","title":"Collect new observations","duplicate":"fail","fields":{}}
+        ]),
+    );
+    let p = success(call(&client, "awr_change_preview", input.clone()).await);
+    let mut apply = input;
+    apply["expected_revision"] = p["project_revision"].clone();
+    apply["expected_preview"] = p["preview"]["fingerprint"].clone();
+    success(call(&client, "awr_change_apply", apply).await);
+    let session = f.session("W", true, None);
+    let current = f.store().0.work_item(f.store().1.id, "W").unwrap();
+    let edit = json!({"request_id":"claimed-plan","reason":"Change the executing contract","change":{"kind":"edit","change":{"operation":"fields","kind":"work_item","target":"W","source_fingerprint":current.source.fingerprint,"fields":{"acceptance":["A changed delivery promise"]}}}});
+    error(
+        call(&client, "awr_change_preview", edit).await,
+        "ClaimConflict",
+    );
+    assert!(
+        f.store()
+            .0
+            .work_readiness(f.store().1.id, "W", None, now_millis().unwrap())
+            .unwrap()
+            .active_claims
+            .iter()
+            .any(|c| c.session_id == session.session.id)
+    );
+    client.cancel().await.unwrap();
 }
 
 #[tokio::test]

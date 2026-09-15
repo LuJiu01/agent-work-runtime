@@ -43,6 +43,50 @@ fn draft(key: &str) -> EvidenceDraft {
 }
 
 #[test]
+fn grouping_a_shared_locator_preserves_each_records_currency_and_missing_bindings() {
+    let mut f = Fixture::new();
+    f.commit(ProjectionBatch {
+        work_items: vec![work(&f, "W")],
+        ..Default::default()
+    });
+    let mut weak = draft("reference");
+    weak.evidence_type = "source_reference".into();
+    weak.level = EvidenceLevel::Unknown;
+    weak.sha256 = None;
+    weak.source_sha = None;
+    weak.command = None;
+    weak.verified_at = None;
+    let mut old = draft("old-version");
+    old.source_sha = Some("c".repeat(40));
+    for input in [draft("current"), weak, old] {
+        let rev = f.store.project(f.project.id).unwrap().project_revision;
+        f.store.record_evidence(f.project.id, rev, input).unwrap();
+    }
+    let evidence = f
+        .store
+        .evidence_for_work(f.project.id, "W", Some(&"b".repeat(40)), None)
+        .unwrap();
+    let groups = evidence_groups(&evidence);
+    assert_eq!(groups.len(), 1);
+    assert_eq!(groups[0]["locator"], "reports/check.json");
+    let records = groups[0]["records"].as_array().unwrap();
+    assert_eq!(records.len(), 3);
+    let get = |key: &str| records.iter().find(|v| v["external_key"] == key).unwrap();
+    assert_eq!(get("current")["currency"], "current");
+    assert_eq!(get("reference")["level"], "unknown");
+    assert_eq!(get("reference")["currency"], "unknown");
+    assert!(get("reference")["sha256"].is_null());
+    assert_eq!(
+        get("reference")["missing_bindings"]
+            .as_array()
+            .unwrap()
+            .len(),
+        4
+    );
+    assert_eq!(get("old-version")["currency"], "historical");
+}
+
+#[test]
 fn decisions_require_acceptance_and_explicit_relevance_or_unknown_scope() {
     let mut f = Fixture::new();
     let mut batch = ProjectionBatch {

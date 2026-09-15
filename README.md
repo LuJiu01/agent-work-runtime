@@ -52,6 +52,11 @@ history, model output and MCP framing are excluded.
 On this Apple M3 Max / macOS run, context compilation took **108 ms at p95**
 (30 sequential CLI calls after warmup). This is a single-host measurement.
 
+The current source also has a [complete-workflow comparison](docs/benchmarks/workflow.md):
+30 synthetic runs preserve the same completion contracts while reducing tool calls
+by 18–27%; returned text falls only 3.4–4.7%. Maintenance still has a cost. This
+source comparison does not establish model-token or billing savings, or announce a release.
+
 ## Get started
 
 Install **0.3.3** through either registry; both supply `awr` and `awr-mcp`:

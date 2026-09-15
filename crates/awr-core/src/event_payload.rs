@@ -33,6 +33,7 @@ pub fn is_domain_event_type(kind: &str) -> bool {
         "client.",
         "execution.",
         "mcp.",
+        "management.",
     ]
     .iter()
     .any(|prefix| kind.starts_with(prefix))
@@ -150,6 +151,7 @@ fn domain_fields(kind: &str, payload: &Value) -> Result<()> {
         "action actor expected_revision from intent proposal_id proposal_revision reason source_id target_id target_key target_kind to work_action"
     } else {
         match kind {
+            "management.assessed" => "version request_key input observer assessment",
             "mcp.operation_started" | "mcp.operation_finished" | "mcp.operation_recovered" => {
                 "operation"
             }
@@ -203,6 +205,7 @@ fn domain_fields(kind: &str, payload: &Value) -> Result<()> {
     // These non-null receipt fields anchor the event to the operation that produced it.
     // Optional fields and nested snapshots still come from the typed domain constructors.
     let required = match kind {
+        "management.assessed" => "version request_key input observer assessment",
         "mcp.operation_started" | "mcp.operation_finished" | "mcp.operation_recovered" => {
             "operation"
         }
@@ -273,6 +276,21 @@ fn domain_fields(kind: &str, payload: &Value) -> Result<()> {
             continue;
         }
         let valid = match key.as_str() {
+            "version" if kind == "management.assessed" => value.as_u64() == Some(1),
+            "input" if kind == "management.assessed" => {
+                value.is_object()
+                    && serde_json::from_value::<crate::ManagementObservation>(
+                        value["observation"].clone(),
+                    )
+                    .is_ok()
+            }
+            "assessment" if kind == "management.assessed" => {
+                value.is_object()
+                    && serde_json::from_value::<crate::ManagementDecision>(
+                        value["decision"].clone(),
+                    )
+                    .is_ok()
+            }
             "operation" => serde_json::from_value::<crate::McpOperation>(value.clone()).is_ok(),
             "wait" => serde_json::from_value::<crate::McpWait>(value.clone()).is_ok(),
             "mcp_binding" => serde_json::from_value::<crate::McpSessionBinding>(value.clone())

@@ -187,6 +187,24 @@ def main():
     gate('native_cli', [sys.executable, 'tests/platform/native_cli.py', '--awr', awr,
                         '--output', output / 'fixtures' / 'native', '--report', native],
          receipt(native, validate_native), requires=('build',))
+    gate('workflow_oracle', [sys.executable, '-m', 'unittest', 'discover', '-s', 'tests/benchmarks/workflow', '-v'])
+    workflow = output / 'workflow'
+
+    def validate_workflow(data):
+        require(data['workflow_runs'] == 10 and all(data['checks'].values())
+                and data['runtime_source_sha'] == source
+                and data['binary_sha256'] == {'awr': digest(awr), 'mcp': digest(mcp)},
+                'Equivalent workflow cases or native binary binding are incomplete')
+        require(all(value is None for value in data['missing_metrics'].values()),
+                'Model usage cannot be inferred from synthetic protocol metrics')
+        copied = evidence / 'workflow-aggregate.json'
+        shutil.copyfile(workflow / 'aggregate.json', copied)
+        return {'workflow_runs': data['workflow_runs'], 'aggregate': str(copied.relative_to(ROOT)),
+                'aggregate_sha256': digest(copied)}
+
+    gate('workflow_scenarios', [sys.executable, 'tests/benchmarks/workflow/run.py', '--awr', awr, '--mcp', mcp,
+                              '--runtime-source-sha', source, '--output', workflow, '--repetitions', '1'],
+         receipt(workflow / 'aggregate.json', validate_workflow), requires=('build', 'workflow_oracle'))
     gate('format', ['cargo', 'fmt', '--all', '--check'])
     unchanged = all((ROOT / name).is_file() and digest(ROOT / name) == value for name, value in fingerprints.items())
     unchanged = unchanged and read_command('git', 'rev-parse', 'HEAD') == source and not read_command('git', 'status', '--porcelain')

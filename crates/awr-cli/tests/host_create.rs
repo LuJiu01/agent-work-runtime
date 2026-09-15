@@ -85,6 +85,89 @@ impl Drop for Host {
 }
 
 #[test]
+fn structured_creation_preserves_known_facts_and_binds_them_to_the_request() {
+    let h = Host::new("work_items: []\n", "");
+    let mut input = json!({"version":1,"request_key":"structured-one","title":"核对一张发票",
+        "fields":{"summary":"保留中文细节","acceptance":["差异可复核"],"next_action":"读取附件","paths":["资料/九月.json"]}});
+    h.write("draft.json", &input.to_string());
+    let p = h.ok(&["work", "create", "--input", "draft.json"]);
+    let args = [
+        "work",
+        "create",
+        "--input",
+        "draft.json",
+        "--accept",
+        "--expected-preview",
+        p["preview"]["fingerprint"].as_str().unwrap(),
+        "--expected-revision",
+        &p["project_revision"].to_string(),
+    ];
+    let saved = h.ok(&args);
+    let work = h.ok(&["work", "show", saved["external_key"].as_str().unwrap()]);
+    assert_eq!(work["work"]["status"], "draft");
+    assert_eq!(work["acceptance"], json!(["差异可复核"]));
+    assert_eq!(h.ok(&args)["work_id"], saved["work_id"]);
+    input["fields"]["next_action"] = json!("different request content");
+    h.write("draft.json", &input.to_string());
+    h.error(
+        &["work", "create", "--input", "draft.json"],
+        "SourceConflict",
+    );
+    input["request_key"] = json!("forbidden-state");
+    input["fields"]["status"] = json!("completed");
+    h.write("draft.json", &input.to_string());
+    h.error(&["work", "create", "--input", "draft.json"], "InvalidInput");
+}
+
+#[test]
+fn preparation_keeps_required_gaps_and_preflight_rejects_invented_success() {
+    let h = Host::new(
+        "work_items:\n- id: W\n  title: 核对发票\n  status: ready\n  next_action: 核对\n  acceptance: [差异可复核]\n",
+        "",
+    );
+    let prepared_output = h.run(&["work", "prepare", "W"]);
+    assert!(!prepared_output.status.success());
+    let prepared: Value = serde_json::from_slice(&prepared_output.stdout).unwrap();
+    assert_eq!(prepared["context"]["completeness"]["complete"], false);
+    assert_eq!(prepared["next_action"], "resolve_required_context_gaps");
+    assert_eq!(prepared["context_consumed"], false);
+    assert!(
+        prepared["context"]["work_context"]["rendered_context"]
+            .as_str()
+            .unwrap()
+            .contains("差异可复核")
+    );
+    let sha = "aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa";
+    let mut report = json!({"version":1,"work_item":"W","source_sha":sha,"command":"inspect fixture","scope":["W"],"verified_at":1,
+        "checks":[{"name":"review","passed":true,"details":"fixture result","criteria":["差异可复核"]}]});
+    h.write("report.json", &report.to_string());
+    let args = [
+        "work",
+        "prepare-completion",
+        "W",
+        "--report",
+        "report.json",
+        "--evidence-key",
+        "E",
+        "--source-sha",
+        sha,
+    ];
+    let out = h.ok(&args);
+    assert_eq!(out["verification_executed"], false);
+    assert_eq!(out["evidence"]["command"], "inspect fixture");
+    assert_eq!(
+        out["completion"]["acceptance"][0]["criterion"],
+        "差异可复核"
+    );
+    report["checks"][0]["passed"] = json!(false);
+    h.write("report.json", &report.to_string());
+    h.error(&args, "EvidenceMissing");
+    report["checks"][0].as_object_mut().unwrap().remove("name");
+    h.write("report.json", &report.to_string());
+    h.error(&args, "InvalidInput");
+}
+
+#[test]
 fn title_only_creates_one_non_executable_draft_and_replays_the_same_identity() {
     let h = Host::new("work_items: []\n", "");
     let before = fs::read(h.0.join("工作.yaml")).unwrap();

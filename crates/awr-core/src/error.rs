@@ -66,6 +66,8 @@ pub enum Error {
     InvalidTransition(String),
     #[error("invalid input: {0}")]
     InvalidInput(String),
+    #[error("invalid source: {}", .0.message)]
+    InvalidSource(Box<SourceDiagnostic>),
     #[error("operation is not implemented: {0}")]
     Unsupported(String),
     #[error("host protocol version {requested} is not supported")]
@@ -91,6 +93,52 @@ pub struct ErrorReport {
     pub details: Option<serde_json::Value>,
 }
 
+/// A source location is exact when supplied. Missing coordinates must not be guessed.
+#[derive(Debug, Clone, Default, Serialize)]
+pub struct DiagnosticLocation {
+    pub locator: Option<String>,
+    pub pointer: Option<String>,
+    /// One-based line and Unicode character column.
+    pub line: Option<usize>,
+    pub column: Option<usize>,
+}
+
+#[derive(Debug, Clone, Serialize)]
+pub struct SourceDiagnostic {
+    pub message: String,
+    pub location: DiagnosticLocation,
+    pub rule: String,
+    pub repair: String,
+}
+
+/// Render the same structured diagnostic carried by JSON and MCP responses.
+pub fn render_diagnostic_details(details: Option<&serde_json::Value>) -> String {
+    let Some(details) = details else {
+        return String::new();
+    };
+    let mut output = String::new();
+    if let Some(location) = details.get("location") {
+        if let Some(locator) = location["locator"].as_str() {
+            output.push_str(&format!("\n  Source: {locator}"));
+            if let Some(line) = location["line"].as_u64() {
+                output.push_str(&format!(":{line}"));
+                if let Some(column) = location["column"].as_u64() {
+                    output.push_str(&format!(":{column}"));
+                }
+            }
+        }
+        if let Some(pointer) = location["pointer"].as_str() {
+            output.push_str(&format!("\n  Field: {pointer}"));
+        }
+    }
+    for (key, label) in [("rule", "Rule"), ("repair", "Repair")] {
+        if let Some(value) = details[key].as_str() {
+            output.push_str(&format!("\n  {label}: {value}"));
+        }
+    }
+    crate::safe_diagnostic(&output)
+}
+
 impl Error {
     pub fn code(&self) -> &'static str {
         match self {
@@ -114,6 +162,7 @@ impl Error {
             Self::BudgetExceeded { .. } => "BudgetExceeded",
             Self::InvalidTransition(_) => "InvalidTransition",
             Self::InvalidInput(_) => "InvalidInput",
+            Self::InvalidSource(_) => "InvalidInput",
             Self::Unsupported(_) => "Unsupported",
             Self::ProtocolUnsupported { .. } => "ProtocolUnsupported",
             Self::CapabilityUnavailable { .. } => "CapabilityUnavailable",
@@ -127,6 +176,9 @@ impl Error {
             code: self.code(),
             message: crate::safe_diagnostic(&self.to_string()),
             details: (match self {
+                Self::InvalidSource(diagnostic) => Some(serde_json::json!({
+                    "location":diagnostic.location,"rule":diagnostic.rule,"repair":diagnostic.repair
+                })),
                 Self::IntakePreflightRejected { issues, intake_staged } => Some(serde_json::json!({
                     "can_apply":false,"source_issues":issues,"source_write_performed":intake_staged,
                     "configuration_write_performed":false,"runtime_write_performed":intake_staged,

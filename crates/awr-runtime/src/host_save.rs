@@ -256,6 +256,9 @@ fn preview_fields(
         &proposal,
         store.projection_ids(&target.source)?,
     )?;
+    if kind == EntityKind::WorkItem {
+        crate::work_graph::validate_graph_snapshot(store, root, &target.source, &prepared.after)?;
+    }
     if open_file_exact(&prepared.path)?
         .metadata()?
         .permissions()

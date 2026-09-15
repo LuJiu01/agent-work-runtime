@@ -673,10 +673,27 @@ fn verify_completed(
         .unwrap_or(Some(2))
         .ok_or_else(|| Error::EvidenceMissing("unknown required evidence level".into()))?
         .max(2);
+    let binding = store
+        .current_completion_binding(project, &work.meta.external_key, branch)?
+        .filter(|binding| binding.source_sha == sha);
+    if let Some(binding) = &binding {
+        store.check_completion_binding(project, work, branch, binding)?;
+    }
     let evidence = store.evidence_for_work(project, &work.meta.external_key, Some(sha), branch)?;
     let mut covered = BTreeSet::new();
+    let mut reports = BTreeMap::new();
     for assessment in evidence {
         let evidence = &assessment.evidence.item;
+        if binding.as_ref().is_some_and(|binding| {
+            !binding
+                .evidence
+                .iter()
+                .any(|selected| selected.id == evidence.id)
+        }) {
+            // Rejected attempts remain queryable evidence; they are not retroactively
+            // added to the successful completion's explicit proof requirements.
+            continue;
+        }
         if assessment.currency != EvidenceCurrency::Current
             || !assessment.missing_bindings.is_empty()
             || verification_rank(evidence.level).is_none_or(|r| r < minimum)
@@ -709,6 +726,32 @@ fn verify_completed(
         for criterion in &work.acceptance {
             if report.covers(criterion) {
                 covered.insert(criterion);
+            }
+        }
+        reports.insert(evidence.id, report);
+    }
+    if let Some(binding) = &binding {
+        // Recheck every selected record, including extra required evidence. A new
+        // passing report cannot replace a damaged or missing selected report.
+        for evidence in &binding.evidence {
+            if !reports.contains_key(&evidence.id) {
+                return Err(Error::EvidenceMissing(format!(
+                    "selected evidence {} no longer meets the current verification requirements",
+                    evidence.external_key
+                )));
+            }
+        }
+        for mapping in &binding.acceptance {
+            for id in &mapping.evidence {
+                if !reports
+                    .get(id)
+                    .is_some_and(|r| r.covers(&mapping.criterion))
+                {
+                    return Err(Error::EvidenceMissing(format!(
+                        "selected evidence {id} does not verify acceptance: {}",
+                        mapping.criterion
+                    )));
+                }
             }
         }
     }

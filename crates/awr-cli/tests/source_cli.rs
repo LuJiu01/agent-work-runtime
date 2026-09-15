@@ -168,3 +168,43 @@ fn ambiguous_and_conflicting_authority_mappings_do_not_overwrite() {
         false
     );
 }
+
+#[test]
+fn text_and_json_report_the_same_failure_location_and_projection_state() {
+    // Separate initial states: a reindex itself changes the recorded freshness.
+    for body in [
+        "work_items:\n- id: W\n  title: [类型错误]\n",
+        "work_items:\n- id: W\n  title: [broken\n",
+    ] {
+        let json_fixture = Fixture::new();
+        let text_fixture = Fixture::new();
+        for fixture in [&json_fixture, &text_fixture] {
+            fixture.ok(&["init", "--manifest", "project.toml", "--accept"]);
+            fs::write(fixture.0.join("work-ledger.yaml"), body).unwrap();
+        }
+        let machine = json_fixture.run(&["source", "reindex"]);
+        let human = Command::new(env!("CARGO_BIN_EXE_awr"))
+            .arg("--project")
+            .arg(&text_fixture.0)
+            .args(["source", "reindex"])
+            .output()
+            .unwrap();
+        assert_eq!(machine.status.code(), Some(1));
+        assert_eq!(human.status.code(), machine.status.code());
+        let report: Value = serde_json::from_slice(&machine.stdout).unwrap();
+        assert_eq!(report["ok"], false);
+        assert_eq!(report["projection_complete"], false);
+        let details = &report["issues"][0]["details"];
+        let output = String::from_utf8(human.stdout).unwrap();
+        assert!(output.contains("Operation ok: false; projection complete: false"));
+        assert!(output.contains(&format!("Rule: {}", details["rule"].as_str().unwrap())));
+        assert!(output.contains(&format!(
+            ":{}:{}",
+            details["location"]["line"], details["location"]["column"]
+        )));
+        assert!(output.contains(&format!("Repair: {}", details["repair"].as_str().unwrap())));
+        if let Some(pointer) = details["location"]["pointer"].as_str() {
+            assert!(output.contains(&format!("Field: {pointer}")));
+        }
+    }
+}

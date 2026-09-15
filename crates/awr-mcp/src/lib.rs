@@ -1,6 +1,7 @@
 //! MCP tools over project-isolated AWR domain services. No shell commands are executed.
 pub use awr_core::{Error, Result};
 mod arguments;
+mod changes;
 pub mod hub;
 mod lifecycle;
 mod operations;

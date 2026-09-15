@@ -467,6 +467,28 @@ fn parse_tree(text: &str) -> Result<Node> {
     Ok(root)
 }
 
+/// Best-effort exact value location. Complex YAML retains its JSON pointer instead
+/// of inventing a line; this read never restricts which YAML the ledger accepts.
+pub(crate) fn pointer_location(text: &str, pointer: &str) -> Option<(usize, usize)> {
+    let root = parse_tree(text).ok()?;
+    let mut target = &root;
+    if !pointer.is_empty() {
+        for encoded in pointer.strip_prefix('/')?.split('/') {
+            let part = encoded.replace("~1", "/").replace("~0", "~");
+            target = match &target.kind {
+                Kind::Mapping(fields, ..) => &fields.iter().find(|(key, _)| key == &part)?.1,
+                Kind::Sequence(items) => items.get(part.parse::<usize>().ok()?)?,
+                _ => return None,
+            };
+        }
+    }
+    let prefix = text.get(..target.range.start)?;
+    Some((
+        prefix.bytes().filter(|c| *c == b'\n').count() + 1,
+        prefix.rsplit('\n').next()?.chars().count() + 1,
+    ))
+}
+
 pub(crate) fn edit_fields(
     text: &str,
     pointer: &str,

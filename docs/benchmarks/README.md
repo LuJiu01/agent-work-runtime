@@ -1,5 +1,9 @@
 # Reproduce the public context benchmark
 
+This page measures context selection. The separate [complete workflow benchmark](workflow.md)
+includes task maintenance, protocol envelopes, recovery and completion. Context
+selection percentages should not be presented as complete-workflow cost reductions.
+
 The [summary](summary.json) and [chart](context-tokens.svg) describe a deterministic
 **synthetic support-tracker project**, not the AWR development ledger or a customer's
 private project. The [fixture generator](../../tests/benchmarks/public/fixture.py)

@@ -70,6 +70,7 @@ pub fn create(root: &Path, args: &CreateArgs, json_output: bool) -> Result<()> {
             request_key: args.request_key.clone().unwrap(),
             title: args.title.clone().unwrap(),
             source_id: args.source,
+            fields: Default::default(),
         }
     };
     let mut store =

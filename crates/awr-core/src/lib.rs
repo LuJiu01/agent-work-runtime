@@ -5,7 +5,9 @@ mod completion;
 mod error;
 mod event_payload;
 mod execution;
+mod management;
 mod model;
+pub use management::*;
 mod mutation;
 mod query;
 mod runtime;
@@ -15,7 +17,9 @@ mod work_action;
 pub use branch::*;
 pub use branch_close::*;
 pub use completion::*;
-pub use error::{Error, ErrorReport, Result};
+pub use error::{
+    DiagnosticLocation, Error, ErrorReport, Result, SourceDiagnostic, render_diagnostic_details,
+};
 pub use event_payload::*;
 pub use execution::*;
 pub use model::*;

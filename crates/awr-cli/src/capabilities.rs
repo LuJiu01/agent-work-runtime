@@ -404,6 +404,46 @@ fn catalog() -> Vec<Capability> {
             ],
         ),
         (
+            "workflow.prepare",
+            true,
+            &["work prepare"],
+            &[
+                "required_context_preserved",
+                "explicit_consumption",
+                "no_automatic_claim",
+            ],
+        ),
+        (
+            "work.management",
+            true,
+            &["work assess", "work manage"],
+            &[
+                "attributed_observations",
+                "no_automatic_downgrade",
+                "completion_policy_unchanged",
+            ],
+        ),
+        (
+            "work.graph",
+            true,
+            &["work graph"],
+            &[
+                "complete_dependency_closure",
+                "source_bound_impact",
+                "no_execution_admission",
+            ],
+        ),
+        (
+            "completion.prepare",
+            true,
+            &["work prepare-completion"],
+            &[
+                "actual_local_report",
+                "caller_asserted_level",
+                "no_execution_or_completion",
+            ],
+        ),
+        (
             "completion.user_confirmation",
             true,
             &["host save"],

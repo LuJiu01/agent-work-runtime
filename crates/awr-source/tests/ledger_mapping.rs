@@ -125,3 +125,95 @@ fn mapping_conflicts_and_invalid_semantics_are_rejected() {
         Err(Error::SourceConflict(_))
     ));
 }
+
+#[test]
+fn diagnostics_locate_mapped_chinese_fields_and_list_members_without_source_content() {
+    let text = "work_items:\n  '工/作~1':\n    id: '工/作~1'\n    标题: [错误类型]\n";
+    let report = parse(
+        text,
+        "yaml-ledger-v1",
+        "[sources.options.field_map]\ntitle='标题'\n",
+    )
+    .unwrap_err()
+    .report();
+    assert_eq!(report.code, "InvalidInput");
+    let d = report.details.unwrap();
+    assert_eq!(d["rule"], "ledger.string");
+    assert_eq!(d["location"]["locator"], "file:///fixture/work.yaml");
+    assert_eq!(d["location"]["pointer"], "/work_items/工~1作~01/标题");
+    assert_eq!(d["location"]["line"], 4);
+    assert_eq!(d["location"]["column"], 9);
+    assert!(!report.message.contains("错误类型"));
+    assert!(d["repair"].as_str().unwrap().contains("string"));
+    let report = parse(
+        "work_items:\n- id: W\n  acceptance: [正确, 42]\n",
+        "yaml-ledger-v1",
+        "",
+    )
+    .unwrap_err()
+    .report();
+    let d = report.details.unwrap();
+    assert_eq!(d["location"]["pointer"], "/work_items/0/acceptance/1");
+    assert_eq!(d["location"]["line"], 3);
+}
+
+#[test]
+fn syntax_diagnostics_and_valid_long_chinese_yaml_are_not_confused() {
+    let report = parse(
+        "work_items:\n- id: W\n  title: [broken\n",
+        "yaml-ledger-v1",
+        "",
+    )
+    .unwrap_err()
+    .report();
+    let d = report.details.unwrap();
+    assert_eq!(d["rule"], "yaml.syntax");
+    assert!(d["location"]["line"].as_u64().unwrap() >= 3);
+    assert!(d["location"]["column"].as_u64().unwrap() >= 1);
+    assert!(d["location"]["pointer"].is_null());
+    let body = format!(
+        "{}\n路径：目录/含 空格/资料.yaml",
+        "这是完整中文说明，不能为了通过解析而删掉事实。".repeat(200)
+    );
+    let text = format!(
+        "work_items:\n- id: W\n  title: 正常工作\n  summary: {}\n  paths: ['资料/含 空格.yaml']\n",
+        serde_json::to_string(&body).unwrap()
+    );
+    let result = parse(&text, "yaml-ledger-v1", "").unwrap();
+    assert_eq!(result.work_items[0].summary, body);
+    assert_eq!(result.work_items[0].paths, ["资料/含 空格.yaml"]);
+}
+
+#[test]
+fn aliases_and_complex_yaml_keep_honest_locations() {
+    for (field, pointer) in [
+        ("required_for_v1: quoted", "/work_items/0/required_for_v1"),
+        (
+            "dependencies: [{key: 42}]",
+            "/work_items/0/dependencies/0/key",
+        ),
+        ("deliverables: [42]", "/work_items/0/deliverables/0"),
+    ] {
+        let report = parse(
+            &format!("work_items:\n- id: W\n  {field}\n"),
+            "yaml-ledger-v1",
+            "",
+        )
+        .unwrap_err()
+        .report();
+        let d = report.details.unwrap();
+        assert_eq!(d["location"]["pointer"], pointer);
+        assert_eq!(d["location"]["line"], 3);
+    }
+    let report = parse(
+        "bad: &bad [value]\nwork_items:\n- id: W\n  title: *bad\n",
+        "yaml-ledger-v1",
+        "",
+    )
+    .unwrap_err()
+    .report();
+    let d = report.details.unwrap();
+    assert_eq!(d["location"]["pointer"], "/work_items/0/title");
+    assert!(d["location"]["line"].is_null());
+    assert!(d["location"]["column"].is_null());
+}

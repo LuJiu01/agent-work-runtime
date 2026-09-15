@@ -283,6 +283,7 @@ fn validate_archive(
     source: Id,
     prepared: &PreparedLedgerBatch,
 ) -> Result<()> {
+    crate::work_graph::validate_graph_projection(store, project, source, &prepared.projection)?;
     for id in &prepared.archive_targets {
         store.ensure_work_unoccupied(project, *id)?;
     }

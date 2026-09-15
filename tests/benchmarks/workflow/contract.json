@@ -1,0 +1,11 @@
+{
+  "version": 1,
+  "benchmark": "adaptive-workflow-v1",
+  "workloads": ["lightweight", "upgrade", "wait", "dependencies", "unknown_result"],
+  "strategies": ["primitive", "prepared"],
+  "comparison": "Same native binaries, identical initial source bytes and completion requirements. Primitive reads work, management and context separately; prepared composes those same required observations.",
+  "required_checks": ["required_facts_preserved", "false_completion_rejected", "final_completion_verified", "identity_preserved", "duplicate_execution_absent", "scenario_behavior_verified"],
+  "metrics": ["tool_calls", "rpc_calls", "wire_input_bytes", "wire_output_bytes", "tool_text_bytes", "catalog_bytes", "tool_elapsed_ms", "wall_elapsed_ms", "maintenance_calls", "maintenance_bytes", "maintenance_ms", "recovery_calls", "expected_rejections", "unexpected_errors", "explicit_replays"],
+  "missing_metrics": {"model_input_tokens": null, "model_output_tokens": null, "model_reasoning_tokens": null, "model_cost": null},
+  "scope": "Native stdio and CLI synthetic workflow; no model billing, enterprise native-client E4, productivity or release claim. Public output is aggregate; raw operation and source receipts remain in ignored private output."
+}
