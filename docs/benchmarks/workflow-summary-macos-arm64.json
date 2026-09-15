@@ -1,0 +1,2810 @@
+{
+  "benchmark": "adaptive-workflow-v1",
+  "measured_at": "2026-09-15T09:33:17.755322+00:00",
+  "runtime_source_sha": "2d37ef1c5388156a0b0528228fc73a65cc954545",
+  "binary_sha256": {
+    "awr": "71af822926b82d5ee207e16a0be7d15626169d4142c0a6a186bf2ff43c4f4132",
+    "mcp": "ffe76a0e32b5acdbf017bb5fa201311c186009e8a01ac80b265b2a01a1b39586"
+  },
+  "harness_sha256": {
+    "run.py": "e3d3ba1d449a6c9c110a7f2548651d604443a3fb9004a58a94ea7fac8ee97f23",
+    "oracle.py": "8378834e9ad8bba5b2b0ad466306237610bb8d74629d909a17357305233e1a4a",
+    "contract.json": "3e8c5d3d4cdeed4f97a5a8757b81d2527bbbc712cb2ba4f2f83e2f6dd3386913"
+  },
+  "environment": {
+    "os": "Darwin",
+    "architecture": "arm64",
+    "python": "3.13.5"
+  },
+  "comparison": "Same native binaries, identical initial source bytes and completion requirements. Primitive reads work, management and context separately; prepared composes those same required observations.",
+  "repetitions": 3,
+  "workflow_runs": 45,
+  "checks": {
+    "required_facts_preserved": true,
+    "false_completion_rejected": true,
+    "final_completion_verified": true,
+    "identity_preserved": true,
+    "duplicate_execution_absent": true,
+    "scenario_behavior_verified": true
+  },
+  "metrics": [
+    {
+      "scenario": "lightweight",
+      "strategies": {
+        "primitive": {
+          "tool_calls": {
+            "median": 20,
+            "min": 20,
+            "max": 20
+          },
+          "rpc_calls": {
+            "median": 20,
+            "min": 20,
+            "max": 20
+          },
+          "wire_input_bytes": {
+            "median": 5627,
+            "min": 5627,
+            "max": 5627
+          },
+          "wire_output_bytes": {
+            "median": 150583,
+            "min": 150583,
+            "max": 150585
+          },
+          "tool_text_bytes": {
+            "median": 60775,
+            "min": 60775,
+            "max": 60776
+          },
+          "catalog_bytes": {
+            "median": 31348,
+            "min": 31348,
+            "max": 31348
+          },
+          "tool_elapsed_ms": {
+            "median": 1242.701417,
+            "min": 1228.609625,
+            "max": 1896.849998
+          },
+          "wall_elapsed_ms": {
+            "median": 1266.18625,
+            "min": 1257.876292,
+            "max": 2539.660208
+          },
+          "maintenance_calls": {
+            "median": 9,
+            "min": 9,
+            "max": 9
+          },
+          "maintenance_bytes": {
+            "median": 45654,
+            "min": 45654,
+            "max": 45654
+          },
+          "maintenance_ms": {
+            "median": 349.82599999999996,
+            "min": 320.49675,
+            "max": 363.836958
+          },
+          "recovery_calls": {
+            "median": 0,
+            "min": 0,
+            "max": 0
+          },
+          "expected_rejections": {
+            "median": 1,
+            "min": 1,
+            "max": 1
+          },
+          "unexpected_errors": {
+            "median": 0,
+            "min": 0,
+            "max": 0
+          },
+          "explicit_replays": {
+            "median": 0,
+            "min": 0,
+            "max": 0
+          }
+        },
+        "prepared": {
+          "tool_calls": {
+            "median": 16,
+            "min": 16,
+            "max": 16
+          },
+          "rpc_calls": {
+            "median": 16,
+            "min": 16,
+            "max": 16
+          },
+          "wire_input_bytes": {
+            "median": 5079,
+            "min": 5079,
+            "max": 5079
+          },
+          "wire_output_bytes": {
+            "median": 145483,
+            "min": 145483,
+            "max": 145483
+          },
+          "tool_text_bytes": {
+            "median": 58541,
+            "min": 58541,
+            "max": 58541
+          },
+          "catalog_bytes": {
+            "median": 31348,
+            "min": 31348,
+            "max": 31348
+          },
+          "tool_elapsed_ms": {
+            "median": 1158.315584,
+            "min": 978.013585,
+            "max": 1374.274917
+          },
+          "wall_elapsed_ms": {
+            "median": 1183.059917,
+            "min": 995.96325,
+            "max": 1408.692292
+          },
+          "maintenance_calls": {
+            "median": 9,
+            "min": 9,
+            "max": 9
+          },
+          "maintenance_bytes": {
+            "median": 45654,
+            "min": 45654,
+            "max": 45654
+          },
+          "maintenance_ms": {
+            "median": 347.726293,
+            "min": 289.217334,
+            "max": 513.951874
+          },
+          "recovery_calls": {
+            "median": 0,
+            "min": 0,
+            "max": 0
+          },
+          "expected_rejections": {
+            "median": 1,
+            "min": 1,
+            "max": 1
+          },
+          "unexpected_errors": {
+            "median": 0,
+            "min": 0,
+            "max": 0
+          },
+          "explicit_replays": {
+            "median": 0,
+            "min": 0,
+            "max": 0
+          }
+        },
+        "summary": {
+          "tool_calls": {
+            "median": 16,
+            "min": 16,
+            "max": 16
+          },
+          "rpc_calls": {
+            "median": 16,
+            "min": 16,
+            "max": 16
+          },
+          "wire_input_bytes": {
+            "median": 5209,
+            "min": 5209,
+            "max": 5209
+          },
+          "wire_output_bytes": {
+            "median": 135753,
+            "min": 135753,
+            "max": 135755
+          },
+          "tool_text_bytes": {
+            "median": 53964,
+            "min": 53964,
+            "max": 53965
+          },
+          "catalog_bytes": {
+            "median": 31348,
+            "min": 31348,
+            "max": 31348
+          },
+          "tool_elapsed_ms": {
+            "median": 1191.921706,
+            "min": 941.341043,
+            "max": 1402.162374
+          },
+          "wall_elapsed_ms": {
+            "median": 1213.552459,
+            "min": 958.265833,
+            "max": 1439.3375
+          },
+          "maintenance_calls": {
+            "median": 9,
+            "min": 9,
+            "max": 9
+          },
+          "maintenance_bytes": {
+            "median": 41538,
+            "min": 41538,
+            "max": 41538
+          },
+          "maintenance_ms": {
+            "median": 355.251041,
+            "min": 280.340584,
+            "max": 505.465169
+          },
+          "recovery_calls": {
+            "median": 0,
+            "min": 0,
+            "max": 0
+          },
+          "expected_rejections": {
+            "median": 1,
+            "min": 1,
+            "max": 1
+          },
+          "unexpected_errors": {
+            "median": 0,
+            "min": 0,
+            "max": 0
+          },
+          "explicit_replays": {
+            "median": 0,
+            "min": 0,
+            "max": 0
+          }
+        }
+      }
+    },
+    {
+      "scenario": "upgrade",
+      "strategies": {
+        "primitive": {
+          "tool_calls": {
+            "median": 31,
+            "min": 31,
+            "max": 31
+          },
+          "rpc_calls": {
+            "median": 31,
+            "min": 31,
+            "max": 31
+          },
+          "wire_input_bytes": {
+            "median": 8976,
+            "min": 8976,
+            "max": 8976
+          },
+          "wire_output_bytes": {
+            "median": 221440,
+            "min": 221436,
+            "max": 221440
+          },
+          "tool_text_bytes": {
+            "median": 94245,
+            "min": 94243,
+            "max": 94245
+          },
+          "catalog_bytes": {
+            "median": 31348,
+            "min": 31348,
+            "max": 31348
+          },
+          "tool_elapsed_ms": {
+            "median": 1887.784875,
+            "min": 1267.749458,
+            "max": 2528.994336
+          },
+          "wall_elapsed_ms": {
+            "median": 1923.751166,
+            "min": 1292.500708,
+            "max": 2570.711916
+          },
+          "maintenance_calls": {
+            "median": 17,
+            "min": 17,
+            "max": 17
+          },
+          "maintenance_bytes": {
+            "median": 88728,
+            "min": 88728,
+            "max": 88728
+          },
+          "maintenance_ms": {
+            "median": 624.843916,
+            "min": 499.75737599999997,
+            "max": 1354.097128
+          },
+          "recovery_calls": {
+            "median": 0,
+            "min": 0,
+            "max": 0
+          },
+          "expected_rejections": {
+            "median": 2,
+            "min": 2,
+            "max": 2
+          },
+          "unexpected_errors": {
+            "median": 0,
+            "min": 0,
+            "max": 0
+          },
+          "explicit_replays": {
+            "median": 0,
+            "min": 0,
+            "max": 0
+          }
+        },
+        "prepared": {
+          "tool_calls": {
+            "median": 25,
+            "min": 25,
+            "max": 25
+          },
+          "rpc_calls": {
+            "median": 25,
+            "min": 25,
+            "max": 25
+          },
+          "wire_input_bytes": {
+            "median": 8154,
+            "min": 8154,
+            "max": 8154
+          },
+          "wire_output_bytes": {
+            "median": 213244,
+            "min": 213240,
+            "max": 213244
+          },
+          "tool_text_bytes": {
+            "median": 90633,
+            "min": 90631,
+            "max": 90633
+          },
+          "catalog_bytes": {
+            "median": 31348,
+            "min": 31348,
+            "max": 31348
+          },
+          "tool_elapsed_ms": {
+            "median": 1618.1372920000001,
+            "min": 1483.933041,
+            "max": 1659.274919
+          },
+          "wall_elapsed_ms": {
+            "median": 1644.188667,
+            "min": 1511.618083,
+            "max": 1685.827917
+          },
+          "maintenance_calls": {
+            "median": 17,
+            "min": 17,
+            "max": 17
+          },
+          "maintenance_bytes": {
+            "median": 88728,
+            "min": 88728,
+            "max": 88728
+          },
+          "maintenance_ms": {
+            "median": 597.4656249999999,
+            "min": 525.257417,
+            "max": 916.163127
+          },
+          "recovery_calls": {
+            "median": 0,
+            "min": 0,
+            "max": 0
+          },
+          "expected_rejections": {
+            "median": 2,
+            "min": 2,
+            "max": 2
+          },
+          "unexpected_errors": {
+            "median": 0,
+            "min": 0,
+            "max": 0
+          },
+          "explicit_replays": {
+            "median": 0,
+            "min": 0,
+            "max": 0
+          }
+        },
+        "summary": {
+          "tool_calls": {
+            "median": 25,
+            "min": 25,
+            "max": 25
+          },
+          "rpc_calls": {
+            "median": 25,
+            "min": 25,
+            "max": 25
+          },
+          "wire_input_bytes": {
+            "median": 8310,
+            "min": 8310,
+            "max": 8310
+          },
+          "wire_output_bytes": {
+            "median": 200174,
+            "min": 200174,
+            "max": 200178
+          },
+          "tool_text_bytes": {
+            "median": 84500,
+            "min": 84500,
+            "max": 84502
+          },
+          "catalog_bytes": {
+            "median": 31348,
+            "min": 31348,
+            "max": 31348
+          },
+          "tool_elapsed_ms": {
+            "median": 1942.667418,
+            "min": 1261.741873,
+            "max": 1997.3397929999999
+          },
+          "wall_elapsed_ms": {
+            "median": 1972.640125,
+            "min": 1288.055375,
+            "max": 2035.595167
+          },
+          "maintenance_calls": {
+            "median": 17,
+            "min": 17,
+            "max": 17
+          },
+          "maintenance_bytes": {
+            "median": 84416,
+            "min": 84416,
+            "max": 84416
+          },
+          "maintenance_ms": {
+            "median": 813.766877,
+            "min": 527.882832,
+            "max": 1104.300459
+          },
+          "recovery_calls": {
+            "median": 0,
+            "min": 0,
+            "max": 0
+          },
+          "expected_rejections": {
+            "median": 2,
+            "min": 2,
+            "max": 2
+          },
+          "unexpected_errors": {
+            "median": 0,
+            "min": 0,
+            "max": 0
+          },
+          "explicit_replays": {
+            "median": 0,
+            "min": 0,
+            "max": 0
+          }
+        }
+      }
+    },
+    {
+      "scenario": "wait",
+      "strategies": {
+        "primitive": {
+          "tool_calls": {
+            "median": 30,
+            "min": 30,
+            "max": 30
+          },
+          "rpc_calls": {
+            "median": 32,
+            "min": 32,
+            "max": 32
+          },
+          "wire_input_bytes": {
+            "median": 7981,
+            "min": 7981,
+            "max": 7981
+          },
+          "wire_output_bytes": {
+            "median": 256139,
+            "min": 256139,
+            "max": 256139
+          },
+          "tool_text_bytes": {
+            "median": 95470,
+            "min": 95470,
+            "max": 95470
+          },
+          "catalog_bytes": {
+            "median": 62697,
+            "min": 62697,
+            "max": 62697
+          },
+          "tool_elapsed_ms": {
+            "median": 2010.334374,
+            "min": 1581.600125,
+            "max": 3749.923421
+          },
+          "wall_elapsed_ms": {
+            "median": 2059.026291,
+            "min": 1614.541333,
+            "max": 3828.344167
+          },
+          "maintenance_calls": {
+            "median": 9,
+            "min": 9,
+            "max": 9
+          },
+          "maintenance_bytes": {
+            "median": 45598,
+            "min": 45598,
+            "max": 45598
+          },
+          "maintenance_ms": {
+            "median": 358.939082,
+            "min": 277.43233299999997,
+            "max": 502.348919
+          },
+          "recovery_calls": {
+            "median": 1,
+            "min": 1,
+            "max": 1
+          },
+          "expected_rejections": {
+            "median": 2,
+            "min": 2,
+            "max": 2
+          },
+          "unexpected_errors": {
+            "median": 0,
+            "min": 0,
+            "max": 0
+          },
+          "explicit_replays": {
+            "median": 0,
+            "min": 0,
+            "max": 0
+          }
+        },
+        "prepared": {
+          "tool_calls": {
+            "median": 22,
+            "min": 22,
+            "max": 22
+          },
+          "rpc_calls": {
+            "median": 24,
+            "min": 24,
+            "max": 24
+          },
+          "wire_input_bytes": {
+            "median": 6885,
+            "min": 6885,
+            "max": 6885
+          },
+          "wire_output_bytes": {
+            "median": 245923,
+            "min": 245923,
+            "max": 245923
+          },
+          "tool_text_bytes": {
+            "median": 90994,
+            "min": 90994,
+            "max": 90994
+          },
+          "catalog_bytes": {
+            "median": 62697,
+            "min": 62697,
+            "max": 62697
+          },
+          "tool_elapsed_ms": {
+            "median": 2122.667127,
+            "min": 1545.257126,
+            "max": 2797.38992
+          },
+          "wall_elapsed_ms": {
+            "median": 2169.55625,
+            "min": 1576.024917,
+            "max": 2881.444833
+          },
+          "maintenance_calls": {
+            "median": 9,
+            "min": 9,
+            "max": 9
+          },
+          "maintenance_bytes": {
+            "median": 45598,
+            "min": 45598,
+            "max": 45598
+          },
+          "maintenance_ms": {
+            "median": 359.485125,
+            "min": 285.017625,
+            "max": 524.868793
+          },
+          "recovery_calls": {
+            "median": 1,
+            "min": 1,
+            "max": 1
+          },
+          "expected_rejections": {
+            "median": 2,
+            "min": 2,
+            "max": 2
+          },
+          "unexpected_errors": {
+            "median": 0,
+            "min": 0,
+            "max": 0
+          },
+          "explicit_replays": {
+            "median": 0,
+            "min": 0,
+            "max": 0
+          }
+        },
+        "summary": {
+          "tool_calls": {
+            "median": 22,
+            "min": 22,
+            "max": 22
+          },
+          "rpc_calls": {
+            "median": 24,
+            "min": 24,
+            "max": 24
+          },
+          "wire_input_bytes": {
+            "median": 7093,
+            "min": 7093,
+            "max": 7093
+          },
+          "wire_output_bytes": {
+            "median": 228045,
+            "min": 228045,
+            "max": 228045
+          },
+          "tool_text_bytes": {
+            "median": 82637,
+            "min": 82637,
+            "max": 82637
+          },
+          "catalog_bytes": {
+            "median": 62697,
+            "min": 62697,
+            "max": 62697
+          },
+          "tool_elapsed_ms": {
+            "median": 1838.422249,
+            "min": 1664.955167,
+            "max": 2343.20204
+          },
+          "wall_elapsed_ms": {
+            "median": 1873.756167,
+            "min": 1704.510125,
+            "max": 2387.054459
+          },
+          "maintenance_calls": {
+            "median": 9,
+            "min": 9,
+            "max": 9
+          },
+          "maintenance_bytes": {
+            "median": 41482,
+            "min": 41482,
+            "max": 41482
+          },
+          "maintenance_ms": {
+            "median": 345.637082,
+            "min": 332.549416,
+            "max": 425.677455
+          },
+          "recovery_calls": {
+            "median": 1,
+            "min": 1,
+            "max": 1
+          },
+          "expected_rejections": {
+            "median": 2,
+            "min": 2,
+            "max": 2
+          },
+          "unexpected_errors": {
+            "median": 0,
+            "min": 0,
+            "max": 0
+          },
+          "explicit_replays": {
+            "median": 0,
+            "min": 0,
+            "max": 0
+          }
+        }
+      }
+    },
+    {
+      "scenario": "dependencies",
+      "strategies": {
+        "primitive": {
+          "tool_calls": {
+            "median": 39,
+            "min": 39,
+            "max": 39
+          },
+          "rpc_calls": {
+            "median": 38,
+            "min": 38,
+            "max": 38
+          },
+          "wire_input_bytes": {
+            "median": 10678,
+            "min": 10678,
+            "max": 10678
+          },
+          "wire_output_bytes": {
+            "median": 278457,
+            "min": 278457,
+            "max": 278459
+          },
+          "tool_text_bytes": {
+            "median": 124501,
+            "min": 124501,
+            "max": 124502
+          },
+          "catalog_bytes": {
+            "median": 31348,
+            "min": 31348,
+            "max": 31348
+          },
+          "tool_elapsed_ms": {
+            "median": 1736.386331,
+            "min": 1531.308542,
+            "max": 1837.501126
+          },
+          "wall_elapsed_ms": {
+            "median": 1771.435625,
+            "min": 1567.07225,
+            "max": 1872.444167
+          },
+          "maintenance_calls": {
+            "median": 19,
+            "min": 19,
+            "max": 19
+          },
+          "maintenance_bytes": {
+            "median": 101409,
+            "min": 101409,
+            "max": 101409
+          },
+          "maintenance_ms": {
+            "median": 609.203749,
+            "min": 571.939083,
+            "max": 659.863333
+          },
+          "recovery_calls": {
+            "median": 0,
+            "min": 0,
+            "max": 0
+          },
+          "expected_rejections": {
+            "median": 2,
+            "min": 2,
+            "max": 2
+          },
+          "unexpected_errors": {
+            "median": 0,
+            "min": 0,
+            "max": 0
+          },
+          "explicit_replays": {
+            "median": 0,
+            "min": 0,
+            "max": 0
+          }
+        },
+        "prepared": {
+          "tool_calls": {
+            "median": 31,
+            "min": 31,
+            "max": 31
+          },
+          "rpc_calls": {
+            "median": 30,
+            "min": 30,
+            "max": 30
+          },
+          "wire_input_bytes": {
+            "median": 9582,
+            "min": 9582,
+            "max": 9582
+          },
+          "wire_output_bytes": {
+            "median": 267841,
+            "min": 267841,
+            "max": 267843
+          },
+          "tool_text_bytes": {
+            "median": 119841,
+            "min": 119841,
+            "max": 119842
+          },
+          "catalog_bytes": {
+            "median": 31348,
+            "min": 31348,
+            "max": 31348
+          },
+          "tool_elapsed_ms": {
+            "median": 1961.6702950000001,
+            "min": 1483.175791,
+            "max": 2008.701127
+          },
+          "wall_elapsed_ms": {
+            "median": 2001.530334,
+            "min": 1514.724416,
+            "max": 2050.502542
+          },
+          "maintenance_calls": {
+            "median": 19,
+            "min": 19,
+            "max": 19
+          },
+          "maintenance_bytes": {
+            "median": 101407,
+            "min": 101407,
+            "max": 101407
+          },
+          "maintenance_ms": {
+            "median": 839.995126,
+            "min": 600.297084,
+            "max": 871.783668
+          },
+          "recovery_calls": {
+            "median": 0,
+            "min": 0,
+            "max": 0
+          },
+          "expected_rejections": {
+            "median": 2,
+            "min": 2,
+            "max": 2
+          },
+          "unexpected_errors": {
+            "median": 0,
+            "min": 0,
+            "max": 0
+          },
+          "explicit_replays": {
+            "median": 0,
+            "min": 0,
+            "max": 0
+          }
+        },
+        "summary": {
+          "tool_calls": {
+            "median": 31,
+            "min": 31,
+            "max": 31
+          },
+          "rpc_calls": {
+            "median": 30,
+            "min": 30,
+            "max": 30
+          },
+          "wire_input_bytes": {
+            "median": 9842,
+            "min": 9842,
+            "max": 9842
+          },
+          "wire_output_bytes": {
+            "median": 247461,
+            "min": 247461,
+            "max": 247463
+          },
+          "tool_text_bytes": {
+            "median": 110259,
+            "min": 110259,
+            "max": 110260
+          },
+          "catalog_bytes": {
+            "median": 31348,
+            "min": 31348,
+            "max": 31348
+          },
+          "tool_elapsed_ms": {
+            "median": 1632.475918,
+            "min": 1393.580834,
+            "max": 1983.194417
+          },
+          "wall_elapsed_ms": {
+            "median": 1666.596583,
+            "min": 1418.7325,
+            "max": 2021.1885
+          },
+          "maintenance_calls": {
+            "median": 19,
+            "min": 19,
+            "max": 19
+          },
+          "maintenance_bytes": {
+            "median": 93175,
+            "min": 93175,
+            "max": 93175
+          },
+          "maintenance_ms": {
+            "median": 617.807168,
+            "min": 564.395085,
+            "max": 742.88275
+          },
+          "recovery_calls": {
+            "median": 0,
+            "min": 0,
+            "max": 0
+          },
+          "expected_rejections": {
+            "median": 2,
+            "min": 2,
+            "max": 2
+          },
+          "unexpected_errors": {
+            "median": 0,
+            "min": 0,
+            "max": 0
+          },
+          "explicit_replays": {
+            "median": 0,
+            "min": 0,
+            "max": 0
+          }
+        }
+      }
+    },
+    {
+      "scenario": "unknown_result",
+      "strategies": {
+        "primitive": {
+          "tool_calls": {
+            "median": 22,
+            "min": 22,
+            "max": 22
+          },
+          "rpc_calls": {
+            "median": 24,
+            "min": 24,
+            "max": 24
+          },
+          "wire_input_bytes": {
+            "median": 6188,
+            "min": 6188,
+            "max": 6188
+          },
+          "wire_output_bytes": {
+            "median": 191282,
+            "min": 191282,
+            "max": 191282
+          },
+          "tool_text_bytes": {
+            "median": 64713,
+            "min": 64713,
+            "max": 64713
+          },
+          "catalog_bytes": {
+            "median": 62697,
+            "min": 62697,
+            "max": 62697
+          },
+          "tool_elapsed_ms": {
+            "median": 1262.34779,
+            "min": 1033.066585,
+            "max": 1552.106167
+          },
+          "wall_elapsed_ms": {
+            "median": 1302.771375,
+            "min": 1064.211583,
+            "max": 1612.908334
+          },
+          "maintenance_calls": {
+            "median": 9,
+            "min": 9,
+            "max": 9
+          },
+          "maintenance_bytes": {
+            "median": 45678,
+            "min": 45678,
+            "max": 45678
+          },
+          "maintenance_ms": {
+            "median": 335.761748,
+            "min": 282.898167,
+            "max": 447.54258500000003
+          },
+          "recovery_calls": {
+            "median": 2,
+            "min": 2,
+            "max": 2
+          },
+          "expected_rejections": {
+            "median": 1,
+            "min": 1,
+            "max": 1
+          },
+          "unexpected_errors": {
+            "median": 0,
+            "min": 0,
+            "max": 0
+          },
+          "explicit_replays": {
+            "median": 0,
+            "min": 0,
+            "max": 0
+          }
+        },
+        "prepared": {
+          "tool_calls": {
+            "median": 18,
+            "min": 18,
+            "max": 18
+          },
+          "rpc_calls": {
+            "median": 20,
+            "min": 20,
+            "max": 20
+          },
+          "wire_input_bytes": {
+            "median": 5640,
+            "min": 5640,
+            "max": 5640
+          },
+          "wire_output_bytes": {
+            "median": 186182,
+            "min": 186182,
+            "max": 186184
+          },
+          "tool_text_bytes": {
+            "median": 62479,
+            "min": 62479,
+            "max": 62480
+          },
+          "catalog_bytes": {
+            "median": 62697,
+            "min": 62697,
+            "max": 62697
+          },
+          "tool_elapsed_ms": {
+            "median": 1113.274542,
+            "min": 999.358082,
+            "max": 1209.237833
+          },
+          "wall_elapsed_ms": {
+            "median": 1146.128083,
+            "min": 1028.337959,
+            "max": 1242.989
+          },
+          "maintenance_calls": {
+            "median": 9,
+            "min": 9,
+            "max": 9
+          },
+          "maintenance_bytes": {
+            "median": 45678,
+            "min": 45678,
+            "max": 45678
+          },
+          "maintenance_ms": {
+            "median": 317.360416,
+            "min": 280.12850000000003,
+            "max": 335.470084
+          },
+          "recovery_calls": {
+            "median": 2,
+            "min": 2,
+            "max": 2
+          },
+          "expected_rejections": {
+            "median": 1,
+            "min": 1,
+            "max": 1
+          },
+          "unexpected_errors": {
+            "median": 0,
+            "min": 0,
+            "max": 0
+          },
+          "explicit_replays": {
+            "median": 0,
+            "min": 0,
+            "max": 0
+          }
+        },
+        "summary": {
+          "tool_calls": {
+            "median": 18,
+            "min": 18,
+            "max": 18
+          },
+          "rpc_calls": {
+            "median": 20,
+            "min": 20,
+            "max": 20
+          },
+          "wire_input_bytes": {
+            "median": 5770,
+            "min": 5770,
+            "max": 5770
+          },
+          "wire_output_bytes": {
+            "median": 176440,
+            "min": 176440,
+            "max": 176440
+          },
+          "tool_text_bytes": {
+            "median": 57896,
+            "min": 57896,
+            "max": 57896
+          },
+          "catalog_bytes": {
+            "median": 62697,
+            "min": 62697,
+            "max": 62697
+          },
+          "tool_elapsed_ms": {
+            "median": 1243.2652090000001,
+            "min": 996.1022469999999,
+            "max": 1586.431416
+          },
+          "wall_elapsed_ms": {
+            "median": 1276.807625,
+            "min": 1023.686166,
+            "max": 1628.228292
+          },
+          "maintenance_calls": {
+            "median": 9,
+            "min": 9,
+            "max": 9
+          },
+          "maintenance_bytes": {
+            "median": 41562,
+            "min": 41562,
+            "max": 41562
+          },
+          "maintenance_ms": {
+            "median": 352.77166700000004,
+            "min": 277.008,
+            "max": 396.912375
+          },
+          "recovery_calls": {
+            "median": 2,
+            "min": 2,
+            "max": 2
+          },
+          "expected_rejections": {
+            "median": 1,
+            "min": 1,
+            "max": 1
+          },
+          "unexpected_errors": {
+            "median": 0,
+            "min": 0,
+            "max": 0
+          },
+          "explicit_replays": {
+            "median": 0,
+            "min": 0,
+            "max": 0
+          }
+        }
+      }
+    }
+  ],
+  "missing_metrics": {
+    "model_input_tokens": null,
+    "model_output_tokens": null,
+    "model_reasoning_tokens": null,
+    "model_cost": null
+  },
+  "scope": "Native stdio and CLI synthetic workflow; no model billing, enterprise native-client E4, productivity or release claim. Public output is aggregate; raw operation and source receipts remain in ignored private output.",
+  "tool_latency_ms": {
+    "primitive": {
+      "awr_change_apply": {
+        "samples": 3,
+        "median": 133.791,
+        "min": 118.669,
+        "max": 544.266459
+      },
+      "awr_change_preview": {
+        "samples": 6,
+        "median": 23.294313000000002,
+        "min": 16.444542,
+        "max": 26.055125
+      },
+      "awr_completion_prepare": {
+        "samples": 18,
+        "median": 11.0495625,
+        "min": 8.879375,
+        "max": 26.984
+      },
+      "awr_context_compile": {
+        "samples": 45,
+        "median": 47.262291,
+        "min": 25.357833,
+        "max": 1287.000375
+      },
+      "awr_evidence_record": {
+        "samples": 18,
+        "median": 12.870396,
+        "min": 10.501709,
+        "max": 34.420666
+      },
+      "awr_operation_get": {
+        "samples": 3,
+        "median": 50.688334,
+        "min": 45.06675,
+        "max": 81.916542
+      },
+      "awr_project_status": {
+        "samples": 15,
+        "median": 62.01175,
+        "min": 52.02075,
+        "max": 94.07575
+      },
+      "awr_session_checkpoint": {
+        "samples": 18,
+        "median": 15.1795,
+        "min": 11.99675,
+        "max": 42.165125
+      },
+      "awr_session_claim": {
+        "samples": 6,
+        "median": 11.610979,
+        "min": 7.775167,
+        "max": 23.109041
+      },
+      "awr_session_end": {
+        "samples": 18,
+        "median": 9.634771,
+        "min": 7.893833,
+        "max": 14.95
+      },
+      "awr_session_get": {
+        "samples": 6,
+        "median": 29.0469795,
+        "min": 7.478792,
+        "max": 135.73175
+      },
+      "awr_session_reply": {
+        "samples": 3,
+        "median": 11.044291,
+        "min": 7.951083,
+        "max": 28.240208
+      },
+      "awr_session_start": {
+        "samples": 18,
+        "median": 19.3781245,
+        "min": 14.717708,
+        "max": 29.471792
+      },
+      "awr_session_wait": {
+        "samples": 3,
+        "median": 18.920417,
+        "min": 12.767667,
+        "max": 42.442542
+      },
+      "awr_work_assess": {
+        "samples": 45,
+        "median": 11.78475,
+        "min": 9.191542,
+        "max": 36.71325
+      },
+      "awr_work_get": {
+        "samples": 63,
+        "median": 11.390042,
+        "min": 9.341833,
+        "max": 39.863959
+      },
+      "awr_work_graph": {
+        "samples": 27,
+        "median": 13.404083,
+        "min": 9.0535,
+        "max": 23.813792
+      },
+      "awr_work_manage": {
+        "samples": 21,
+        "median": 17.997375,
+        "min": 15.483,
+        "max": 37.300542
+      },
+      "awr_work_transition": {
+        "samples": 57,
+        "median": 70.44025,
+        "min": 6.306375,
+        "max": 304.016042
+      },
+      "cli init --manifest": {
+        "samples": 15,
+        "median": 107.479958,
+        "min": 84.781041,
+        "max": 889.727166
+      },
+      "cli work show": {
+        "samples": 18,
+        "median": 59.560021000000006,
+        "min": 50.979958,
+        "max": 90.924334
+      }
+    },
+    "prepared": {
+      "awr_change_apply": {
+        "samples": 3,
+        "median": 136.524417,
+        "min": 122.620625,
+        "max": 374.558958
+      },
+      "awr_change_preview": {
+        "samples": 6,
+        "median": 19.4253335,
+        "min": 16.339,
+        "max": 23.131666
+      },
+      "awr_completion_prepare": {
+        "samples": 18,
+        "median": 11.309062,
+        "min": 9.112417,
+        "max": 23.34875
+      },
+      "awr_evidence_record": {
+        "samples": 18,
+        "median": 13.8629585,
+        "min": 10.801459,
+        "max": 28.590917
+      },
+      "awr_operation_get": {
+        "samples": 3,
+        "median": 44.105916,
+        "min": 43.997333,
+        "max": 52.405041
+      },
+      "awr_project_status": {
+        "samples": 15,
+        "median": 61.902042,
+        "min": 52.148125,
+        "max": 154.28375
+      },
+      "awr_session_checkpoint": {
+        "samples": 18,
+        "median": 15.1738125,
+        "min": 12.180292,
+        "max": 32.440333
+      },
+      "awr_session_claim": {
+        "samples": 6,
+        "median": 9.991708,
+        "min": 7.631,
+        "max": 12.796333
+      },
+      "awr_session_end": {
+        "samples": 18,
+        "median": 9.294896,
+        "min": 7.792167,
+        "max": 16.2005
+      },
+      "awr_session_get": {
+        "samples": 6,
+        "median": 25.8446455,
+        "min": 6.299708,
+        "max": 127.342166
+      },
+      "awr_session_reply": {
+        "samples": 3,
+        "median": 9.430083,
+        "min": 8.024417,
+        "max": 26.249875
+      },
+      "awr_session_start": {
+        "samples": 18,
+        "median": 20.9752085,
+        "min": 15.539875,
+        "max": 50.184917
+      },
+      "awr_session_wait": {
+        "samples": 3,
+        "median": 14.5455,
+        "min": 13.046417,
+        "max": 40.40625
+      },
+      "awr_work_get": {
+        "samples": 18,
+        "median": 11.1134375,
+        "min": 9.107167,
+        "max": 27.442292
+      },
+      "awr_work_graph": {
+        "samples": 27,
+        "median": 11.360625,
+        "min": 9.065167,
+        "max": 24.518958
+      },
+      "awr_work_manage": {
+        "samples": 21,
+        "median": 18.0555,
+        "min": 15.38975,
+        "max": 31.142208
+      },
+      "awr_work_prepare": {
+        "samples": 45,
+        "median": 54.388458,
+        "min": 27.551542,
+        "max": 840.65775
+      },
+      "awr_work_transition": {
+        "samples": 57,
+        "median": 75.275917,
+        "min": 6.567167,
+        "max": 213.175458
+      },
+      "cli init --manifest": {
+        "samples": 15,
+        "median": 106.422042,
+        "min": 87.178375,
+        "max": 223.437375
+      },
+      "cli work show": {
+        "samples": 18,
+        "median": 61.361729,
+        "min": 51.011833,
+        "max": 94.242042
+      }
+    },
+    "summary": {
+      "awr_change_apply": {
+        "samples": 3,
+        "median": 170.95575,
+        "min": 123.882792,
+        "max": 329.70375
+      },
+      "awr_change_preview": {
+        "samples": 6,
+        "median": 22.8405835,
+        "min": 17.924541,
+        "max": 39.897916
+      },
+      "awr_completion_prepare": {
+        "samples": 18,
+        "median": 11.41675,
+        "min": 8.918667,
+        "max": 16.906292
+      },
+      "awr_evidence_record": {
+        "samples": 18,
+        "median": 13.6072495,
+        "min": 10.558291,
+        "max": 20.103958
+      },
+      "awr_operation_get": {
+        "samples": 3,
+        "median": 56.060375,
+        "min": 43.718666,
+        "max": 64.1935
+      },
+      "awr_project_status": {
+        "samples": 15,
+        "median": 56.400583,
+        "min": 51.558125,
+        "max": 109.330167
+      },
+      "awr_session_checkpoint": {
+        "samples": 18,
+        "median": 15.846396,
+        "min": 12.133083,
+        "max": 26.490791
+      },
+      "awr_session_claim": {
+        "samples": 6,
+        "median": 14.7230205,
+        "min": 8.956375,
+        "max": 20.216458
+      },
+      "awr_session_end": {
+        "samples": 18,
+        "median": 9.6845625,
+        "min": 7.818125,
+        "max": 15.153167
+      },
+      "awr_session_get": {
+        "samples": 6,
+        "median": 28.2575835,
+        "min": 7.238083,
+        "max": 62.8045
+      },
+      "awr_session_reply": {
+        "samples": 3,
+        "median": 11.127875,
+        "min": 7.9465,
+        "max": 12.91625
+      },
+      "awr_session_start": {
+        "samples": 18,
+        "median": 18.897478999999997,
+        "min": 13.049833,
+        "max": 35.520334
+      },
+      "awr_session_wait": {
+        "samples": 3,
+        "median": 17.44775,
+        "min": 13.220292,
+        "max": 17.573625
+      },
+      "awr_work_get": {
+        "samples": 18,
+        "median": 11.192978499999999,
+        "min": 9.212166,
+        "max": 23.723958
+      },
+      "awr_work_graph": {
+        "samples": 27,
+        "median": 12.624959,
+        "min": 9.643833,
+        "max": 28.833917
+      },
+      "awr_work_manage": {
+        "samples": 21,
+        "median": 18.385916,
+        "min": 15.597875,
+        "max": 28.2155
+      },
+      "awr_work_prepare": {
+        "samples": 45,
+        "median": 48.182042,
+        "min": 27.196125,
+        "max": 829.406333
+      },
+      "awr_work_transition": {
+        "samples": 57,
+        "median": 69.954,
+        "min": 6.478541,
+        "max": 397.817334
+      },
+      "cli init --manifest": {
+        "samples": 15,
+        "median": 100.119042,
+        "min": 84.421458,
+        "max": 199.670667
+      },
+      "cli work show": {
+        "samples": 18,
+        "median": 58.936958000000004,
+        "min": 51.064917,
+        "max": 87.323708
+      }
+    }
+  },
+  "cost_segments": [
+    {
+      "scenario": "lightweight",
+      "strategy": "primitive",
+      "repetition": 0,
+      "segments": {
+        "project_onboarding": {
+          "tool_calls": 1,
+          "tool_text_bytes": 4901,
+          "elapsed_ms": 889.727166
+        },
+        "connection_setup_and_teardown": {
+          "tool_calls": 0,
+          "tool_text_bytes": 0,
+          "elapsed_ms": 629.6121659999999
+        },
+        "independent_verification": {
+          "tool_calls": 4,
+          "tool_text_bytes": 8424,
+          "elapsed_ms": 91.360833
+        },
+        "normal_workflow": {
+          "tool_calls": 15,
+          "tool_text_bytes": 47450,
+          "elapsed_ms": 915.976624
+        }
+      }
+    },
+    {
+      "scenario": "lightweight",
+      "strategy": "prepared",
+      "repetition": 0,
+      "segments": {
+        "project_onboarding": {
+          "tool_calls": 1,
+          "tool_text_bytes": 4901,
+          "elapsed_ms": 131.951333
+        },
+        "connection_setup_and_teardown": {
+          "tool_calls": 0,
+          "tool_text_bytes": 0,
+          "elapsed_ms": 9.209751
+        },
+        "independent_verification": {
+          "tool_calls": 4,
+          "tool_text_bytes": 8424,
+          "elapsed_ms": 116.894375
+        },
+        "normal_workflow": {
+          "tool_calls": 11,
+          "tool_text_bytes": 45216,
+          "elapsed_ms": 1125.729333
+        }
+      }
+    },
+    {
+      "scenario": "lightweight",
+      "strategy": "summary",
+      "repetition": 0,
+      "segments": {
+        "project_onboarding": {
+          "tool_calls": 1,
+          "tool_text_bytes": 4901,
+          "elapsed_ms": 148.431125
+        },
+        "connection_setup_and_teardown": {
+          "tool_calls": 0,
+          "tool_text_bytes": 0,
+          "elapsed_ms": 9.498834
+        },
+        "independent_verification": {
+          "tool_calls": 4,
+          "tool_text_bytes": 8424,
+          "elapsed_ms": 104.480124
+        },
+        "normal_workflow": {
+          "tool_calls": 11,
+          "tool_text_bytes": 40640,
+          "elapsed_ms": 1149.6089180000001
+        }
+      }
+    },
+    {
+      "scenario": "upgrade",
+      "strategy": "primitive",
+      "repetition": 0,
+      "segments": {
+        "project_onboarding": {
+          "tool_calls": 1,
+          "tool_text_bytes": 4877,
+          "elapsed_ms": 117.68575
+        },
+        "connection_setup_and_teardown": {
+          "tool_calls": 0,
+          "tool_text_bytes": 0,
+          "elapsed_ms": 11.622582
+        },
+        "independent_verification": {
+          "tool_calls": 4,
+          "tool_text_bytes": 8451,
+          "elapsed_ms": 106.25533300000001
+        },
+        "normal_workflow": {
+          "tool_calls": 26,
+          "tool_text_bytes": 80915,
+          "elapsed_ms": 2305.801295
+        }
+      }
+    },
+    {
+      "scenario": "upgrade",
+      "strategy": "prepared",
+      "repetition": 0,
+      "segments": {
+        "project_onboarding": {
+          "tool_calls": 1,
+          "tool_text_bytes": 4877,
+          "elapsed_ms": 115.141042
+        },
+        "connection_setup_and_teardown": {
+          "tool_calls": 0,
+          "tool_text_bytes": 0,
+          "elapsed_ms": 11.584
+        },
+        "independent_verification": {
+          "tool_calls": 4,
+          "tool_text_bytes": 8451,
+          "elapsed_ms": 82.173167
+        },
+        "normal_workflow": {
+          "tool_calls": 20,
+          "tool_text_bytes": 77305,
+          "elapsed_ms": 1462.226252
+        }
+      }
+    },
+    {
+      "scenario": "upgrade",
+      "strategy": "summary",
+      "repetition": 0,
+      "segments": {
+        "project_onboarding": {
+          "tool_calls": 1,
+          "tool_text_bytes": 4877,
+          "elapsed_ms": 119.700333
+        },
+        "connection_setup_and_teardown": {
+          "tool_calls": 0,
+          "tool_text_bytes": 0,
+          "elapsed_ms": 8.484292
+        },
+        "independent_verification": {
+          "tool_calls": 4,
+          "tool_text_bytes": 8451,
+          "elapsed_ms": 85.143917
+        },
+        "normal_workflow": {
+          "tool_calls": 20,
+          "tool_text_bytes": 71172,
+          "elapsed_ms": 1738.202626
+        }
+      }
+    },
+    {
+      "scenario": "wait",
+      "strategy": "primitive",
+      "repetition": 0,
+      "segments": {
+        "project_onboarding": {
+          "tool_calls": 1,
+          "tool_text_bytes": 4859,
+          "elapsed_ms": 88.926417
+        },
+        "connection_setup_and_teardown": {
+          "tool_calls": 0,
+          "tool_text_bytes": 0,
+          "elapsed_ms": 22.776043
+        },
+        "independent_verification": {
+          "tool_calls": 5,
+          "tool_text_bytes": 8549,
+          "elapsed_ms": 145.28525
+        },
+        "normal_workflow": {
+          "tool_calls": 24,
+          "tool_text_bytes": 82062,
+          "elapsed_ms": 1776.3215400000001
+        }
+      }
+    },
+    {
+      "scenario": "wait",
+      "strategy": "prepared",
+      "repetition": 0,
+      "segments": {
+        "project_onboarding": {
+          "tool_calls": 1,
+          "tool_text_bytes": 4859,
+          "elapsed_ms": 223.437375
+        },
+        "connection_setup_and_teardown": {
+          "tool_calls": 0,
+          "tool_text_bytes": 0,
+          "elapsed_ms": 51.560417
+        },
+        "independent_verification": {
+          "tool_calls": 5,
+          "tool_text_bytes": 8549,
+          "elapsed_ms": 148.860669
+        },
+        "normal_workflow": {
+          "tool_calls": 16,
+          "tool_text_bytes": 77586,
+          "elapsed_ms": 2425.296792
+        }
+      }
+    },
+    {
+      "scenario": "wait",
+      "strategy": "summary",
+      "repetition": 0,
+      "segments": {
+        "project_onboarding": {
+          "tool_calls": 1,
+          "tool_text_bytes": 4859,
+          "elapsed_ms": 96.38125
+        },
+        "connection_setup_and_teardown": {
+          "tool_calls": 0,
+          "tool_text_bytes": 0,
+          "elapsed_ms": 19.592583
+        },
+        "independent_verification": {
+          "tool_calls": 5,
+          "tool_text_bytes": 8549,
+          "elapsed_ms": 102.250874
+        },
+        "normal_workflow": {
+          "tool_calls": 16,
+          "tool_text_bytes": 69229,
+          "elapsed_ms": 1639.9854990000001
+        }
+      }
+    },
+    {
+      "scenario": "dependencies",
+      "strategy": "primitive",
+      "repetition": 0,
+      "segments": {
+        "project_onboarding": {
+          "tool_calls": 1,
+          "tool_text_bytes": 6588,
+          "elapsed_ms": 100.559541
+        },
+        "connection_setup_and_teardown": {
+          "tool_calls": 0,
+          "tool_text_bytes": 0,
+          "elapsed_ms": 9.189917
+        },
+        "independent_verification": {
+          "tool_calls": 7,
+          "tool_text_bytes": 16551,
+          "elapsed_ms": 190.855124
+        },
+        "normal_workflow": {
+          "tool_calls": 31,
+          "tool_text_bytes": 101363,
+          "elapsed_ms": 1445.383791
+        }
+      }
+    },
+    {
+      "scenario": "dependencies",
+      "strategy": "prepared",
+      "repetition": 0,
+      "segments": {
+        "project_onboarding": {
+          "tool_calls": 1,
+          "tool_text_bytes": 6588,
+          "elapsed_ms": 109.022834
+        },
+        "connection_setup_and_teardown": {
+          "tool_calls": 0,
+          "tool_text_bytes": 0,
+          "elapsed_ms": 12.788959
+        },
+        "independent_verification": {
+          "tool_calls": 7,
+          "tool_text_bytes": 16551,
+          "elapsed_ms": 261.933876
+        },
+        "normal_workflow": {
+          "tool_calls": 23,
+          "tool_text_bytes": 96702,
+          "elapsed_ms": 1638.48325
+        }
+      }
+    },
+    {
+      "scenario": "dependencies",
+      "strategy": "summary",
+      "repetition": 0,
+      "segments": {
+        "project_onboarding": {
+          "tool_calls": 1,
+          "tool_text_bytes": 6588,
+          "elapsed_ms": 171.459042
+        },
+        "connection_setup_and_teardown": {
+          "tool_calls": 0,
+          "tool_text_bytes": 0,
+          "elapsed_ms": 14.916625
+        },
+        "independent_verification": {
+          "tool_calls": 7,
+          "tool_text_bytes": 16551,
+          "elapsed_ms": 190.442416
+        },
+        "normal_workflow": {
+          "tool_calls": 23,
+          "tool_text_bytes": 87121,
+          "elapsed_ms": 1621.657291
+        }
+      }
+    },
+    {
+      "scenario": "unknown_result",
+      "strategy": "primitive",
+      "repetition": 0,
+      "segments": {
+        "project_onboarding": {
+          "tool_calls": 1,
+          "tool_text_bytes": 4919,
+          "elapsed_ms": 115.606958
+        },
+        "connection_setup_and_teardown": {
+          "tool_calls": 0,
+          "tool_text_bytes": 0,
+          "elapsed_ms": 20.013831
+        },
+        "independent_verification": {
+          "tool_calls": 4,
+          "tool_text_bytes": 8436,
+          "elapsed_ms": 92.731207
+        },
+        "normal_workflow": {
+          "tool_calls": 17,
+          "tool_text_bytes": 51358,
+          "elapsed_ms": 1054.2187490000001
+        }
+      }
+    },
+    {
+      "scenario": "unknown_result",
+      "strategy": "prepared",
+      "repetition": 0,
+      "segments": {
+        "project_onboarding": {
+          "tool_calls": 1,
+          "tool_text_bytes": 4919,
+          "elapsed_ms": 100.14475
+        },
+        "connection_setup_and_teardown": {
+          "tool_calls": 0,
+          "tool_text_bytes": 0,
+          "elapsed_ms": 19.422375
+        },
+        "independent_verification": {
+          "tool_calls": 4,
+          "tool_text_bytes": 8436,
+          "elapsed_ms": 94.20441699999999
+        },
+        "normal_workflow": {
+          "tool_calls": 13,
+          "tool_text_bytes": 49125,
+          "elapsed_ms": 1015.081
+        }
+      }
+    },
+    {
+      "scenario": "unknown_result",
+      "strategy": "summary",
+      "repetition": 0,
+      "segments": {
+        "project_onboarding": {
+          "tool_calls": 1,
+          "tool_text_bytes": 4919,
+          "elapsed_ms": 100.119042
+        },
+        "connection_setup_and_teardown": {
+          "tool_calls": 0,
+          "tool_text_bytes": 0,
+          "elapsed_ms": 19.178042
+        },
+        "independent_verification": {
+          "tool_calls": 4,
+          "tool_text_bytes": 8436,
+          "elapsed_ms": 100.157292
+        },
+        "normal_workflow": {
+          "tool_calls": 13,
+          "tool_text_bytes": 44541,
+          "elapsed_ms": 1043.1870840000001
+        }
+      }
+    },
+    {
+      "scenario": "lightweight",
+      "strategy": "summary",
+      "repetition": 1,
+      "segments": {
+        "project_onboarding": {
+          "tool_calls": 1,
+          "tool_text_bytes": 4901,
+          "elapsed_ms": 110.553083
+        },
+        "connection_setup_and_teardown": {
+          "tool_calls": 0,
+          "tool_text_bytes": 0,
+          "elapsed_ms": 10.063792
+        },
+        "independent_verification": {
+          "tool_calls": 4,
+          "tool_text_bytes": 8424,
+          "elapsed_ms": 103.441332
+        },
+        "normal_workflow": {
+          "tool_calls": 11,
+          "tool_text_bytes": 40639,
+          "elapsed_ms": 978.145999
+        }
+      }
+    },
+    {
+      "scenario": "lightweight",
+      "strategy": "prepared",
+      "repetition": 1,
+      "segments": {
+        "project_onboarding": {
+          "tool_calls": 1,
+          "tool_text_bytes": 4901,
+          "elapsed_ms": 106.324875
+        },
+        "connection_setup_and_teardown": {
+          "tool_calls": 0,
+          "tool_text_bytes": 0,
+          "elapsed_ms": 10.026833
+        },
+        "independent_verification": {
+          "tool_calls": 4,
+          "tool_text_bytes": 8424,
+          "elapsed_ms": 93.84675
+        },
+        "normal_workflow": {
+          "tool_calls": 11,
+          "tool_text_bytes": 45216,
+          "elapsed_ms": 958.3311259999999
+        }
+      }
+    },
+    {
+      "scenario": "lightweight",
+      "strategy": "primitive",
+      "repetition": 1,
+      "segments": {
+        "project_onboarding": {
+          "tool_calls": 1,
+          "tool_text_bytes": 4901,
+          "elapsed_ms": 99.536792
+        },
+        "connection_setup_and_teardown": {
+          "tool_calls": 0,
+          "tool_text_bytes": 0,
+          "elapsed_ms": 9.519376
+        },
+        "independent_verification": {
+          "tool_calls": 4,
+          "tool_text_bytes": 8424,
+          "elapsed_ms": 105.93025
+        },
+        "normal_workflow": {
+          "tool_calls": 15,
+          "tool_text_bytes": 47450,
+          "elapsed_ms": 1037.4385
+        }
+      }
+    },
+    {
+      "scenario": "upgrade",
+      "strategy": "summary",
+      "repetition": 1,
+      "segments": {
+        "project_onboarding": {
+          "tool_calls": 1,
+          "tool_text_bytes": 4877,
+          "elapsed_ms": 127.688417
+        },
+        "connection_setup_and_teardown": {
+          "tool_calls": 0,
+          "tool_text_bytes": 0,
+          "elapsed_ms": 15.564708
+        },
+        "independent_verification": {
+          "tool_calls": 4,
+          "tool_text_bytes": 8451,
+          "elapsed_ms": 134.241042
+        },
+        "normal_workflow": {
+          "tool_calls": 20,
+          "tool_text_bytes": 71172,
+          "elapsed_ms": 1735.830085
+        }
+      }
+    },
+    {
+      "scenario": "upgrade",
+      "strategy": "prepared",
+      "repetition": 1,
+      "segments": {
+        "project_onboarding": {
+          "tool_calls": 1,
+          "tool_text_bytes": 4877,
+          "elapsed_ms": 122.960041
+        },
+        "connection_setup_and_teardown": {
+          "tool_calls": 0,
+          "tool_text_bytes": 0,
+          "elapsed_ms": 11.403082999999999
+        },
+        "independent_verification": {
+          "tool_calls": 4,
+          "tool_text_bytes": 8451,
+          "elapsed_ms": 96.517917
+        },
+        "normal_workflow": {
+          "tool_calls": 20,
+          "tool_text_bytes": 77303,
+          "elapsed_ms": 1264.724874
+        }
+      }
+    },
+    {
+      "scenario": "upgrade",
+      "strategy": "primitive",
+      "repetition": 1,
+      "segments": {
+        "project_onboarding": {
+          "tool_calls": 1,
+          "tool_text_bytes": 4877,
+          "elapsed_ms": 107.479958
+        },
+        "connection_setup_and_teardown": {
+          "tool_calls": 0,
+          "tool_text_bytes": 0,
+          "elapsed_ms": 12.835292
+        },
+        "independent_verification": {
+          "tool_calls": 4,
+          "tool_text_bytes": 8451,
+          "elapsed_ms": 113.945917
+        },
+        "normal_workflow": {
+          "tool_calls": 26,
+          "tool_text_bytes": 80917,
+          "elapsed_ms": 1666.663209
+        }
+      }
+    },
+    {
+      "scenario": "wait",
+      "strategy": "summary",
+      "repetition": 1,
+      "segments": {
+        "project_onboarding": {
+          "tool_calls": 1,
+          "tool_text_bytes": 4859,
+          "elapsed_ms": 137.250667
+        },
+        "connection_setup_and_teardown": {
+          "tool_calls": 0,
+          "tool_text_bytes": 0,
+          "elapsed_ms": 23.392459
+        },
+        "independent_verification": {
+          "tool_calls": 5,
+          "tool_text_bytes": 8549,
+          "elapsed_ms": 116.143
+        },
+        "normal_workflow": {
+          "tool_calls": 16,
+          "tool_text_bytes": 69229,
+          "elapsed_ms": 2090.079706
+        }
+      }
+    },
+    {
+      "scenario": "wait",
+      "strategy": "prepared",
+      "repetition": 1,
+      "segments": {
+        "project_onboarding": {
+          "tool_calls": 1,
+          "tool_text_bytes": 4859,
+          "elapsed_ms": 102.203625
+        },
+        "connection_setup_and_teardown": {
+          "tool_calls": 0,
+          "tool_text_bytes": 0,
+          "elapsed_ms": 17.91229
+        },
+        "independent_verification": {
+          "tool_calls": 5,
+          "tool_text_bytes": 8549,
+          "elapsed_ms": 84.871208
+        },
+        "normal_workflow": {
+          "tool_calls": 16,
+          "tool_text_bytes": 77586,
+          "elapsed_ms": 1358.348251
+        }
+      }
+    },
+    {
+      "scenario": "wait",
+      "strategy": "primitive",
+      "repetition": 1,
+      "segments": {
+        "project_onboarding": {
+          "tool_calls": 1,
+          "tool_text_bytes": 4859,
+          "elapsed_ms": 85.676583
+        },
+        "connection_setup_and_teardown": {
+          "tool_calls": 0,
+          "tool_text_bytes": 0,
+          "elapsed_ms": 16.996002
+        },
+        "independent_verification": {
+          "tool_calls": 5,
+          "tool_text_bytes": 8549,
+          "elapsed_ms": 84.312915
+        },
+        "normal_workflow": {
+          "tool_calls": 24,
+          "tool_text_bytes": 82062,
+          "elapsed_ms": 1411.783334
+        }
+      }
+    },
+    {
+      "scenario": "dependencies",
+      "strategy": "summary",
+      "repetition": 1,
+      "segments": {
+        "project_onboarding": {
+          "tool_calls": 1,
+          "tool_text_bytes": 6588,
+          "elapsed_ms": 90.103458
+        },
+        "connection_setup_and_teardown": {
+          "tool_calls": 0,
+          "tool_text_bytes": 0,
+          "elapsed_ms": 8.389332
+        },
+        "independent_verification": {
+          "tool_calls": 7,
+          "tool_text_bytes": 16551,
+          "elapsed_ms": 155.424916
+        },
+        "normal_workflow": {
+          "tool_calls": 23,
+          "tool_text_bytes": 87120,
+          "elapsed_ms": 1148.400002
+        }
+      }
+    },
+    {
+      "scenario": "dependencies",
+      "strategy": "prepared",
+      "repetition": 1,
+      "segments": {
+        "project_onboarding": {
+          "tool_calls": 1,
+          "tool_text_bytes": 6588,
+          "elapsed_ms": 93.408
+        },
+        "connection_setup_and_teardown": {
+          "tool_calls": 0,
+          "tool_text_bytes": 0,
+          "elapsed_ms": 12.178832
+        },
+        "independent_verification": {
+          "tool_calls": 7,
+          "tool_text_bytes": 16551,
+          "elapsed_ms": 176.84045799999998
+        },
+        "normal_workflow": {
+          "tool_calls": 23,
+          "tool_text_bytes": 96702,
+          "elapsed_ms": 1213.299957
+        }
+      }
+    },
+    {
+      "scenario": "dependencies",
+      "strategy": "primitive",
+      "repetition": 1,
+      "segments": {
+        "project_onboarding": {
+          "tool_calls": 1,
+          "tool_text_bytes": 6588,
+          "elapsed_ms": 131.295917
+        },
+        "connection_setup_and_teardown": {
+          "tool_calls": 0,
+          "tool_text_bytes": 0,
+          "elapsed_ms": 11.867916000000001
+        },
+        "independent_verification": {
+          "tool_calls": 7,
+          "tool_text_bytes": 16551,
+          "elapsed_ms": 151.732584
+        },
+        "normal_workflow": {
+          "tool_calls": 31,
+          "tool_text_bytes": 101362,
+          "elapsed_ms": 1554.807417
+        }
+      }
+    },
+    {
+      "scenario": "unknown_result",
+      "strategy": "summary",
+      "repetition": 1,
+      "segments": {
+        "project_onboarding": {
+          "tool_calls": 1,
+          "tool_text_bytes": 4919,
+          "elapsed_ms": 92.49075
+        },
+        "connection_setup_and_teardown": {
+          "tool_calls": 0,
+          "tool_text_bytes": 0,
+          "elapsed_ms": 22.668416
+        },
+        "independent_verification": {
+          "tool_calls": 4,
+          "tool_text_bytes": 8436,
+          "elapsed_ms": 126.419458
+        },
+        "normal_workflow": {
+          "tool_calls": 13,
+          "tool_text_bytes": 44541,
+          "elapsed_ms": 1367.762583
+        }
+      }
+    },
+    {
+      "scenario": "unknown_result",
+      "strategy": "prepared",
+      "repetition": 1,
+      "segments": {
+        "project_onboarding": {
+          "tool_calls": 1,
+          "tool_text_bytes": 4919,
+          "elapsed_ms": 137.830417
+        },
+        "connection_setup_and_teardown": {
+          "tool_calls": 0,
+          "tool_text_bytes": 0,
+          "elapsed_ms": 20.716251
+        },
+        "independent_verification": {
+          "tool_calls": 4,
+          "tool_text_bytes": 8436,
+          "elapsed_ms": 78.379084
+        },
+        "normal_workflow": {
+          "tool_calls": 13,
+          "tool_text_bytes": 49124,
+          "elapsed_ms": 897.230625
+        }
+      }
+    },
+    {
+      "scenario": "unknown_result",
+      "strategy": "primitive",
+      "repetition": 1,
+      "segments": {
+        "project_onboarding": {
+          "tool_calls": 1,
+          "tool_text_bytes": 4919,
+          "elapsed_ms": 85.796083
+        },
+        "connection_setup_and_teardown": {
+          "tool_calls": 0,
+          "tool_text_bytes": 0,
+          "elapsed_ms": 27.619792
+        },
+        "independent_verification": {
+          "tool_calls": 4,
+          "tool_text_bytes": 8436,
+          "elapsed_ms": 144.096625
+        },
+        "normal_workflow": {
+          "tool_calls": 17,
+          "tool_text_bytes": 51358,
+          "elapsed_ms": 1322.859001
+        }
+      }
+    },
+    {
+      "scenario": "lightweight",
+      "strategy": "primitive",
+      "repetition": 2,
+      "segments": {
+        "project_onboarding": {
+          "tool_calls": 1,
+          "tool_text_bytes": 4901,
+          "elapsed_ms": 166.981458
+        },
+        "connection_setup_and_teardown": {
+          "tool_calls": 0,
+          "tool_text_bytes": 0,
+          "elapsed_ms": 15.076125
+        },
+        "independent_verification": {
+          "tool_calls": 4,
+          "tool_text_bytes": 8424,
+          "elapsed_ms": 86.402249
+        },
+        "normal_workflow": {
+          "tool_calls": 15,
+          "tool_text_bytes": 47451,
+          "elapsed_ms": 975.389502
+        }
+      }
+    },
+    {
+      "scenario": "lightweight",
+      "strategy": "prepared",
+      "repetition": 2,
+      "segments": {
+        "project_onboarding": {
+          "tool_calls": 1,
+          "tool_text_bytes": 4901,
+          "elapsed_ms": 94.899
+        },
+        "connection_setup_and_teardown": {
+          "tool_calls": 0,
+          "tool_text_bytes": 0,
+          "elapsed_ms": 8.754376
+        },
+        "independent_verification": {
+          "tool_calls": 4,
+          "tool_text_bytes": 8424,
+          "elapsed_ms": 78.854917
+        },
+        "normal_workflow": {
+          "tool_calls": 11,
+          "tool_text_bytes": 45216,
+          "elapsed_ms": 804.419043
+        }
+      }
+    },
+    {
+      "scenario": "lightweight",
+      "strategy": "summary",
+      "repetition": 2,
+      "segments": {
+        "project_onboarding": {
+          "tool_calls": 1,
+          "tool_text_bytes": 4901,
+          "elapsed_ms": 85.072542
+        },
+        "connection_setup_and_teardown": {
+          "tool_calls": 0,
+          "tool_text_bytes": 0,
+          "elapsed_ms": 8.36175
+        },
+        "independent_verification": {
+          "tool_calls": 4,
+          "tool_text_bytes": 8424,
+          "elapsed_ms": 78.329084
+        },
+        "normal_workflow": {
+          "tool_calls": 11,
+          "tool_text_bytes": 40639,
+          "elapsed_ms": 778.102917
+        }
+      }
+    },
+    {
+      "scenario": "upgrade",
+      "strategy": "primitive",
+      "repetition": 2,
+      "segments": {
+        "project_onboarding": {
+          "tool_calls": 1,
+          "tool_text_bytes": 4877,
+          "elapsed_ms": 84.938708
+        },
+        "connection_setup_and_teardown": {
+          "tool_calls": 0,
+          "tool_text_bytes": 0,
+          "elapsed_ms": 8.331792
+        },
+        "independent_verification": {
+          "tool_calls": 4,
+          "tool_text_bytes": 8451,
+          "elapsed_ms": 89.57075
+        },
+        "normal_workflow": {
+          "tool_calls": 26,
+          "tool_text_bytes": 80917,
+          "elapsed_ms": 1093.503667
+        }
+      }
+    },
+    {
+      "scenario": "upgrade",
+      "strategy": "prepared",
+      "repetition": 2,
+      "segments": {
+        "project_onboarding": {
+          "tool_calls": 1,
+          "tool_text_bytes": 4877,
+          "elapsed_ms": 106.422042
+        },
+        "connection_setup_and_teardown": {
+          "tool_calls": 0,
+          "tool_text_bytes": 0,
+          "elapsed_ms": 11.430083
+        },
+        "independent_verification": {
+          "tool_calls": 4,
+          "tool_text_bytes": 8451,
+          "elapsed_ms": 78.978708
+        },
+        "normal_workflow": {
+          "tool_calls": 20,
+          "tool_text_bytes": 77305,
+          "elapsed_ms": 1432.982376
+        }
+      }
+    },
+    {
+      "scenario": "upgrade",
+      "strategy": "summary",
+      "repetition": 2,
+      "segments": {
+        "project_onboarding": {
+          "tool_calls": 1,
+          "tool_text_bytes": 4877,
+          "elapsed_ms": 86.34425
+        },
+        "connection_setup_and_teardown": {
+          "tool_calls": 0,
+          "tool_text_bytes": 0,
+          "elapsed_ms": 11.126543
+        },
+        "independent_verification": {
+          "tool_calls": 4,
+          "tool_text_bytes": 8451,
+          "elapsed_ms": 96.145915
+        },
+        "normal_workflow": {
+          "tool_calls": 20,
+          "tool_text_bytes": 71174,
+          "elapsed_ms": 1079.611957
+        }
+      }
+    },
+    {
+      "scenario": "wait",
+      "strategy": "primitive",
+      "repetition": 2,
+      "segments": {
+        "project_onboarding": {
+          "tool_calls": 1,
+          "tool_text_bytes": 4859,
+          "elapsed_ms": 116.411334
+        },
+        "connection_setup_and_teardown": {
+          "tool_calls": 0,
+          "tool_text_bytes": 0,
+          "elapsed_ms": 41.514417
+        },
+        "independent_verification": {
+          "tool_calls": 5,
+          "tool_text_bytes": 8549,
+          "elapsed_ms": 180.99841800000002
+        },
+        "normal_workflow": {
+          "tool_calls": 24,
+          "tool_text_bytes": 82062,
+          "elapsed_ms": 3452.767086
+        }
+      }
+    },
+    {
+      "scenario": "wait",
+      "strategy": "prepared",
+      "repetition": 2,
+      "segments": {
+        "project_onboarding": {
+          "tool_calls": 1,
+          "tool_text_bytes": 4859,
+          "elapsed_ms": 143.715791
+        },
+        "connection_setup_and_teardown": {
+          "tool_calls": 0,
+          "tool_text_bytes": 0,
+          "elapsed_ms": 27.993333
+        },
+        "independent_verification": {
+          "tool_calls": 5,
+          "tool_text_bytes": 8549,
+          "elapsed_ms": 89.479751
+        },
+        "normal_workflow": {
+          "tool_calls": 16,
+          "tool_text_bytes": 77586,
+          "elapsed_ms": 1889.671543
+        }
+      }
+    },
+    {
+      "scenario": "wait",
+      "strategy": "summary",
+      "repetition": 2,
+      "segments": {
+        "project_onboarding": {
+          "tool_calls": 1,
+          "tool_text_bytes": 4859,
+          "elapsed_ms": 85.122
+        },
+        "connection_setup_and_teardown": {
+          "tool_calls": 0,
+          "tool_text_bytes": 0,
+          "elapsed_ms": 23.732126
+        },
+        "independent_verification": {
+          "tool_calls": 5,
+          "tool_text_bytes": 8549,
+          "elapsed_ms": 126.49483400000001
+        },
+        "normal_workflow": {
+          "tool_calls": 16,
+          "tool_text_bytes": 69229,
+          "elapsed_ms": 1453.546708
+        }
+      }
+    },
+    {
+      "scenario": "dependencies",
+      "strategy": "primitive",
+      "repetition": 2,
+      "segments": {
+        "project_onboarding": {
+          "tool_calls": 1,
+          "tool_text_bytes": 6588,
+          "elapsed_ms": 135.864833
+        },
+        "connection_setup_and_teardown": {
+          "tool_calls": 0,
+          "tool_text_bytes": 0,
+          "elapsed_ms": 11.422125
+        },
+        "independent_verification": {
+          "tool_calls": 7,
+          "tool_text_bytes": 16551,
+          "elapsed_ms": 151.629417
+        },
+        "normal_workflow": {
+          "tool_calls": 31,
+          "tool_text_bytes": 101362,
+          "elapsed_ms": 1244.125958
+        }
+      }
+    },
+    {
+      "scenario": "dependencies",
+      "strategy": "prepared",
+      "repetition": 2,
+      "segments": {
+        "project_onboarding": {
+          "tool_calls": 1,
+          "tool_text_bytes": 6588,
+          "elapsed_ms": 91.880125
+        },
+        "connection_setup_and_teardown": {
+          "tool_calls": 0,
+          "tool_text_bytes": 0,
+          "elapsed_ms": 11.690292
+        },
+        "independent_verification": {
+          "tool_calls": 7,
+          "tool_text_bytes": 16551,
+          "elapsed_ms": 272.022042
+        },
+        "normal_workflow": {
+          "tool_calls": 23,
+          "tool_text_bytes": 96703,
+          "elapsed_ms": 1598.361294
+        }
+      }
+    },
+    {
+      "scenario": "dependencies",
+      "strategy": "summary",
+      "repetition": 2,
+      "segments": {
+        "project_onboarding": {
+          "tool_calls": 1,
+          "tool_text_bytes": 6588,
+          "elapsed_ms": 199.670667
+        },
+        "connection_setup_and_teardown": {
+          "tool_calls": 0,
+          "tool_text_bytes": 0,
+          "elapsed_ms": 15.066584
+        },
+        "independent_verification": {
+          "tool_calls": 7,
+          "tool_text_bytes": 16551,
+          "elapsed_ms": 151.892167
+        },
+        "normal_workflow": {
+          "tool_calls": 23,
+          "tool_text_bytes": 87120,
+          "elapsed_ms": 1281.227418
+        }
+      }
+    },
+    {
+      "scenario": "unknown_result",
+      "strategy": "primitive",
+      "repetition": 2,
+      "segments": {
+        "project_onboarding": {
+          "tool_calls": 1,
+          "tool_text_bytes": 4919,
+          "elapsed_ms": 84.781041
+        },
+        "connection_setup_and_teardown": {
+          "tool_calls": 0,
+          "tool_text_bytes": 0,
+          "elapsed_ms": 17.900123999999998
+        },
+        "independent_verification": {
+          "tool_calls": 4,
+          "tool_text_bytes": 8436,
+          "elapsed_ms": 79.968293
+        },
+        "normal_workflow": {
+          "tool_calls": 17,
+          "tool_text_bytes": 51358,
+          "elapsed_ms": 868.481376
+        }
+      }
+    },
+    {
+      "scenario": "unknown_result",
+      "strategy": "prepared",
+      "repetition": 2,
+      "segments": {
+        "project_onboarding": {
+          "tool_calls": 1,
+          "tool_text_bytes": 4919,
+          "elapsed_ms": 87.178375
+        },
+        "connection_setup_and_teardown": {
+          "tool_calls": 0,
+          "tool_text_bytes": 0,
+          "elapsed_ms": 17.429541
+        },
+        "independent_verification": {
+          "tool_calls": 4,
+          "tool_text_bytes": 8436,
+          "elapsed_ms": 78.389083
+        },
+        "normal_workflow": {
+          "tool_calls": 13,
+          "tool_text_bytes": 49124,
+          "elapsed_ms": 834.180332
+        }
+      }
+    },
+    {
+      "scenario": "unknown_result",
+      "strategy": "summary",
+      "repetition": 2,
+      "segments": {
+        "project_onboarding": {
+          "tool_calls": 1,
+          "tool_text_bytes": 4919,
+          "elapsed_ms": 84.421458
+        },
+        "connection_setup_and_teardown": {
+          "tool_calls": 0,
+          "tool_text_bytes": 0,
+          "elapsed_ms": 16.756457
+        },
+        "independent_verification": {
+          "tool_calls": 4,
+          "tool_text_bytes": 8436,
+          "elapsed_ms": 78.133249
+        },
+        "normal_workflow": {
+          "tool_calls": 13,
+          "tool_text_bytes": 44541,
+          "elapsed_ms": 833.705123
+        }
+      }
+    }
+  ]
+}

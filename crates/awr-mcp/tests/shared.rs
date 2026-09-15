@@ -21,6 +21,74 @@ const WRITER: &str = "synthetic-writer-credential-for-http-fixtures";
 const READER: &str = "synthetic-reader-credential-for-http-fixtures";
 const COLLEAGUE: &str = "synthetic-colleague-credential-for-http-fixtures";
 
+#[tokio::test]
+async fn concise_http_results_keep_client_isolation_and_unknown_outcomes() {
+    let a = ProjectFixture::new("Write a concise team guide");
+    let b = ProjectFixture::new("Separate project");
+    let config = registry(&a, &b);
+    let mut server = Server::start(&config).await;
+    let started = ok(server
+        .call(
+            WRITER,
+            "awr_session_start",
+            start_args("alpha", "W", "concise", a.revision(), true),
+        )
+        .await);
+    let query = json!({"project":"alpha","work":"W","session":started["session"]["id"]});
+    let full = ok(server.call(WRITER, "awr_work_prepare", query.clone()).await);
+    let mut query_summary = query;
+    query_summary["response_view"] = json!("summary");
+    let concise = ok(server.call(WRITER, "awr_work_prepare", query_summary).await);
+    assert_eq!(
+        full["context"]["work_context"]["rendered_context"],
+        concise["context"]["work_context"]["rendered_context"]
+    );
+    assert_eq!(full["management"], concise["management"]);
+    let args = json!({"project":"alpha","work":"W","session":started["session"]["id"],"action":"progress","reason":"Reviewed guide context","next_action":"Review the draft guide","request_id":"concise-write","expected_revision":a.revision(),"response_view":"summary"});
+    let conn = rusqlite::Connection::open(a.root.join(".awr/state.db")).unwrap();
+    conn.execute_batch("CREATE TRIGGER fixture_concise_response BEFORE INSERT ON events WHEN new.event_type='mcp.operation_finished' BEGIN SELECT RAISE(ABORT,'synthetic lost response'); END;").unwrap();
+    let unknown = server
+        .call(WRITER, "awr_work_transition", args.clone())
+        .await;
+    assert_eq!(unknown["structuredContent"]["write_outcome"], "unknown");
+    assert!(unknown["structuredContent"].get("response_view").is_none());
+    let revision = a.revision();
+    let mut original = args.clone();
+    original["response_view"] = json!("full");
+    let replay = server
+        .call(WRITER, "awr_work_transition", original.clone())
+        .await;
+    assert_eq!(replay["structuredContent"], unknown["structuredContent"]);
+    assert_eq!(a.revision(), revision);
+    error(
+        server
+            .call(
+                COLLEAGUE,
+                "awr_operation_get",
+                json!({"project":"alpha","request_id":"concise-write"}),
+            )
+            .await,
+        "NotFound",
+    );
+    conn.execute_batch("DROP TRIGGER fixture_concise_response;")
+        .unwrap();
+    drop(conn);
+    ok(server.call(WRITER,"awr_operation_recover",json!({"project":"alpha","request_id":"concise-write","expected_revision":a.revision()})).await);
+    let receipt = ok(server
+        .call(
+            WRITER,
+            "awr_operation_get",
+            json!({"project":"alpha","request_id":"concise-write"}),
+        )
+        .await);
+    assert_eq!(receipt["outcome"], "recorded");
+    assert!(!receipt["domain_receipts"].as_array().unwrap().is_empty());
+    let source = fs::read(a.root.join("work.yaml")).unwrap();
+    ok(server.call(WRITER, "awr_work_transition", original).await);
+    assert_eq!(source, fs::read(a.root.join("work.yaml")).unwrap());
+    server.stop().await;
+}
+
 struct ProjectFixture {
     root: PathBuf,
     id: Id,
