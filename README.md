@@ -59,17 +59,17 @@ source comparison does not establish model-token or billing savings, or announce
 
 ## Get started
 
-Install **0.3.3** through either registry; both supply `awr` and `awr-mcp`:
+Install **0.4.0** through either registry; both supply `awr` and `awr-mcp`:
 
 ```sh
-npm install -g @originoneai/agent-work-runtime@0.3.3
+npm install -g @originoneai/agent-work-runtime@0.4.0
 # or, in a Python virtual environment
-python -m pip install agent-work-runtime==0.3.3
+python -m pip install agent-work-runtime==0.4.0
 ```
 
 Prebuilt targets: macOS 15+ arm64 and Intel x64, Linux x64/glibc 2.39+, Windows x64.
 Launchers require Node 22.14+ or Python 3.9+. See [distribution details](docs/release/DISTRIBUTIONS.md).
-See the [0.3.3 release notes](docs/release/0.3.3.md) for host capabilities and schema upgrade guidance.
+See the [0.4.0 release notes](docs/release/0.4.0.md) for host capabilities and schema upgrade guidance.
 
 For an optional source build, use [Rust](https://www.rust-lang.org/tools/install)
 (the repository pins its toolchain):
@@ -111,7 +111,7 @@ business intent. Nonstandard fields and statuses have explicit mappings such as
 `--status-map pending=planned` and `--field-map title=事项`.
 
 For local MCP, configure the client to launch `awr-mcp --project /absolute/project/path`
-after initialization. AWR 0.3.3 also provides a [shared MCP service](docs/reference/mcp-service.md):
+after initialization. AWR 0.4.0 also provides a [shared MCP service](docs/reference/mcp-service.md):
 one HTTP endpoint for multiple projects and clients, with persistent sessions,
 checkpoints, user waits and request recovery. See the [MCP setup and tools](crates/awr-mcp/README.md),
 [Codex guide](docs/integrations/codex.md),
