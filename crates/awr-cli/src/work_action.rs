@@ -19,6 +19,8 @@ pub struct ActionArgs {
     blocker: Option<String>,
     #[arg(long)]
     expected_revision: Revision,
+    #[arg(long, default_value = "full", value_parser = ["full", "summary"])]
+    response_view: String,
 }
 pub fn run(root: &Path, args: &ActionArgs, action: WorkAction, json_output: bool) -> Result<()> {
     let root = root.canonicalize()?;
@@ -40,15 +42,23 @@ pub fn run(root: &Path, args: &ActionArgs, action: WorkAction, json_output: bool
             },
         },
     )?;
-    print_result(result, action, json_output)
+    print_result(result, action, json_output, &args.response_view)
 }
 fn print_result(
     result: awr_runtime::ProposalReport,
     action: WorkAction,
     json_output: bool,
+    response_view: &str,
 ) -> Result<()> {
-    if json_output {
-        println!("{}", serde_json::to_string_pretty(&result)?);
+    if json_output || response_view == "summary" {
+        let mut value = serde_json::to_value(&result)?;
+        if response_view == "summary" {
+            value = awr_runtime::summarize_work_response(value);
+            if value.get("response_view").is_some() {
+                value["response_view"]["full_result"] = serde_json::json!({"proposal_argv":["proposal","show",result.proposal.id,"--full"],"event_argv":["event","show",result.event.id,"--full"]});
+            }
+        }
+        println!("{}", serde_json::to_string_pretty(&value)?);
     } else {
         println!(
             "Work action: {action:?}\nProposal: {} ({:?})\nRevision: {}\nSource outcome: {}\nReceipt: {}",
@@ -80,6 +90,8 @@ pub struct CompleteArgs {
     input: std::path::PathBuf,
     #[arg(long)]
     expected_revision: Revision,
+    #[arg(long, default_value = "full", value_parser = ["full", "summary"])]
+    response_view: String,
 }
 pub fn complete(root: &Path, args: &CompleteArgs, json_output: bool) -> Result<()> {
     let root = root.canonicalize()?;
@@ -106,5 +118,10 @@ pub fn complete(root: &Path, args: &CompleteArgs, json_output: bool) -> Result<(
             input,
         },
     )?;
-    print_result(result, WorkAction::Complete, json_output)
+    print_result(
+        result,
+        WorkAction::Complete,
+        json_output,
+        &args.response_view,
+    )
 }

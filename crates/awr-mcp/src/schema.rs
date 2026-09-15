@@ -325,6 +325,13 @@ pub fn tools() -> Vec<Tool> {
     catalog.extend(workflow_tools());
     catalog.extend(change_tools());
     for entry in &mut catalog {
+        if matches!(
+            entry.name.as_ref(),
+            "awr_work_prepare" | "awr_work_transition"
+        ) {
+            let schema = std::sync::Arc::make_mut(&mut entry.input_schema);
+            schema["properties"].as_object_mut().unwrap().insert("response_view".into(),json!({"type":"string","enum":["full","summary"],"default":"full","description":"Optional presentation; full context and errors remain. Summary transitions require request_id for the full durable receipt. View selection does not change request identity."}));
+        }
         if entry
             .annotations
             .as_ref()

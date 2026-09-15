@@ -188,6 +188,83 @@ fn small_observation() -> Value {
 }
 
 #[tokio::test]
+async fn summary_views_preserve_context_and_queryable_full_transition_receipts() {
+    let f = Fixture::new();
+    let client = f.client().await;
+    let session = f.session("W", true, None).session;
+    let args = json!({"work":"W","session":session.id});
+    let full = success(call(&client, "awr_work_prepare", args.clone()).await);
+    let mut concise_args = args.clone();
+    concise_args["response_view"] = json!("summary");
+    let concise = success(call(&client, "awr_work_prepare", concise_args).await);
+    for field in [
+        "rendered_context",
+        "context_hash",
+        "identity",
+        "omitted_chunks",
+    ] {
+        assert_eq!(
+            full["context"]["work_context"][field],
+            concise["context"]["work_context"][field]
+        );
+    }
+    for field in [
+        "management",
+        "diagnostics",
+        "continuity",
+        "active_claims",
+        "ready",
+        "project_revision",
+    ] {
+        assert_eq!(full[field], concise[field]);
+    }
+    assert_eq!(
+        full["context"]["completeness"],
+        concise["context"]["completeness"]
+    );
+    assert!(serde_json::to_vec(&concise).unwrap().len() < serde_json::to_vec(&full).unwrap().len());
+    let mut transition = action(&f, session.id, "progress");
+    transition["next_action"] = json!("Review the draft analysis");
+    transition["response_view"] = json!("summary");
+    error(
+        call(&client, "awr_work_transition", transition.clone()).await,
+        "InvalidInput",
+    );
+    transition["request_id"] = json!("concise-progress");
+    let changed = success(call(&client, "awr_work_transition", transition.clone()).await);
+    assert_eq!(changed["changes"]["status"], "in_progress");
+    assert!(changed["proposal"].get("patch").is_none());
+    let revision = f.rev();
+    let receipt = success(
+        call(
+            &client,
+            "awr_operation_get",
+            json!({"request_id":"concise-progress"}),
+        )
+        .await,
+    );
+    assert_eq!(
+        receipt["operation"]["result"]["proposal"]["patch"]["changes"]["status"],
+        "in_progress"
+    );
+    transition["response_view"] = json!("full");
+    let replay = success(call(&client, "awr_work_transition", transition).await);
+    assert_eq!(replay["operation"]["replayed"], true);
+    assert!(replay["proposal"]["patch"].is_object());
+    assert_eq!(f.rev(), revision);
+    let failure = call(&client, "awr_work_prepare", json!({"work":"W","budget":1})).await;
+    let concise_failure = call(
+        &client,
+        "awr_work_prepare",
+        json!({"work":"W","budget":1,"response_view":"summary"}),
+    )
+    .await;
+    assert_eq!(failure.is_error, concise_failure.is_error);
+    assert_eq!(body(&failure), body(&concise_failure));
+    client.cancel().await.unwrap();
+}
+
+#[tokio::test]
 async fn bounded_exploration_can_be_lightweight_with_explicit_observations_and_limits_as_acceptance()
  {
     let f = Fixture::new();

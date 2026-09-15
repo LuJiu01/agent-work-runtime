@@ -414,6 +414,21 @@ fn catalog() -> Vec<Capability> {
             ],
         ),
         (
+            "workflow.response_summary",
+            true,
+            &[
+                "work prepare --response-view summary",
+                "work progress --response-view summary",
+                "work complete --response-view summary",
+            ],
+            &[
+                "optional_presentation",
+                "full_required_context",
+                "errors_unchanged",
+                "stored_receipts_unchanged",
+            ],
+        ),
+        (
             "work.management",
             true,
             &["work assess", "work manage"],

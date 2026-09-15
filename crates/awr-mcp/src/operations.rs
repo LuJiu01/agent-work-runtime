@@ -79,6 +79,50 @@ pub(crate) fn call_as(
     mut args: JsonObject,
     principal: Option<&str>,
 ) -> Result<CallToolResult> {
+    let view = args.remove("response_view");
+    let supported = matches!(name, "awr_work_prepare" | "awr_work_transition");
+    let summary = match view.as_ref() {
+        None => false,
+        Some(Value::String(view)) if supported && view == "full" => false,
+        Some(Value::String(view)) if supported && view == "summary" => true,
+        _ => {
+            return Err(Error::InvalidInput(
+                "response_view requires full or summary on a supported work tool".into(),
+            ));
+        }
+    };
+    if summary && name == "awr_work_transition" && !args.contains_key("request_id") {
+        return Err(Error::InvalidInput(
+            "summary transitions require request_id so the full receipt remains queryable".into(),
+        ));
+    }
+    let full_arguments = args.clone();
+    // Presentation is outside the durable request identity and domain execution.
+    let mut result = call_as_full(root, name, args, principal)?;
+    if summary && result.is_error != Some(true) {
+        if let Some(value) = result.structured_content.take() {
+            let mut value = awr_runtime::summarize_work_response(value);
+            if value.get("response_view").is_some() {
+                value["response_view"]["full_result"] = if name == "awr_work_transition" {
+                    json!({"tool":"awr_operation_get","arguments":{"request_id":full_arguments["request_id"]},"basis":"same client and project; recorded full result"})
+                } else {
+                    json!({"tool":name,"arguments":full_arguments,"basis":"fresh query; compare project_revision and context_hash"})
+                };
+            }
+            let displayed = CallToolResult::structured(value);
+            result.content = displayed.content;
+            result.structured_content = displayed.structured_content;
+        }
+    }
+    Ok(result)
+}
+
+fn call_as_full(
+    root: &Path,
+    name: &str,
+    mut args: JsonObject,
+    principal: Option<&str>,
+) -> Result<CallToolResult> {
     if serde_json::to_vec(&args)?.len() > 1024 * 1024 {
         return Err(Error::InvalidInput("tool arguments exceed 1 MiB".into()));
     }

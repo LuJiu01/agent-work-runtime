@@ -17,6 +17,9 @@ pub struct PrepareArgs {
     source_sha: Option<String>,
     #[arg(long)]
     budget: Option<usize>,
+    /// Omit duplicate context indexes; required rendered context remains complete.
+    #[arg(long, default_value = "full", value_parser = ["full", "summary"])]
+    response_view: String,
 }
 #[derive(Debug, Args)]
 pub struct CompletionArgs {
@@ -69,7 +72,7 @@ fn output(mut value: Value, query: &crate::query::QueryProject, json_output: boo
 pub fn prepare(root: &Path, args: &PrepareArgs, json_output: bool) -> Result<()> {
     let mut query = crate::query::QueryProject::open_read(root, false)?;
     query.finish()?;
-    let value = awr_runtime::prepare_work(
+    let mut value = awr_runtime::prepare_work(
         &mut query.store,
         root,
         &PrepareWorkRequest {
@@ -81,6 +84,14 @@ pub fn prepare(root: &Path, args: &PrepareArgs, json_output: bool) -> Result<()>
             budget: args.budget,
         },
     )?;
+    if args.response_view == "summary" {
+        // Metadata and completeness are checked by output for both views.
+        value["ok"] = json!(value["context"]["completeness"]["complete"] == true);
+        value = awr_runtime::summarize_work_response(value);
+        if value.get("response_view").is_some() {
+            value["response_view"]["full_result"] = json!({"command":"work prepare","work":args.work,"session":args.session,"branch":args.branch,"goals":args.goal,"source_sha":args.source_sha,"budget":args.budget,"response_view":"full","basis":"fresh query; compare project_revision and context_hash"});
+        }
+    }
     output(value, &query, json_output)
 }
 pub fn completion(root: &Path, args: &CompletionArgs, json_output: bool) -> Result<()> {

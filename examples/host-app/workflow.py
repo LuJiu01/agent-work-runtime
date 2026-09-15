@@ -164,12 +164,20 @@ class Workflow:
         self.active()
         return self.fetch_context(prepared=False)
 
-    def fetch_context(self, prepared, goals=()):
+    def response_args(self, view):
+        if view not in ('full', 'summary'):
+            raise ValueError('response_view must be full or summary')
+        return (['--response-view', view] if view == 'summary' and
+                'workflow.response_summary' in self.capabilities else [])
+
+    def fetch_context(self, prepared, goals=(), response_view='full'):
         self.state['context'] = None
         self.save()
         args = (['work', 'prepare', self.state['work']] if prepared else
                 ['context', 'compile', '--work', self.state['work']])
         args += ['--session', self.state['session']]
+        if prepared:
+            args += self.response_args(response_view)
         for goal in goals:
             args += ['--goal', goal]
         result = self.host.call(*args)
@@ -192,13 +200,14 @@ class Workflow:
         return value  # Full rendered context must actually reach the caller.
 
     @serialized
-    def prepare(self, observation=None, goals=()):
+    def prepare(self, observation=None, goals=(), response_view='full'):
         """Fresh preparation on every call; never cache context or invent observations."""
         self.active()
+        self.response_args(response_view)  # Validate before any call or mutation.
         if 'workflow.prepare' not in self.capabilities:
             return dict(context=self.fetch_context(False, goals), workflow_path='legacy',
                         management_available=False, observation_recorded=False)
-        value = self.fetch_context(True, goals)
+        value = self.fetch_context(True, goals, response_view)
         value['workflow_path'] = 'prepared'
         value['observation_recorded'] = False
         assessment = value['management']
@@ -218,12 +227,12 @@ class Workflow:
         return value
 
     @serialized
-    def progress(self, reason, next_action, expected_revision=None):
+    def progress(self, reason, next_action, expected_revision=None, response_view='full'):
         self.active()
         self.require_consumed()
         value = self.perform('progress', ['work', 'progress', self.state['work'],
             '--session', self.state['session'], '--reason', reason, '--next-action', next_action,
-            '--expected-revision', str(self.revision(expected_revision))])
+            '--expected-revision', str(self.revision(expected_revision)), *self.response_args(response_view)])
         return self.completed(value)
 
     def delivered(self, consumed_hash):
@@ -270,15 +279,16 @@ class Workflow:
         return self.completed(value)
 
     @serialized
-    def finish(self, completion, reason, expected_revision=None):
+    def finish(self, completion, reason, expected_revision=None, response_view='full'):
         self.available()
         expected_revision = self.revision(expected_revision)
+        display = self.response_args(response_view)
         if self.state['phase'] == 'active':
             context = self.state.get('context')
             if not context or not self.delivered(context['hash'])['acknowledged']:
                 raise ValueError('Consume and acknowledge context before completing work')
             value = self.perform('complete', ['work', 'complete', self.state['work'], '--session', self.state['session'],
-                '--reason', reason, '--expected-revision', str(expected_revision)], completion)
+                '--reason', reason, '--expected-revision', str(expected_revision), *display], completion)
             self.completed(value, phase='work_completed')
             expected_revision = value['project_revision']
         if self.state['phase'] != 'work_completed':
@@ -341,10 +351,12 @@ def main():
     prepare = sub.add_parser('prepare')
     prepare.add_argument('--observation', help='JSON file with explicit host observations')
     prepare.add_argument('--goal', dest='goals', action='append', default=[])
+    prepare.add_argument('--response-view', choices=['full', 'summary'], default='full')
     progress = sub.add_parser('progress')
     progress.add_argument('--reason', required=True)
     progress.add_argument('--next-action', required=True)
     progress.add_argument('--expected-revision', type=int)
+    progress.add_argument('--response-view', choices=['full', 'summary'], default='full')
     ack = sub.add_parser('ack')
     ack.add_argument('--consumed-hash', required=True)
     checkpoint = sub.add_parser('checkpoint')
@@ -358,6 +370,7 @@ def main():
     finish.add_argument('--input', required=True)
     finish.add_argument('--reason', required=True)
     finish.add_argument('--expected-revision', type=int)
+    finish.add_argument('--response-view', choices=['full', 'summary'], default='full')
     inspect = sub.add_parser('inspect')
     inspect.add_argument('--session'); inspect.add_argument('--work')
     reconcile = sub.add_parser('reconcile')

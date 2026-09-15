@@ -9,6 +9,51 @@ use std::{
 
 const WORK: &str = "work_items:\n- id: W\n  title: Deliver the report\n  status: ready\n  owner: business-coordinator\n  next_action: Draft the report\n  depends_on: [D]\n  acceptance: [Review the report]\n- id: OTHER\n  status: ready\n  next_action: Separate work\n";
 const DEPS: &str = "work_items:\n- id: D\n  status: completed\n  next_action: Delivered\n";
+
+#[test]
+fn concise_transition_retains_outcome_and_links_to_full_source_receipt() {
+    let f = Fixture::new();
+    let session = f.session("W", "writer", true);
+    let sid = session["session"]["id"].as_str().unwrap();
+    let changed = f.acted(
+        "progress",
+        sid,
+        &[
+            "--response-view",
+            "summary",
+            "--next-action",
+            "Review the draft",
+        ],
+    );
+    assert_eq!(changed["write_outcome"], "applied");
+    assert_eq!(changed["transition"]["to"], "in_progress");
+    assert_eq!(changed["changes"]["status"], "in_progress");
+    assert!(changed["proposal"].get("patch").is_none());
+    let id = changed["proposal"]["id"].as_str().unwrap();
+    let receipt = f.ok(&["proposal", "show", id, "--full"]);
+    assert!(
+        serde_json::to_string(&receipt)
+            .unwrap()
+            .contains("work_action")
+    );
+    let bad = f.run(&[
+        "work",
+        "progress",
+        "W",
+        "--session",
+        sid,
+        "--reason",
+        "Stale caller",
+        "--expected-revision",
+        "0",
+        "--response-view",
+        "summary",
+        "--next-action",
+        "Review the draft",
+    ]);
+    f.error(&bad, "RevisionConflict");
+    assert_eq!(f.work()["status"], "in_progress");
+}
 struct Fixture(PathBuf);
 impl Fixture {
     fn new() -> Self {

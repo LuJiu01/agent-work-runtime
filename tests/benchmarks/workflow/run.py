@@ -48,10 +48,11 @@ class Recorder:
 
 
 class Rpc:
-    def __init__(self, binary, root, recorder):
+    def __init__(self, binary, root, recorder, summary=False):
         self.binary, self.root, self.recorder = binary, root, recorder
         self.sequence, self.revision = 0, 0
         self.process = None
+        self.summary = summary
         self.start()
 
     def start(self):
@@ -114,6 +115,8 @@ class Rpc:
 
     def call(self, name, arguments, phase='maintenance', reject=False, request_id=None):
         arguments = dict(arguments)
+        if self.summary and name in ('awr_work_prepare', 'awr_work_transition'):
+            arguments['response_view'] = 'summary'
         if request_id:
             arguments['request_id'] = request_id
         response = self.rpc('tools/call',{'name':name,'arguments':arguments},phase)
@@ -155,7 +158,7 @@ def cli(binary, root, rec, *args, phase='maintenance'):
 
 
 def prepare(rpc, strategy, key, session, criteria):
-    if strategy=='prepared':
+    if strategy in ('prepared', 'summary'):
         value = rpc.call('awr_work_prepare',{'work':key,'session':session,'source_sha':SHA,'goals':['G']},'context')
         context, management = value['context'],value['management']
     else:
@@ -279,6 +282,22 @@ def metrics(rows, wall_ms):
                 unexpected_errors=sum(r.get('error',False) and not r.get('expected_rejection',False) for r in rows),explicit_replays=len(identities)-len(set(identities)))
 
 
+def cost_segments(rows):
+    """Disjoint subtotals; the original all-inclusive metrics remain unchanged."""
+    def group(phase):
+        if phase == 'onboarding': return 'project_onboarding'
+        if phase in ('protocol', 'catalog'): return 'connection_setup_and_teardown'
+        if phase in ('guard', 'verification'): return 'independent_verification'
+        return 'normal_workflow'
+    result = {}
+    for name in ('project_onboarding', 'connection_setup_and_teardown', 'independent_verification', 'normal_workflow'):
+        selected = [r for r in rows if group(r['phase']) == name]
+        result[name] = dict(tool_calls=sum(bool(r.get('tool_call')) for r in selected),
+                            tool_text_bytes=sum(r.get('tool_text_bytes',0) for r in selected),
+                            elapsed_ms=sum(r['elapsed_ms'] for r in selected))
+    return result
+
+
 def run_case(cli_binary,mcp_binary,directory,strategy,scenario):
     directory.mkdir()
     root = directory/'project'
@@ -286,7 +305,7 @@ def run_case(cli_binary,mcp_binary,directory,strategy,scenario):
     rec = Recorder(directory/'receipts')
     began = time.perf_counter_ns()
     cli(cli_binary,root,rec,'init','--manifest','map.toml','--accept',phase='onboarding')
-    rpc = Rpc(mcp_binary,root,rec)
+    rpc = Rpc(mcp_binary,root,rec,summary=strategy=='summary')
     executions, works = {}, []
     try:
         rpc.call('awr_project_status',{'view':'summary'})
@@ -309,7 +328,7 @@ def run_case(cli_binary,mcp_binary,directory,strategy,scenario):
         (rec.directory/'operations.json').write_bytes(encoded(rec.rows))
         by_phase = {phase:dict(calls=sum(r['phase']==phase for r in rec.rows),elapsed_ms=sum(r['elapsed_ms'] for r in rec.rows if r['phase']==phase),io_bytes=sum(r['wire_input_bytes']+r['wire_output_bytes'] for r in rec.rows if r['phase']==phase)) for phase in sorted({r['phase'] for r in rec.rows})}
         by_tool = {name:[r['elapsed_ms'] for r in rec.rows if r['name']==name] for name in sorted({r['name'] for r in rec.rows if r.get('tool_call')})}
-        result = dict(strategy=strategy,scenario=scenario,initial_sources=sources,completed_work=len(works),checks=checks,metrics=measure,phases=by_phase,tool_latency_samples_ms=by_tool,missing_metrics=CONTRACT['missing_metrics'])
+        result = dict(strategy=strategy,scenario=scenario,initial_sources=sources,completed_work=len(works),checks=checks,metrics=measure,phases=by_phase,cost_segments=cost_segments(rec.rows),tool_latency_samples_ms=by_tool,missing_metrics=CONTRACT['missing_metrics'])
         (directory/'result.json').write_bytes(encoded(result))
         return result
     except Exception as error:
@@ -326,6 +345,7 @@ def main():
     parser.add_argument('--runtime-source-sha',required=True)
     parser.add_argument('--output',type=Path,required=True,help='New ignored directory under .local')
     parser.add_argument('--repetitions',type=int,default=3)
+    parser.add_argument('--include-summary',action='store_true',help='Also measure optional summary views; retain both original strategies')
     args = parser.parse_args()
     require(args.repetitions>=1,'repetitions must be positive')
     require(len(args.runtime_source_sha)==40 and all(c in '0123456789abcdef' for c in args.runtime_source_sha),'full runtime source SHA required')
@@ -333,22 +353,23 @@ def main():
     cli_binary,mcp_binary = args.awr.resolve(strict=True),args.mcp.resolve(strict=True)
     binary_hashes = dict(awr=digest(cli_binary),mcp=digest(mcp_binary))
     cases = []
+    selected_strategies = CONTRACT['strategies'] + (['summary'] if args.include_summary else [])
     for repetition in range(args.repetitions):
         for scenario in CONTRACT['workloads']:
             # Alternate order; equal-length paths avoid systematic path-length wire differences.
-            strategies = CONTRACT['strategies'] if repetition%2==0 else list(reversed(CONTRACT['strategies']))
+            strategies = selected_strategies if repetition%2==0 else list(reversed(selected_strategies))
             pair = []
             for strategy in strategies:
-                suffix = 'control0' if strategy=='primitive' else 'prepare0'
+                suffix = {'primitive':'control0','prepared':'prepare0','summary':'summary0'}[strategy]
                 result = run_case(cli_binary,mcp_binary,output/f'{repetition:02d}-{scenario}-{suffix}',strategy,scenario)
                 result['repetition'] = repetition; cases.append(result); pair.append(result)
                 print(json.dumps(dict(scenario=scenario,strategy=strategy,repetition=repetition,passed=all(result['checks'].values()),metrics=result['metrics'])),flush=True)
-            require(pair[0]['initial_sources']==pair[1]['initial_sources'],'comparison input sources differ')
+            require(all(case['initial_sources']==pair[0]['initial_sources'] for case in pair),'comparison input sources differ')
     require(binary_hashes==dict(awr=digest(cli_binary),mcp=digest(mcp_binary)),'measured binary changed')
     summary = []
     for scenario in CONTRACT['workloads']:
         values = {}
-        for strategy in CONTRACT['strategies']:
+        for strategy in selected_strategies:
             rows = [r['metrics'] for r in cases if r['scenario']==scenario and r['strategy']==strategy]
             values[strategy] = {key:dict(median=statistics.median(r[key] for r in rows),min=min(r[key] for r in rows),max=max(r[key] for r in rows)) for key in CONTRACT['metrics']}
         summary.append(dict(scenario=scenario,strategies=values))
@@ -358,7 +379,8 @@ def main():
                   comparison=CONTRACT['comparison'],repetitions=args.repetitions,workflow_runs=len(cases),checks={key:all(c['checks'][key] for c in cases) for key in CONTRACT['required_checks']},
                   metrics=summary,missing_metrics=CONTRACT['missing_metrics'],scope=CONTRACT['scope'])
     report['tool_latency_ms'] = {}
-    for strategy in CONTRACT['strategies']:
+    report['cost_segments'] = [dict(scenario=c['scenario'],strategy=c['strategy'],repetition=c['repetition'],segments=c['cost_segments']) for c in cases]
+    for strategy in selected_strategies:
         names = sorted({name for case in cases if case['strategy']==strategy for name in case['tool_latency_samples_ms']})
         report['tool_latency_ms'][strategy] = {}
         for name in names:

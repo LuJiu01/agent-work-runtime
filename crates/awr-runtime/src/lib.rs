@@ -27,6 +27,7 @@ mod work_action;
 mod work_create;
 mod work_graph;
 pub use work_graph::{WorkGraphRequest, work_graph};
+mod response_view;
 mod workflow;
 pub use artifact::ArtifactFile;
 use awr_store::Store;
@@ -42,6 +43,7 @@ pub use mutation::{
     create_proposal, review_proposal,
 };
 pub use organization::{OrganizationReport, OrganizationState, inspect_organization};
+pub use response_view::summarize_work_response;
 pub use resume::{ResumeReport, ResumeRequest, resume_bound_session, resume_session};
 pub use work_action::{WorkActionRequest, perform_work_action};
 pub use work_create::{

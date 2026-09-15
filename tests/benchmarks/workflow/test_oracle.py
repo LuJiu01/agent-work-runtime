@@ -4,10 +4,22 @@ import tempfile
 import unittest
 
 from oracle import CRITERIA, GOAL, RULE, UPGRADE_CRITERION, check_context, check_artifact, check_final
-from run import metrics
+from run import metrics, cost_segments
 
 
 class OracleTest(unittest.TestCase):
+    def test_cost_segments_keep_onboarding_and_rejection_probes_in_total(self):
+        phases=['onboarding','protocol','catalog','context','maintenance','guard','verification','recovery']
+        rows=[dict(phase=p,tool_call=p not in ('protocol','catalog'),tool_text_bytes=10+i,
+                   elapsed_ms=i+1,wire_input_bytes=1,wire_output_bytes=2) for i,p in enumerate(phases)]
+        total=metrics(rows,100)
+        segments=cost_segments(rows)
+        self.assertEqual(segments['project_onboarding']['tool_calls'],1)
+        self.assertEqual(segments['independent_verification']['tool_calls'],2)
+        self.assertEqual(segments['normal_workflow']['tool_calls'],3)
+        for field in ('tool_calls','tool_text_bytes'):
+            self.assertEqual(sum(v[field] for v in segments.values()),total[field])
+
     def test_missing_criteria_rules_or_wrong_identity_cannot_pass_context(self):
         pack = dict(completeness=dict(complete=True),work_context=dict(identity=dict(work_item_key='W'),context_hash='real-test-hash',rendered_context='\n'.join([*CRITERIA,GOAL,RULE])))
         self.assertEqual(check_context(pack,'W',CRITERIA),'real-test-hash')
