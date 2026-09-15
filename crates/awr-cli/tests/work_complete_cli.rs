@@ -104,6 +104,33 @@ impl Fixture {
     fn report(&self) -> Value {
         json!({"version":1,"work_item":"W","source_sha":SHA,"command":"verify report and delivery","scope":["W"],"verified_at":now_millis().unwrap(),"checks":[{"name":"content and delivery","passed":true,"details":"Checked the analysis and delivery receipt","criteria":[C1,C2]}]})
     }
+    fn organize(&self) {
+        let body = fs::read_to_string(self.root.join("work.yaml")).unwrap();
+        let body = body.replace(
+            "  title: Deliver the report\n",
+            "  title: Deliver the report\n  goal: G\n",
+        );
+        fs::write(self.root.join("work.yaml"), format!("{body}\ngoals:\n- id: G\n  title: Deliver the requested analysis\n  status: active\n  summary: The user requested an analysis and its delivery\n  success_criteria: [The requested analysis is delivered]\n")).unwrap();
+        let path = self.root.join(".awr/project.toml");
+        let manifest = fs::read_to_string(&path).unwrap();
+        let manifest = if manifest.contains("context_profile = \"standard\"") {
+            manifest.replace(
+                "context_profile = \"standard\"",
+                "context_profile = \"minimal\"",
+            )
+        } else if manifest.contains("context_profile = \"minimal\"") {
+            manifest
+        } else {
+            manifest.replace("[project]\n", "[project]\ncontext_profile = \"minimal\"\n")
+        };
+        fs::write(path, manifest).unwrap();
+        self.ok(&["source", "reindex"]);
+    }
+    fn verified_completed(&self) -> u64 {
+        self.ok(&["intake", "inspect", "--source-sha", SHA])["organization"]["verified_completed"]
+            .as_u64()
+            .unwrap()
+    }
     fn input(&self) -> Value {
         json!({"version":1,"source_sha":SHA,"acceptance":[{"criterion":C1,"evidence":["E"]},{"criterion":C2,"evidence":["E"]}]})
     }
@@ -253,6 +280,128 @@ impl Fixture {
         .unwrap();
         proposal.id
     }
+}
+
+#[test]
+fn completion_query_uses_applied_selection_and_keeps_rejected_attempts() {
+    let f = Fixture::new();
+    f.organize();
+    let mut malformed = f.report();
+    malformed["checks"][0]
+        .as_object_mut()
+        .unwrap()
+        .remove("name");
+    let rejected = f.evidence("rejected-attempt", &malformed, |_| {});
+    let rejected_bytes = fs::read(f.root.join(&rejected.locator)).unwrap();
+    let selected = f.evidence("E", &f.report(), |_| {});
+    Fixture::success(&f.complete(&f.input()));
+    assert_eq!(f.verified_completed(), 1);
+    let (store, project) = f.store();
+    let binding = store
+        .current_completion_binding(project, "W", None)
+        .unwrap()
+        .unwrap();
+    assert_eq!(binding.evidence.len(), 1);
+    assert_eq!(binding.evidence[0].id, selected.id);
+    assert_eq!(
+        store.evidence(project, "rejected-attempt").unwrap().item.id,
+        rejected.id
+    );
+    assert_eq!(
+        fs::read(f.root.join(&rejected.locator)).unwrap(),
+        rejected_bytes
+    );
+    assert_eq!(f.claim_status(), "released");
+}
+
+#[test]
+fn completion_query_cannot_replace_damaged_selected_or_extra_required_evidence() {
+    let f = Fixture::new();
+    f.organize();
+    let selected = f.evidence("E", &f.report(), |_| {});
+    let required = f.evidence("R", &f.report(), |_| {});
+    let required_bytes = fs::read(f.root.join(&required.locator)).unwrap();
+    let mut input = f.input();
+    input["required_evidence"] = json!(["R"]);
+    Fixture::success(&f.complete(&input));
+    f.evidence("unselected-replacement", &f.report(), |_| {});
+    assert_eq!(f.verified_completed(), 1);
+    fs::write(f.root.join(&required.locator), "{}").unwrap();
+    assert_eq!(f.verified_completed(), 0);
+    fs::write(f.root.join(&required.locator), required_bytes).unwrap();
+    assert_eq!(f.verified_completed(), 1);
+    fs::remove_file(f.root.join(&selected.locator)).unwrap();
+    assert_eq!(f.verified_completed(), 0);
+}
+
+#[test]
+fn completion_selection_is_scoped_to_current_work_facts_branch_and_dependencies() {
+    let f = Fixture::new();
+    f.organize();
+    f.evidence("E", &f.report(), |_| {});
+    Fixture::success(&f.complete(&f.input()));
+    assert_eq!(f.verified_completed(), 1);
+    let branch = f.ok(&[
+        "branch",
+        "create",
+        "separate-review",
+        "--actor",
+        "worker-a",
+        "--reason",
+        "Review separate runtime scope",
+        "--expected-revision",
+        &f.revision(),
+    ]);
+    let branch_id: Id = branch["branch"]["id"].as_str().unwrap().parse().unwrap();
+    let (store, project) = f.store();
+    assert!(
+        store
+            .current_completion_binding(project, "W", Some(branch_id))
+            .unwrap()
+            .is_none()
+    );
+    drop(store);
+    let body = fs::read_to_string(f.root.join("work.yaml")).unwrap();
+    fs::write(
+        f.root.join("work.yaml"),
+        body.replace("- id: OTHER\n", "- id: OTHER\n  title: Unrelated work\n"),
+    )
+    .unwrap();
+    f.ok(&["source", "reindex"]);
+    assert!(
+        f.store()
+            .0
+            .current_completion_binding(project, "W", None)
+            .unwrap()
+            .is_some()
+    );
+    assert_eq!(f.verified_completed(), 1);
+    fs::write(
+        f.root.join("deps.yaml"),
+        "work_items:\n- id: D\n  status: blocked\n",
+    )
+    .unwrap();
+    assert_eq!(f.verified_completed(), 0);
+    fs::write(
+        f.root.join("deps.yaml"),
+        "work_items:\n- id: D\n  status: completed\n",
+    )
+    .unwrap();
+    assert_eq!(f.verified_completed(), 1);
+    fs::write(
+        f.root.join("work.yaml"),
+        body.replace(C2, "The report receives a new independent review"),
+    )
+    .unwrap();
+    f.ok(&["source", "reindex"]);
+    assert!(
+        f.store()
+            .0
+            .current_completion_binding(project, "W", None)
+            .unwrap()
+            .is_none()
+    );
+    assert_eq!(f.verified_completed(), 0);
 }
 impl Drop for Fixture {
     fn drop(&mut self) {

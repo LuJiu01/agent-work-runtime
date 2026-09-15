@@ -73,6 +73,15 @@ writes with current revisions. Completion rechecks claims, dependencies, source
 freshness and report bytes; changing a report after preflight invalidates its digest.
 Query a shared MCP write by its stable request ID when its outcome is unknown.
 
+When status is checked with a source SHA, an unchanged task completed through AWR
+is verified against the evidence selected by that successful completion on the
+same runtime branch. Every selected report, including extra required evidence,
+is read and checked again; another passing report cannot replace a missing or
+damaged selected report. Rejected attempts remain available in evidence history.
+If the task facts/revision, branch or requested source SHA no longer match the
+completion receipt, status uses the existing conservative source/evidence
+assessment. Source-declared completion alone never supplies a verified receipt.
+
 For one preparation, the old work-get plus context-compile pair becomes one call
 with the same required context. This is a call-count reduction only, not a claim
 about net model tokens, billing or total task duration. Measure those across the

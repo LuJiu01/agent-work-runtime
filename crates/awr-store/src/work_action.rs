@@ -4,7 +4,7 @@ use crate::{
     work::readiness,
 };
 use awr_core::*;
-use rusqlite::{Connection, params};
+use rusqlite::{Connection, OptionalExtension, params};
 
 pub(crate) fn validate_action(
     conn: &Connection,
@@ -350,6 +350,46 @@ pub(crate) fn validate_completion_binding(
     Ok(())
 }
 impl Store {
+    /// The successful completion's explicit evidence selection applies only to the
+    /// exact current work revision/facts and runtime branch. Source-only completion
+    /// or a subsequent work edit has no such selection and requires fresh assessment.
+    pub fn current_completion_binding(
+        &self,
+        project: Id,
+        key: &str,
+        branch: Option<Id>,
+    ) -> Result<Option<CompletionBinding>> {
+        let work = self.work_item(project, key)?.item;
+        if work.status != WorkStatus::Completed {
+            return Ok(None);
+        }
+        let payload: Option<String> = self.conn.query_row(
+            "SELECT payload_json FROM events WHERE project_id=?1 AND work_item_id=?2 AND branch_id IS ?3 AND event_type='work.completed' ORDER BY project_revision DESC,id DESC LIMIT 1",
+            params![project.to_string(), work.meta.id.to_string(), branch.map(|id| id.to_string())],
+            |row| row.get(0),
+        ).optional().map_err(db_error)?;
+        let Some(payload) = payload else {
+            return Ok(None);
+        };
+        let value: serde_json::Value = serde_json::from_str(&payload)?;
+        if value["target_revision"] != serde_json::json!(work.meta.revision)
+            || value["source_id"] != serde_json::json!(work.meta.source_ref.source_id)
+            || value["target_after_hash"]
+                != mutation_projection_hash(&serde_json::to_value(&work)?)?
+        {
+            return Ok(None);
+        }
+        let action: WorkActionBinding = serde_json::from_value(value["work_action"].clone())?;
+        if action.action != WorkAction::Complete || action.to != WorkStatus::Completed {
+            return Err(Error::Storage("invalid completed work receipt".into()));
+        }
+        let binding = action.completion.ok_or_else(|| {
+            Error::Storage("completed work receipt is missing its evidence binding".into())
+        })?;
+        binding.validate()?;
+        Ok(Some(binding))
+    }
+
     pub fn check_completion_dependencies(
         &self,
         project: Id,
