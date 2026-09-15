@@ -1,3 +1,4 @@
+import copy
 import json
 from pathlib import Path
 import sys
@@ -6,6 +7,7 @@ import unittest
 from unittest.mock import patch
 
 from host import CommandFailed, Result
+from execution_reports import ExecutionReports
 import test_workflow
 
 
@@ -222,3 +224,17 @@ class ExecutionReportTest(unittest.TestCase):
         path.write_text(json.dumps(value))
         with self.assertRaises(ValueError): self.wf.collect_run('verify-guide')
         self.assertNotIn('collection', self.wf.state['runs']['verify-guide'])
+
+    def test_directory_identity_accepts_equivalent_native_path_but_rejects_other_root(self):
+        request = self.start()
+        execution = self.wf.run(**request)['execution']
+        self.collect()
+        run = self.wf.state['runs']['verify-guide']
+        alias = copy.deepcopy(execution)
+        alias['intent']['cwd'] = str(self.root) + '/.'
+        ExecutionReports(self.wf).identity(run, alias)
+        alias['intent']['cwd'] = str(self.root.parent)
+        with self.assertRaises(ValueError): ExecutionReports(self.wf).identity(run, alias)
+        alias = copy.deepcopy(execution)
+        alias['intent']['command'].append('--changed')
+        with self.assertRaises(ValueError): ExecutionReports(self.wf).identity(run, alias)

@@ -96,8 +96,12 @@ class ExecutionReports:
     def identity(self, run, execution):
         expected = dict(operation_key=run['operation_key'], purpose=run['request']['purpose'],
                         executor='managed_local', command=run['request']['command'],
-                        cwd=str(self.root), external_reference=None)
-        if (execution['intent'] != expected or execution['project_id'] != self.wf.binding['project_id']
+                        external_reference=None)
+        intent = dict(execution['intent'])
+        # Rust canonical paths use the verbatim prefix on Windows; Python may not.
+        # Compare filesystem identity, while retaining exact argv and execution bindings.
+        cwd_matches = Path(intent.pop('cwd')).samefile(self.root)
+        if (intent != expected or not cwd_matches or execution['project_id'] != self.wf.binding['project_id']
                 or execution['session_id'] != run['session'] or execution['work_item_id'] != run['work_id']
                 or execution['branch_id'] != run['branch'] or execution['registered_at'] < run['snapshot_at']):
             raise ValueError('Execution does not match the saved pre-dispatch source and identity')
