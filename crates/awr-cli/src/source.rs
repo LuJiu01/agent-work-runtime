@@ -641,6 +641,10 @@ fn freshness(value: Freshness) -> &'static str {
 }
 fn print_report(report: &IndexReport) {
     println!(
+        "Operation ok: {}; projection complete: {}",
+        report.ok, report.projection_complete
+    );
+    println!(
         "Indexed: {}; unchanged: {}; pending: {}; retired: {}; project revision: {}",
         report.indexed, report.unchanged, report.pending, report.retired, report.project_revision
     );
@@ -661,5 +665,18 @@ fn print_report(report: &IndexReport) {
     }
     for issue in &report.issues {
         println!("{}: {}: {}", issue.code, issue.mapping, issue.message);
+        if issue
+            .details
+            .as_ref()
+            .and_then(|d| d.get("location"))
+            .is_none()
+            && let Some(locator) = &issue.locator
+        {
+            println!("  Source: {locator}");
+        }
+        let details = awr_core::render_diagnostic_details(issue.details.as_ref());
+        if !details.is_empty() {
+            println!("{details}");
+        }
     }
 }

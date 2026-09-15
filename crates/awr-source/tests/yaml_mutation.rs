@@ -418,10 +418,15 @@ fn drift_noop_and_invalid_field_types_never_prepare_an_apply_plan() {
         f.plan(EntityKind::WorkItem, "W", json!({"next_action":"Before"})),
         Err(Error::InvalidInput(_))
     ));
-    assert!(matches!(
-        f.plan(EntityKind::WorkItem, "W", json!({"next_action":123})),
-        Err(Error::InvalidInput(_))
-    ));
+    let invalid = f
+        .plan(EntityKind::WorkItem, "W", json!({"next_action":123}))
+        .err()
+        .expect("invalid field must not prepare a mutation")
+        .report();
+    assert_eq!(invalid.code, "InvalidInput");
+    let details = invalid.details.unwrap();
+    assert_eq!(details["rule"], "ledger.string");
+    assert_eq!(details["location"]["pointer"], "/work_items/0/next_action");
     fs::write(
         f.root.join("ledger.yaml"),
         "work_items: [{id: W, status: ready, next_action: Changed}]\n",

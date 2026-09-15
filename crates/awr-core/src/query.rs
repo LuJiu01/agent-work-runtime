@@ -97,6 +97,34 @@ pub struct EvidenceAssessment {
     pub reasons: Vec<String>,
 }
 
+/// Presentation groups do not merge records, transfer bindings or infer verification.
+/// Only byte-identical locator strings group together; aliases are not resolved.
+pub fn evidence_groups(assessments: &[EvidenceAssessment]) -> Vec<serde_json::Value> {
+    let mut groups = std::collections::BTreeMap::<&str, Vec<serde_json::Value>>::new();
+    for assessment in assessments {
+        let item = &assessment.evidence.item;
+        groups
+            .entry(&item.locator)
+            .or_default()
+            .push(serde_json::json!({
+                "external_key": item.external_key, "evidence_type": item.evidence_type,
+                "level": item.level, "currency": assessment.currency,
+                "missing_bindings": assessment.missing_bindings, "reasons": assessment.reasons,
+                "sha256": item.sha256, "source_sha": item.source_sha,
+                "scope": item.scope, "branch_id": item.branch_id,
+                "source_ref": item.source_ref, "verified_at": item.verified_at,
+            }));
+    }
+    groups
+        .into_iter()
+        .map(|(locator, records)| {
+            serde_json::json!({
+                "locator":locator, "records":records,
+            })
+        })
+        .collect()
+}
+
 pub fn is_source_sha(value: &str) -> bool {
     matches!(value.len(), 40 | 64) && value.bytes().all(|c| c.is_ascii_hexdigit())
 }

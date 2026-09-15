@@ -182,6 +182,33 @@ fn action(f: &Fixture, session: Id, action: &str) -> Value {
 }
 
 #[tokio::test]
+async fn source_reindex_exposes_the_same_structured_diagnostic_over_mcp() {
+    let f = Fixture::new();
+    let client = f.client().await;
+    fs::write(
+        f.root.join("work.yaml"),
+        "work_items:\n- id: W\n  title: [类型错误]\n",
+    )
+    .unwrap();
+    let result = call(
+        &client,
+        "awr_source_reindex",
+        json!({"expected_revision":f.rev()}),
+    )
+    .await;
+    assert_eq!(result.is_error, Some(true));
+    let value = body(&result);
+    let report = value.get("index").unwrap_or(&value);
+    assert_eq!(report["ok"], false);
+    assert_eq!(report["projection_complete"], false);
+    let details = &report["issues"][0]["details"];
+    assert_eq!(details["rule"], "ledger.string");
+    assert_eq!(details["location"]["pointer"], "/work_items/0/title");
+    assert_eq!(details["location"]["line"], 3);
+    client.cancel().await.unwrap();
+}
+
+#[tokio::test]
 async fn project_organization_guides_repairs_and_preserves_readonly_mcp_state() {
     let f = Fixture::new();
     fs::write(

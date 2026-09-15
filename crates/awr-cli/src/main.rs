@@ -306,7 +306,13 @@ fn main() -> std::process::ExitCode {
                     serde_json::to_string(&error.report()).expect("error report serializes")
                 );
             } else {
-                eprintln!("{}: {}", error.code(), error.report().message);
+                let report = error.report();
+                eprintln!(
+                    "{}: {}{}",
+                    report.code,
+                    report.message,
+                    awr_core::render_diagnostic_details(report.details.as_ref())
+                );
             }
             std::process::ExitCode::from(1)
         }
