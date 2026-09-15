@@ -182,6 +182,87 @@ fn action(f: &Fixture, session: Id, action: &str) -> Value {
 }
 
 #[tokio::test]
+async fn preparation_composes_the_same_required_context_without_runtime_writes() {
+    let f = Fixture::new();
+    let client = f.client().await;
+    let before = f.logical_state();
+    let old_work = success(
+        call(
+            &client,
+            "awr_work_get",
+            json!({"work":"W","source_sha":SHA}),
+        )
+        .await,
+    );
+    let old_context = success(
+        call(
+            &client,
+            "awr_context_compile",
+            json!({"work":"W","detached":true,"source_sha":SHA}),
+        )
+        .await,
+    );
+    let new = success(
+        call(
+            &client,
+            "awr_work_prepare",
+            json!({"work":"W","source_sha":SHA}),
+        )
+        .await,
+    );
+    assert_eq!(new["context"]["work_context"], old_context["work_context"]);
+    assert_eq!(new["ready"], old_work["work"]["ready"]);
+    assert_eq!(new["context_consumed"], false);
+    assert_eq!(new["read_only"], true);
+    assert_eq!(f.logical_state(), before);
+    error(
+        call(&client, "awr_work_prepare", json!({"work":"W","budget":1})).await,
+        "BudgetExceeded",
+    );
+    assert_eq!(f.logical_state(), before);
+    client.cancel().await.unwrap();
+}
+
+#[tokio::test]
+async fn report_preflight_derives_bytes_and_coverage_without_recording_evidence() {
+    use sha2::{Digest, Sha256};
+    let f = Fixture::new();
+    let client = f.client().await;
+    let before = f.logical_state();
+    let mut report = json!({"version":1,"work_item":"W","source_sha":SHA,"command":"review fixture","scope":["W"],"verified_at":now_millis().unwrap(),
+        "checks":[{"name":"review","passed":true,"details":"fixture reviewed","criteria":[CRITERION]}]});
+    let bytes = serde_json::to_vec(&report).unwrap();
+    fs::write(f.root.join("report.json"), &bytes).unwrap();
+    let args = json!({"work":"W","report":"report.json","evidence_key":"E","source_sha":SHA,"level":"locally_verified"});
+    let result = success(call(&client, "awr_completion_prepare", args.clone()).await);
+    assert_eq!(
+        result["report_sha256"],
+        format!("{:x}", Sha256::digest(&bytes))
+    );
+    assert_eq!(
+        result["completion"]["acceptance"][0]["criterion"],
+        CRITERION
+    );
+    assert_eq!(result["completion_claimed"], false);
+    assert_eq!(result["verification_executed"], false);
+    report["checks"][0]["criteria"] = json!([]);
+    fs::write(f.root.join("report.json"), report.to_string()).unwrap();
+    error(
+        call(&client, "awr_completion_prepare", args.clone()).await,
+        "EvidenceMissing",
+    );
+    report["checks"][0].as_object_mut().unwrap().remove("name");
+    fs::write(f.root.join("report.json"), report.to_string()).unwrap();
+    let err = error(
+        call(&client, "awr_completion_prepare", args).await,
+        "InvalidInput",
+    );
+    assert_eq!(err["details"]["location"]["locator"], "report.json");
+    assert_eq!(f.logical_state(), before);
+    client.cancel().await.unwrap();
+}
+
+#[tokio::test]
 async fn source_reindex_exposes_the_same_structured_diagnostic_over_mcp() {
     let f = Fixture::new();
     let client = f.client().await;

@@ -58,6 +58,8 @@ pub(crate) fn is_read_only(name: &str) -> bool {
         "awr_project_status"
             | "awr_work_ready"
             | "awr_work_get"
+            | "awr_work_prepare"
+            | "awr_completion_prepare"
             | "awr_context_compile"
             | "awr_search"
             | "awr_projects_list"
@@ -173,11 +175,16 @@ pub(crate) fn call(root: &Path, name: &str, args: JsonObject) -> Result<CallTool
         "awr_work_ready" => ready(&view, parse(args)?)?,
         "awr_work_get" => work(&view, parse(args)?)?,
         "awr_context_compile" => context(&mut view, root, parse(args)?)?,
+        "awr_work_prepare" => awr_runtime::prepare_work(&mut view.store, root, &parse(args)?)?,
+        "awr_completion_prepare" => {
+            awr_runtime::prepare_completion(&view.store, root, &parse(args)?)?
+        }
         "awr_search" => search(&mut view, parse(args)?)?,
         _ => return Err(Error::Unsupported(name.into())),
     };
     view.finish(root)?;
-    let incomplete = name == "awr_context_compile" && value["completeness"]["complete"] == false;
+    let incomplete = (name == "awr_context_compile" && value["completeness"]["complete"] == false)
+        || (name == "awr_work_prepare" && value["context"]["completeness"]["complete"] == false);
     for (key, item) in view.metadata().as_object().expect("metadata object") {
         // Context packs carry their own required gaps and source provenance.
         if name == "awr_context_compile"

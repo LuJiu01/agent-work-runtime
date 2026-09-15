@@ -22,6 +22,37 @@ pub fn prepare_work_creation(
     external_key: &str,
     title: &str,
 ) -> Result<PreparedWorkCreation> {
+    prepare_work_creation_with_fields(root, source, external_key, title, &Default::default())
+}
+
+pub fn prepare_work_creation_with_fields(
+    root: &Path,
+    source: &Source,
+    external_key: &str,
+    title: &str,
+    input: &serde_json::Map<String, Value>,
+) -> Result<PreparedWorkCreation> {
+    if serde_json::to_vec(input)?.len() > 64 * 1024
+        || input.keys().any(|k| {
+            ![
+                "summary",
+                "goal",
+                "acceptance",
+                "next_action",
+                "kind",
+                "paths",
+                "tags",
+                "priority",
+                "depends_on",
+                "owner",
+                "milestone",
+            ]
+            .contains(&k.as_str())
+        })
+    {
+        return Err(Error::InvalidInput("creation fields must be bounded source facts: summary, goal, acceptance, next_action, kind, paths, tags, priority, depends_on, owner, milestone; status remains draft".into()));
+    }
+    ensure_public_value(&Value::Object(input.clone()))?;
     if !["yaml-ledger-v1", "markdown-ledger-v1"].contains(&source.adapter.as_str())
         || source.domain != "ledger"
     {
@@ -51,7 +82,7 @@ pub fn prepare_work_creation(
         ));
     }
     let mapping = LedgerMapping::from_spec(&spec)?;
-    let fields = vec![
+    let mut fields = vec![
         (mapping.source_field("id").to_owned(), json!(external_key)),
         (mapping.source_field("title").to_owned(), json!(title)),
         (
@@ -59,14 +90,28 @@ pub fn prepare_work_creation(
             mapping.write_value("status", &json!("draft"), &json!({}))?,
         ),
     ];
+    for (field, value) in input {
+        fields.push((
+            mapping.source_field(field).to_owned(),
+            mapping.write_value(field, value, &json!({}))?,
+        ));
+    }
     let record = Value::Object(fields.iter().cloned().collect());
     if source.adapter == "markdown-ledger-v1" {
-        let output = crate::markdown_mutation::append_markdown_work(
+        let mut output = crate::markdown_mutation::append_markdown_work(
             before.text()?,
             &spec,
             external_key,
             title,
         )?;
+        if !input.is_empty() {
+            output = crate::markdown_mutation::edit_markdown_fields(
+                &output,
+                &spec,
+                external_key,
+                input,
+            )?;
+        }
         crate::limits::check_source_size(output.as_bytes(), crate::MARKDOWN_READ_CAP)?;
         let after = SourceSnapshot {
             locator: before.locator.clone(),

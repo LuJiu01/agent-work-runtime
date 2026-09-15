@@ -5,7 +5,7 @@ use crate::mutation_apply::{
 use awr_core::*;
 use awr_source::{
     Manifest, SourceSnapshot, fingerprint, index_project, inspect_registered_source,
-    open_file_exact, prepare_work_creation,
+    open_file_exact,
 };
 use awr_store::Store;
 use cap_std::fs::Dir;
@@ -25,6 +25,9 @@ pub struct CreateWorkInput {
     pub title: String,
     #[serde(default)]
     pub source_id: Option<Id>,
+    /// Explicit source facts; omitted fields are never invented. Empty preserves v1 receipts.
+    #[serde(default, skip_serializing_if = "serde_json::Map::is_empty")]
+    pub fields: serde_json::Map<String, Value>,
 }
 #[derive(Clone, Serialize, Deserialize)]
 #[serde(deny_unknown_fields)]
@@ -248,7 +251,13 @@ pub fn create_work(
             "generated work key already exists; inspect its source instead of overwriting".into(),
         ));
     }
-    let prepared = prepare_work_creation(&root, &source, &external_key, &input.title)?;
+    let prepared = awr_source::prepare_work_creation_with_fields(
+        &root,
+        &source,
+        &external_key,
+        &input.title,
+        &input.fields,
+    )?;
     let plan = Plan {
         version: 1,
         project_id: project.id,

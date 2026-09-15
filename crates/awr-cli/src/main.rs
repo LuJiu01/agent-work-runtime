@@ -29,6 +29,7 @@ mod source_changes;
 mod source_relocation;
 mod work_action;
 mod work_create;
+mod work_prepare;
 
 #[derive(Debug, Parser)]
 #[command(

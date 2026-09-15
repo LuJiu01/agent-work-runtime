@@ -7,6 +7,10 @@ use std::{collections::BTreeMap, path::Path};
 
 #[derive(Debug, Subcommand)]
 pub enum WorkCommand {
+    /// Prepare readiness and the required context together; does not acknowledge consumption.
+    Prepare(crate::work_prepare::PrepareArgs),
+    /// Validate a real report and derive evidence metadata without registering or completing.
+    PrepareCompletion(crate::work_prepare::CompletionArgs),
     /// Preview or accept one new source-backed, non-executable task draft.
     Create(crate::work_create::CreateArgs),
     /// Read the durable outcome for a stable creation request without applying it.
@@ -428,6 +432,10 @@ pub fn ready(
 
 pub fn work(root: &Path, command: &WorkCommand, json_output: bool) -> Result<()> {
     match command {
+        WorkCommand::Prepare(args) => crate::work_prepare::prepare(root, args, json_output),
+        WorkCommand::PrepareCompletion(args) => {
+            crate::work_prepare::completion(root, args, json_output)
+        }
         WorkCommand::Create(args) => crate::work_create::create(root, args, json_output),
         WorkCommand::CreateStatus(args) => crate::work_create::status(root, args, json_output),
         WorkCommand::CreateRecover(args) => crate::work_create::recover(root, args, json_output),

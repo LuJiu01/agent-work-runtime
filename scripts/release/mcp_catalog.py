@@ -7,6 +7,7 @@ STDIO_TOOLS = frozenset({
     "awr_session_checkpoint", "awr_session_end", "awr_session_resume", "awr_session_claim",
     "awr_session_wait", "awr_session_reply", "awr_operation_get",
     "awr_operation_recover", "awr_source_reindex",
+    "awr_work_prepare", "awr_completion_prepare",
 })
 
 

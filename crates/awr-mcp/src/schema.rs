@@ -1,7 +1,7 @@
 use rmcp::model::{Tool, ToolAnnotations};
 use serde_json::{Value, json};
 
-pub const TOOL_NAMES: [&str; 20] = [
+pub const TOOL_NAMES: [&str; 22] = [
     "awr_project_status",
     "awr_work_ready",
     "awr_work_get",
@@ -22,7 +22,34 @@ pub const TOOL_NAMES: [&str; 20] = [
     "awr_operation_get",
     "awr_operation_recover",
     "awr_source_reindex",
+    "awr_work_prepare",
+    "awr_completion_prepare",
 ];
+
+fn workflow_tools() -> Vec<Tool> {
+    vec![
+        tool(
+            "awr_work_prepare",
+            "Read readiness and the required context together. Consume the returned context before checkpointing; preparation does not claim work or change completion requirements.",
+            object(
+                json!({"work":text(),"session":optional(text()),"branch":branch(),"goals":strings(),"source_sha":optional(text()),"budget":{"type":"integer","minimum":1,"maximum":100000}}),
+                &["work"],
+            ),
+            true,
+            false,
+        ),
+        tool(
+            "awr_completion_prepare",
+            "Read a real local completion report, validate its current acceptance coverage and derive its actual hash and evidence mapping. No verification is executed and no evidence or completion is recorded. Level is caller asserted.",
+            object(
+                json!({"work":text(),"report":text(),"evidence_key":text(),"source_sha":text(),"level":levels(),"branch":branch()}),
+                &["work", "report", "evidence_key", "source_sha", "level"],
+            ),
+            true,
+            false,
+        ),
+    ]
+}
 
 fn object(properties: Value, required: &[&str]) -> Value {
     json!({"type":"object","properties":properties,"required":required,"additionalProperties":false})
@@ -188,6 +215,7 @@ pub fn tools() -> Vec<Tool> {
     ];
     catalog.extend(lifecycle_tools());
     catalog.extend(continuity_tools());
+    catalog.extend(workflow_tools());
     for entry in &mut catalog {
         if entry
             .annotations

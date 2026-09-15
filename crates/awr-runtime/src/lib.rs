@@ -24,6 +24,7 @@ mod read;
 mod resume;
 mod work_action;
 mod work_create;
+mod workflow;
 pub use artifact::ArtifactFile;
 use awr_store::Store;
 pub use awr_store::{BranchFilter, EventCursor, EventPage, EventQuery};
@@ -41,6 +42,9 @@ pub use resume::{ResumeReport, ResumeRequest, resume_bound_session, resume_sessi
 pub use work_action::{WorkActionRequest, perform_work_action};
 pub use work_create::{
     CreateWorkInput, CreationReport, create_work, creation_status, recover_creation,
+};
+pub use workflow::{
+    PrepareCompletionRequest, PrepareWorkRequest, prepare_completion, prepare_work,
 };
 
 /// Hard ceilings; a caller may select a smaller budget, never raise these limits.

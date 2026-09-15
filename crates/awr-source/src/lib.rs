@@ -47,7 +47,9 @@ pub use mutation::{
     MutationSourceCheck, inspect_mutation_source, inspect_registered_source, verify_mutation_source,
 };
 pub use safe_fs::{open_dir_exact, open_file_exact};
-pub use yaml_create::{PreparedWorkCreation, prepare_work_creation};
+pub use yaml_create::{
+    PreparedWorkCreation, prepare_work_creation, prepare_work_creation_with_fields,
+};
 pub use yaml_ledger::YamlLedgerAdapter;
 pub use yaml_mutation::{
     PreparedYamlMutation, parse_mutation_projection, prepare_yaml_mutation,
