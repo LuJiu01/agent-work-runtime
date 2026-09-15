@@ -5,8 +5,8 @@ and `orchestrator.py`. It composes a replaceable executor with the existing work
 bounded parallelism and durable dispatch lookup; source work state remains in AWR.
 
 This standard-library Python 3.11+ example calls a pinned native AWR executable by
-absolute path and argv. It uses no shell, model, daemon, installed hooks or private
-SQLite API. Python runs the example host; it is not an AWR end-user dependency.
+absolute path and argv. It uses no shell, model, installed hooks or private SQLite API. Explicit managed
+commands use AWR's existing local supervisor; no resident host service is installed. Python runs the example host; it is not an AWR end-user dependency.
 
 Supply the checksum and version from your trusted build/release receipt. The example
 does not treat a checksum computed from an unknown download as release verification.
@@ -77,7 +77,8 @@ ignored and outside registered sources. The individual commands are:
 
 The class exposes the same methods for embedding. Start from an initialized project
 and reviewed source work; this wrapper does not silently activate or rewrite a task.
-Revisions remain explicit and are returned after each operation. Workflow state is
+Revision arguments may be omitted when the workflow has observed one; AWR still
+checks optimistic concurrency on every supported write. Workflow state is
 operation continuity, not a replacement for source work state or an AWR acceptance record.
 
 Before any write, a pending operation is durably saved. A crash, timeout, malformed
@@ -95,3 +96,10 @@ then inspects and reconciles without replay. It also covers stale revisions, wro
 pins, delivery tampering, adoption and a complete synthetic evidence/finish flow.
 This is a public CLI workflow, not restoration of a private native client or E4
 business acceptance.
+
+For unified `prepare`/`progress`, optional concise responses, and reviewed reports
+assembled from actual managed execution, see [host workflows with less
+bookkeeping](../../docs/integrations/host-workflow.md). The optional report flow
+requires state under an ignored project-local directory and explicit source and
+new artifact paths. It preserves the same consumption, completion and recovery
+requirements as the original workflow above.

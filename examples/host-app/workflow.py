@@ -10,6 +10,7 @@ import sys
 import uuid
 
 from host import Host, CommandFailed, digest, protected_file
+from execution_reports import ExecutionReports
 
 
 def atomic_json(path, value):
@@ -44,7 +45,8 @@ class Workflow:
     """Caller-driven protocol: deliver context, consume it, acknowledge, then save.
 
     An acknowledgement is a caller attestation, not proof of model comprehension.
-    No method executes report commands or automatically retries uncertain writes.
+    Only run() explicitly dispatches caller-supplied argv through AWR. Report
+    preparation never executes commands or automatically retries uncertain writes.
     """
     def __init__(self, binary, sha256, version, project, project_id, state_path):
         self.path = Path(state_path).absolute()
@@ -279,7 +281,26 @@ class Workflow:
         return self.completed(value)
 
     @serialized
+    def run(self, key, purpose, command, source_paths, artifact_paths):
+        return ExecutionReports(self).run(key, purpose, command, source_paths, artifact_paths)
+
+    @serialized
+    def collect_run(self, key):
+        return ExecutionReports(self).collect(key)
+
+    @serialized
+    def prepare_report(self, key, checks, reviewer, evidence_key):
+        return ExecutionReports(self).prepare(key, checks, reviewer, evidence_key)
+
+    @serialized
+    def finish_report(self, report_id, reason, expected_revision=None, response_view='full'):
+        return ExecutionReports(self).finish(report_id, reason, expected_revision, response_view)
+
+    @serialized
     def finish(self, completion, reason, expected_revision=None, response_view='full'):
+        return self._finish(completion, reason, expected_revision, response_view)
+
+    def _finish(self, completion, reason, expected_revision=None, response_view='full'):
         self.available()
         expected_revision = self.revision(expected_revision)
         display = self.response_args(response_view)
@@ -308,6 +329,9 @@ class Workflow:
             value['recovery'] = self.host.ok('recovery', 'inspect', '--session', sid)
         else:
             value['sessions'] = self.host.ok('session', 'list')
+        if self.state['pending'] and self.state['pending']['operation'] == 'run':
+            value['executions'] = {key: ExecutionReports(self).observe(run)
+                                   for key, run in self.state.get('runs', {}).items()}
         output = protected_file(self.host.receipts, '.inspection.json', json.dumps(value, ensure_ascii=False).encode())
         self.state['inspection'] = dict(path=str(output), sha256=digest(output), pending_id=(self.state['pending'] or {}).get('id'))
         self.save()
@@ -371,6 +395,17 @@ def main():
     finish.add_argument('--reason', required=True)
     finish.add_argument('--expected-revision', type=int)
     finish.add_argument('--response-view', choices=['full', 'summary'], default='full')
+    run = sub.add_parser('run', help='Explicitly dispatch managed argv; never execute report text')
+    run.add_argument('--input', required=True, help='JSON with key, purpose, command, source_paths, artifact_paths')
+    collect = sub.add_parser('collect-run')
+    collect.add_argument('--key', required=True)
+    report = sub.add_parser('prepare-report')
+    report.add_argument('--input', required=True, help='JSON with key, checks, reviewer, evidence_key')
+    close = sub.add_parser('finish-report')
+    close.add_argument('--report-id', required=True)
+    close.add_argument('--reason', required=True)
+    close.add_argument('--expected-revision', type=int)
+    close.add_argument('--response-view', choices=['full', 'summary'], default='full')
     inspect = sub.add_parser('inspect')
     inspect.add_argument('--session'); inspect.add_argument('--work')
     reconcile = sub.add_parser('reconcile')
@@ -379,12 +414,14 @@ def main():
     reconcile.add_argument('--session'); reconcile.add_argument('--work')
     args = vars(p.parse_args()); command = args.pop('command')
     wf = Workflow(args.pop('binary'),args.pop('sha256'),args.pop('version'),args.pop('project'),args.pop('project_id'),args.pop('state'))
-    if 'input' in args:
+    if command in ('run', 'prepare-report'):
+        args = json.loads(Path(args.pop('input')).read_text())
+    elif 'input' in args:
         args['draft' if command == 'evidence' else 'completion'] = json.loads(Path(args.pop('input')).read_text())
     if command == 'prepare' and args['observation'] is not None:
         args['observation'] = json.loads(Path(args['observation']).read_text())
     if command == 'checkpoint': args['digest_text'] = args.pop('digest')
-    value = getattr(wf, 'acknowledge' if command == 'ack' else command)(**args)
+    value = getattr(wf, 'acknowledge' if command == 'ack' else command.replace('-', '_'))(**args)
     print(json.dumps(value, ensure_ascii=False, indent=2))
 
 

@@ -5,7 +5,7 @@ workflow state separate from AWR's authoritative project sources. A host can
 carry session identities, revisions and execution receipts so the agent spends
 less effort assembling repeated arguments.
 
-This integration is being extended in three areas: shared work preparation and
+This integration provides three additions: shared work preparation and
 conditional management records, optional concise operation results, and report
 assembly from actual execution receipts. Context caching and delta delivery are
 outside this change.
@@ -94,3 +94,70 @@ Errors, incomplete context, partial writes and unknown results are returned in
 full. Concise output grants no additional permission and cannot satisfy a missing
 acceptance criterion. Source-change previews remain full: they must still be
 reviewed before applying changes.
+
+## Reports from actual managed execution
+
+The optional Python host provides `run`, `collect_run`, `prepare_report`, and
+`finish_report`. These call the existing native `execution run/inspect`, evidence,
+and completion APIs. They do not add a supervisor, an MCP shell tool or an
+unattended execution loop. The application explicitly supplies each command.
+
+```python
+workflow.run(
+    key="verify-guide-1", purpose="Verify the guide examples",
+    command=["/absolute/path/to/python3", "scripts/verify_guide.py"],
+    source_paths=["scripts/verify_guide.py", "docs/guide.md"],
+    artifact_paths=[".local/guide-check-1.json"],
+)
+observed = workflow.collect_run("verify-guide-1")
+# If running/unknown: query later or inspect the original dispatch; never redispatch.
+# Once eligible: read the actual logs/artifact and review each current criterion.
+reviewed = workflow.prepare_report(
+    "verify-guide-1", reviewer="guide reviewer",
+    checks=[{"name": "Examples reviewed", "passed": True,
+             "details": "Describe what was actually reviewed and the result",
+             "criteria": ["The exact current acceptance criterion"]}],
+    evidence_key="guide-check-1",
+)
+workflow.finish_report(reviewed["report"]["id"], "Reviewed the guide and execution evidence")
+```
+
+Use these four commands through `workflow.py` as well: `run --input RUN.json`,
+`collect-run --key KEY`, `prepare-report --input REVIEW.json`, and
+`finish-report --report-id ID --reason TEXT`. The input keys match the Python
+arguments above. `finish-report` also accepts an expected revision and response
+view. Existing `evidence` and `finish` interfaces remain unchanged.
+
+Keep workflow state **inside the project**, in an ignored directory outside
+registered sources. Before dispatch, the host saves explicit source file hashes,
+command argv, work/session identity, consumed context hash and a unique native
+operation key. The saved run key must retain this same intent. Calling it again
+only queries the original execution. Without that original host state, source
+provenance cannot be automatically reconstructed or attached to an older run.
+
+Source and artifact lists are explicit, regular project files without symlinks or
+path traversal. Output paths must be new; existing files cannot masquerade as a
+fresh result. The report's `source_sha` is the SHA-256 digest of the canonical
+project-relative source file hash map, **not a fabricated Git commit**. It includes
+uncommitted source bytes within the declared scope. Select every file that matters
+to the verification; the host does not prove that an incomplete caller-selected
+scope is sufficient or that the run was hermetic.
+
+Collection queries AWR's actual supervisor observation. Only a verified success
+with exit zero, complete logs/result receipt, unchanged source bytes and present
+artifacts can become eligible. It binds the collected file bytes once and rechecks
+them during report preparation and before completion. It does not replace the old
+collection with new hashes after a mismatch. The command, timestamps, native
+execution identity and file hashes are copied into the report; checks and reviewer
+identity are explicit caller assertions. Exit zero alone never generates a passing
+acceptance check. AWR's preflight checks every current acceptance criterion, and
+completion still runs the same domain gates.
+
+A failed command remains inspectable; a running or unknown result cannot be
+reported as complete. Dispatch response loss is recovered by querying the saved
+operation key and explicitly reconciling, without running the command again.
+Evidence response loss is resolved by checking the exact evidence/report binding.
+Completion response loss is inspected before ending the existing session; it does
+not repeat source completion. Lightweight and continuous tasks use this same
+protocol. These are local execution and integrity checks, not independent business
+acceptance or proof of model comprehension.
