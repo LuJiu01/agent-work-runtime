@@ -14,25 +14,25 @@ that every short task should use AWR.
 ## Recorded result
 
 [Reviewed aggregate data](workflow-macos-arm64.json), measured on macOS arm64 with
-the same **unoptimized development binaries** from source `93e56ecea5f7`, before
-this documentation/benchmark-only change. Three repetitions per strategy and
+the same **unoptimized development binaries** from source `4898e7122fb9`, after the completion-query regression fix and before
+this measurement/documentation-only update. Three repetitions per strategy and
 workload produce 30 complete runs; order alternates to reduce order bias.
 
 | Workload | Primitive calls | Prepared calls | Returned text reduction | Whole workflow median, primitive → prepared |
 | --- | ---: | ---: | ---: | ---: |
-| Bounded lightweight work | 20 | 16 | 3.67% | 1,197 → 1,158 ms |
-| Scope change and retained upgrade | 31 | 25 | 3.83% | 1,542 → 1,443 ms |
-| Wait, server restart and reply | 30 | 22 | 4.68% | 1,968 → 1,828 ms |
-| Verified dependency release | 39 | 31 | 3.74% | 1,743 → 1,711 ms |
-| Lost result, restart and lookup | 22 | 18 | 3.45% | 1,335 → 1,265 ms |
+| Bounded lightweight work | 20 | 16 | 3.67% | 1,104 → 1,072 ms |
+| Scope change and retained upgrade | 31 | 25 | 3.83% | 1,412 → 1,321 ms |
+| Wait, server restart and reply | 30 | 22 | 4.68% | 1,800 → 1,710 ms |
+| Verified dependency release | 39 | 31 | 3.74% | 1,599 → 1,541 ms |
+| Lost result, restart and lookup | 22 | 18 | 3.45% | 1,212 → 1,131 ms |
 
 Calls fall by 18–27%, but returned text decreases much less. The initial tool catalog
 alone is about 30.8 KB of protocol output, and report/evidence/lifecycle maintenance
 remains in both paths. Fewer calls are useful; they do not imply a large reduction
 in total Agent context or cost.
 
-The prepared query's observed median is 41.5 ms across 45 calls; its maximum is
-577.3 ms. These samples include fresh-server context initialization. End-to-end
+The prepared query's observed median is 38.1 ms across 45 calls; its maximum is
+533.6 ms. These samples include fresh-server context initialization. End-to-end
 workflow durations include initialization and shutdown, protocol discovery, source
 checks, expected rejections and persistence. Three workload repetitions are not a
 latency SLO or a performance claim for optimized builds, large ledgers, or enterprise

@@ -1,10 +1,10 @@
 {
   "benchmark": "adaptive-workflow-v1",
-  "measured_at": "2026-09-15T07:17:55.491221+00:00",
-  "runtime_source_sha": "93e56ecea5f7c68949c859f684e6a9b4e7812bf2",
+  "measured_at": "2026-09-15T08:23:39.771730+00:00",
+  "runtime_source_sha": "4898e7122fb9d6a1bbf2100576e9e215ea65fb29",
   "binary_sha256": {
-    "awr": "892334c2c8e55372924de8daf61e1bf4a7d566f97dfd49495f4668df92b421bd",
-    "mcp": "0526a61cb1ddab332fbf0766b1362f9d7e472ed0814d5905dd249c52821152f9"
+    "awr": "fcbfc8e40ddda80511c7629a341f9d9c1af976718bf6678437b2e98292b90afa",
+    "mcp": "30536778a8e559de2a46ba5bb4d9bdd8cffcb7a9fa4ca89406505027fc69e5c1"
   },
   "harness_sha256": {
     "run.py": "da466846922a6041ea8369a1378d1e888bd74966c11850d13e5bc00eaa5ce3f9",
@@ -43,19 +43,19 @@
             "max": 20
           },
           "wire_input_bytes": {
-            "median": 5635,
-            "min": 5635,
-            "max": 5635
+            "median": 5649,
+            "min": 5649,
+            "max": 5649
           },
           "wire_output_bytes": {
             "median": 150231,
             "min": 150231,
-            "max": 150231
+            "max": 150233
           },
           "tool_text_bytes": {
             "median": 60877,
             "min": 60877,
-            "max": 60877
+            "max": 60878
           },
           "catalog_bytes": {
             "median": 30816,
@@ -63,14 +63,14 @@
             "max": 30816
           },
           "tool_elapsed_ms": {
-            "median": 1168.267499,
-            "min": 1122.082334,
-            "max": 1263.736501
+            "median": 1079.000041,
+            "min": 1066.4285,
+            "max": 1863.876663
           },
           "wall_elapsed_ms": {
-            "median": 1197.160708,
-            "min": 1154.536375,
-            "max": 1291.450375
+            "median": 1103.507458,
+            "min": 1090.474416,
+            "max": 1889.375291
           },
           "maintenance_calls": {
             "median": 9,
@@ -83,9 +83,9 @@
             "max": 45678
           },
           "maintenance_ms": {
-            "median": 354.562166,
-            "min": 328.668375,
-            "max": 369.586668
+            "median": 311.858249,
+            "min": 298.46074799999997,
+            "max": 322.088709
           },
           "recovery_calls": {
             "median": 0,
@@ -120,9 +120,9 @@
             "max": 16
           },
           "wire_input_bytes": {
-            "median": 5087,
-            "min": 5087,
-            "max": 5087
+            "median": 5101,
+            "min": 5101,
+            "max": 5101
           },
           "wire_output_bytes": {
             "median": 145131,
@@ -140,14 +140,14 @@
             "max": 30816
           },
           "tool_elapsed_ms": {
-            "median": 1127.94492,
-            "min": 1099.7285,
-            "max": 1260.913501
+            "median": 1049.237752,
+            "min": 980.134414,
+            "max": 1055.747333
           },
           "wall_elapsed_ms": {
-            "median": 1158.140625,
-            "min": 1126.581417,
-            "max": 1286.28125
+            "median": 1072.416708,
+            "min": 1000.500917,
+            "max": 1077.728458
           },
           "maintenance_calls": {
             "median": 9,
@@ -160,9 +160,9 @@
             "max": 45678
           },
           "maintenance_ms": {
-            "median": 353.627376,
-            "min": 339.382417,
-            "max": 409.101501
+            "median": 304.713458,
+            "min": 296.371831,
+            "max": 328.035457
           },
           "recovery_calls": {
             "median": 0,
@@ -202,17 +202,17 @@
             "max": 31
           },
           "wire_input_bytes": {
-            "median": 8984,
-            "min": 8984,
-            "max": 8984
+            "median": 8998,
+            "min": 8998,
+            "max": 8998
           },
           "wire_output_bytes": {
-            "median": 221186,
+            "median": 221190,
             "min": 221186,
             "max": 221190
           },
           "tool_text_bytes": {
-            "median": 94396,
+            "median": 94398,
             "min": 94396,
             "max": 94398
           },
@@ -222,14 +222,14 @@
             "max": 30816
           },
           "tool_elapsed_ms": {
-            "median": 1502.703669,
-            "min": 1441.479085,
-            "max": 1668.928709
+            "median": 1381.126833,
+            "min": 1330.919664,
+            "max": 1410.413912
           },
           "wall_elapsed_ms": {
-            "median": 1541.494583,
-            "min": 1482.048583,
-            "max": 1707.590042
+            "median": 1412.278708,
+            "min": 1358.54975,
+            "max": 1445.652667
           },
           "maintenance_calls": {
             "median": 17,
@@ -242,9 +242,9 @@
             "max": 88794
           },
           "maintenance_ms": {
-            "median": 610.849918,
-            "min": 580.608667,
-            "max": 639.461625
+            "median": 559.243167,
+            "min": 525.281042,
+            "max": 563.057832
           },
           "recovery_calls": {
             "median": 0,
@@ -279,19 +279,19 @@
             "max": 25
           },
           "wire_input_bytes": {
-            "median": 8162,
-            "min": 8162,
-            "max": 8162
+            "median": 8176,
+            "min": 8176,
+            "max": 8176
           },
           "wire_output_bytes": {
             "median": 212990,
             "min": 212990,
-            "max": 212990
+            "max": 212994
           },
           "tool_text_bytes": {
             "median": 90784,
             "min": 90784,
-            "max": 90784
+            "max": 90786
           },
           "catalog_bytes": {
             "median": 30816,
@@ -299,14 +299,14 @@
             "max": 30816
           },
           "tool_elapsed_ms": {
-            "median": 1407.159248,
-            "min": 1405.427085,
-            "max": 1504.082378
+            "median": 1294.396874,
+            "min": 1243.185587,
+            "max": 1315.087499
           },
           "wall_elapsed_ms": {
-            "median": 1442.602,
-            "min": 1440.331583,
-            "max": 1539.520125
+            "median": 1321.420083,
+            "min": 1267.735833,
+            "max": 1342.78275
           },
           "maintenance_calls": {
             "median": 17,
@@ -319,9 +319,9 @@
             "max": 88794
           },
           "maintenance_ms": {
-            "median": 593.415251,
-            "min": 592.878081,
-            "max": 648.302793
+            "median": 537.336416,
+            "min": 514.515044,
+            "max": 558.75225
           },
           "recovery_calls": {
             "median": 0,
@@ -361,9 +361,9 @@
             "max": 32
           },
           "wire_input_bytes": {
-            "median": 7989,
-            "min": 7989,
-            "max": 7989
+            "median": 8003,
+            "min": 8003,
+            "max": 8003
           },
           "wire_output_bytes": {
             "median": 255375,
@@ -381,14 +381,14 @@
             "max": 61633
           },
           "tool_elapsed_ms": {
-            "median": 1918.213456,
-            "min": 1848.028543,
-            "max": 1951.744044
+            "median": 1753.238544,
+            "min": 1743.009873,
+            "max": 1828.831837
           },
           "wall_elapsed_ms": {
-            "median": 1968.357459,
-            "min": 1895.539708,
-            "max": 2004.183916
+            "median": 1799.527792,
+            "min": 1791.816667,
+            "max": 1875.204417
           },
           "maintenance_calls": {
             "median": 9,
@@ -401,9 +401,9 @@
             "max": 45622
           },
           "maintenance_ms": {
-            "median": 345.796375,
-            "min": 341.070415,
-            "max": 355.863625
+            "median": 309.997585,
+            "min": 304.919958,
+            "max": 310.81962599999997
           },
           "recovery_calls": {
             "median": 1,
@@ -438,19 +438,19 @@
             "max": 24
           },
           "wire_input_bytes": {
-            "median": 6893,
-            "min": 6893,
-            "max": 6893
+            "median": 6907,
+            "min": 6907,
+            "max": 6907
           },
           "wire_output_bytes": {
-            "median": 245159,
-            "min": 245159,
-            "max": 245159
+            "median": 245161,
+            "min": 245161,
+            "max": 245161
           },
           "tool_text_bytes": {
-            "median": 91156,
-            "min": 91156,
-            "max": 91156
+            "median": 91157,
+            "min": 91157,
+            "max": 91157
           },
           "catalog_bytes": {
             "median": 61633,
@@ -458,14 +458,14 @@
             "max": 61633
           },
           "tool_elapsed_ms": {
-            "median": 1784.058333,
-            "min": 1727.9066659999999,
-            "max": 1838.667457
+            "median": 1669.8366250000001,
+            "min": 1664.622128,
+            "max": 1680.086917
           },
           "wall_elapsed_ms": {
-            "median": 1827.734,
-            "min": 1765.751959,
-            "max": 1888.919291
+            "median": 1709.787584,
+            "min": 1702.726084,
+            "max": 1720.221333
           },
           "maintenance_calls": {
             "median": 9,
@@ -478,9 +478,9 @@
             "max": 45622
           },
           "maintenance_ms": {
-            "median": 340.503751,
-            "min": 322.396123,
-            "max": 342.923835
+            "median": 303.744709,
+            "min": 303.416374,
+            "max": 317.548501
           },
           "recovery_calls": {
             "median": 1,
@@ -520,18 +520,18 @@
             "max": 38
           },
           "wire_input_bytes": {
-            "median": 10690,
-            "min": 10690,
-            "max": 10690
+            "median": 10711,
+            "min": 10711,
+            "max": 10711
           },
           "wire_output_bytes": {
-            "median": 278310,
-            "min": 278310,
+            "median": 278314,
+            "min": 278312,
             "max": 278314
           },
           "tool_text_bytes": {
-            "median": 124710,
-            "min": 124710,
+            "median": 124712,
+            "min": 124711,
             "max": 124712
           },
           "catalog_bytes": {
@@ -540,14 +540,14 @@
             "max": 30816
           },
           "tool_elapsed_ms": {
-            "median": 1702.094377,
-            "min": 1686.458122,
-            "max": 1847.541709
+            "median": 1563.678169,
+            "min": 1560.927163,
+            "max": 1582.928709
           },
           "wall_elapsed_ms": {
-            "median": 1743.266875,
-            "min": 1730.213417,
-            "max": 1893.596
+            "median": 1599.128459,
+            "min": 1596.296375,
+            "max": 1619.09275
           },
           "maintenance_calls": {
             "median": 19,
@@ -560,9 +560,9 @@
             "max": 101493
           },
           "maintenance_ms": {
-            "median": 669.327417,
-            "min": 666.440166,
-            "max": 703.3708340000001
+            "median": 599.910253,
+            "min": 596.237169,
+            "max": 608.216622
           },
           "recovery_calls": {
             "median": 0,
@@ -597,19 +597,19 @@
             "max": 30
           },
           "wire_input_bytes": {
-            "median": 9594,
-            "min": 9594,
-            "max": 9594
+            "median": 9615,
+            "min": 9615,
+            "max": 9615
           },
           "wire_output_bytes": {
-            "median": 267696,
-            "min": 267696,
-            "max": 267696
+            "median": 267698,
+            "min": 267698,
+            "max": 267698
           },
           "tool_text_bytes": {
-            "median": 120051,
-            "min": 120051,
-            "max": 120051
+            "median": 120052,
+            "min": 120052,
+            "max": 120052
           },
           "catalog_bytes": {
             "median": 30816,
@@ -617,14 +617,14 @@
             "max": 30816
           },
           "tool_elapsed_ms": {
-            "median": 1673.039461,
-            "min": 1576.734124,
-            "max": 1674.331874
+            "median": 1507.266667,
+            "min": 1496.067333,
+            "max": 1511.76396
           },
           "wall_elapsed_ms": {
-            "median": 1711.164542,
-            "min": 1613.71325,
-            "max": 1712.2755
+            "median": 1540.618583,
+            "min": 1528.009208,
+            "max": 1547.910333
           },
           "maintenance_calls": {
             "median": 19,
@@ -637,9 +637,9 @@
             "max": 101491
           },
           "maintenance_ms": {
-            "median": 663.227123,
-            "min": 635.162835,
-            "max": 690.14121
+            "median": 618.458458,
+            "min": 606.023168,
+            "max": 620.243166
           },
           "recovery_calls": {
             "median": 0,
@@ -679,9 +679,9 @@
             "max": 24
           },
           "wire_input_bytes": {
-            "median": 6196,
-            "min": 6196,
-            "max": 6196
+            "median": 6210,
+            "min": 6210,
+            "max": 6210
           },
           "wire_output_bytes": {
             "median": 190398,
@@ -699,14 +699,14 @@
             "max": 61633
           },
           "tool_elapsed_ms": {
-            "median": 1290.75363,
-            "min": 1208.074917,
-            "max": 1320.403207
+            "median": 1173.657709,
+            "min": 1114.806959,
+            "max": 1210.585127
           },
           "wall_elapsed_ms": {
-            "median": 1334.940416,
-            "min": 1250.45175,
-            "max": 1366.534333
+            "median": 1211.664959,
+            "min": 1151.277792,
+            "max": 1246.63925
           },
           "maintenance_calls": {
             "median": 9,
@@ -719,9 +719,9 @@
             "max": 45702
           },
           "maintenance_ms": {
-            "median": 364.000916,
-            "min": 345.1055,
-            "max": 371.703752
+            "median": 324.146501,
+            "min": 307.57025,
+            "max": 328.236084
           },
           "recovery_calls": {
             "median": 2,
@@ -756,9 +756,9 @@
             "max": 20
           },
           "wire_input_bytes": {
-            "median": 5648,
-            "min": 5648,
-            "max": 5648
+            "median": 5662,
+            "min": 5662,
+            "max": 5662
           },
           "wire_output_bytes": {
             "median": 185298,
@@ -776,14 +776,14 @@
             "max": 61633
           },
           "tool_elapsed_ms": {
-            "median": 1225.83962,
-            "min": 1173.847457,
-            "max": 1298.555959
+            "median": 1096.467372,
+            "min": 1045.20425,
+            "max": 1120.398584
           },
           "wall_elapsed_ms": {
-            "median": 1264.752834,
-            "min": 1210.233125,
-            "max": 1340.6425
+            "median": 1131.269292,
+            "min": 1076.04875,
+            "max": 1156.576875
           },
           "maintenance_calls": {
             "median": 9,
@@ -796,9 +796,9 @@
             "max": 45702
           },
           "maintenance_ms": {
-            "median": 357.667998,
-            "min": 354.373624,
-            "max": 390.932833
+            "median": 310.207334,
+            "min": 297.411334,
+            "max": 322.629459
           },
           "recovery_calls": {
             "median": 2,
@@ -835,251 +835,251 @@
     "primitive": {
       "awr_change_apply": {
         "samples": 3,
-        "median": 139.638625,
-        "min": 137.898417,
-        "max": 145.86725
+        "median": 141.739417,
+        "min": 132.103708,
+        "max": 143.597209
       },
       "awr_change_preview": {
         "samples": 6,
-        "median": 22.227417000000003,
-        "min": 20.169875,
-        "max": 26.108958
+        "median": 19.6503125,
+        "min": 16.999667,
+        "max": 22.067333
       },
       "awr_completion_prepare": {
         "samples": 18,
-        "median": 11.770271000000001,
-        "min": 10.253666,
-        "max": 15.678083
+        "median": 10.126312500000001,
+        "min": 9.1945,
+        "max": 12.178167
       },
       "awr_context_compile": {
         "samples": 45,
-        "median": 38.692458,
-        "min": 28.523792,
-        "max": 631.383667
+        "median": 33.696,
+        "min": 27.050959,
+        "max": 564.256125
       },
       "awr_evidence_record": {
         "samples": 18,
-        "median": 15.555125,
-        "min": 13.880208,
-        "max": 19.260625
+        "median": 12.18575,
+        "min": 10.983917,
+        "max": 20.764084
       },
       "awr_operation_get": {
         "samples": 3,
-        "median": 53.443875,
-        "min": 47.384958,
-        "max": 55.847041
+        "median": 47.021875,
+        "min": 45.165042,
+        "max": 47.219125
       },
       "awr_project_status": {
         "samples": 15,
-        "median": 63.480667,
-        "min": 55.824,
-        "max": 67.952875
+        "median": 57.142083,
+        "min": 54.708292,
+        "max": 63.639541
       },
       "awr_session_checkpoint": {
         "samples": 18,
-        "median": 16.6648955,
-        "min": 14.476583,
-        "max": 39.492959
+        "median": 14.206686999999999,
+        "min": 12.657083,
+        "max": 18.940167
       },
       "awr_session_claim": {
         "samples": 6,
-        "median": 12.355958000000001,
-        "min": 9.57925,
-        "max": 15.790375
+        "median": 10.660145499999999,
+        "min": 8.121875,
+        "max": 12.14
       },
       "awr_session_end": {
         "samples": 18,
-        "median": 11.135229500000001,
-        "min": 9.992416,
-        "max": 20.159334
+        "median": 9.087625500000001,
+        "min": 8.254708,
+        "max": 10.544916
       },
       "awr_session_get": {
         "samples": 6,
-        "median": 28.947958,
-        "min": 8.887458,
-        "max": 58.9035
+        "median": 28.038792,
+        "min": 7.801542,
+        "max": 49.777959
       },
       "awr_session_reply": {
         "samples": 3,
-        "median": 11.813917,
-        "min": 10.347375,
-        "max": 13.14925
+        "median": 10.643666,
+        "min": 10.203,
+        "max": 11.349542
       },
       "awr_session_start": {
         "samples": 18,
-        "median": 21.46525,
-        "min": 16.809,
-        "max": 25.531167
+        "median": 18.8144165,
+        "min": 14.980333,
+        "max": 28.219042
       },
       "awr_session_wait": {
         "samples": 3,
-        "median": 16.494,
-        "min": 14.4785,
-        "max": 17.601625
+        "median": 14.567208,
+        "min": 14.565042,
+        "max": 16.599083
       },
       "awr_work_assess": {
         "samples": 45,
-        "median": 12.477458,
-        "min": 10.22025,
-        "max": 20.413916
+        "median": 10.849416,
+        "min": 10.136291,
+        "max": 13.019375
       },
       "awr_work_get": {
         "samples": 63,
-        "median": 11.749584,
-        "min": 10.346416,
-        "max": 18.819667
+        "median": 10.586959,
+        "min": 9.311583,
+        "max": 15.605083
       },
       "awr_work_graph": {
         "samples": 27,
-        "median": 12.292167,
-        "min": 10.880666,
-        "max": 19.364416
+        "median": 10.78825,
+        "min": 8.99675,
+        "max": 15.79175
       },
       "awr_work_manage": {
         "samples": 21,
-        "median": 20.604166,
-        "min": 17.42475,
-        "max": 23.454834
+        "median": 17.635334,
+        "min": 15.896875,
+        "max": 19.029583
       },
       "awr_work_transition": {
         "samples": 57,
-        "median": 82.472292,
-        "min": 7.83075,
-        "max": 135.781417
+        "median": 74.123,
+        "min": 7.668125,
+        "max": 128.388417
       },
       "cli init --manifest": {
         "samples": 15,
-        "median": 100.047833,
-        "min": 95.314834,
-        "max": 113.78
+        "median": 94.299667,
+        "min": 88.275375,
+        "max": 926.625666
       },
       "cli work show": {
         "samples": 18,
-        "median": 59.058083499999995,
-        "min": 56.263125,
-        "max": 63.104708
+        "median": 54.758812500000005,
+        "min": 52.665125,
+        "max": 56.634291
       }
     },
     "prepared": {
       "awr_change_apply": {
         "samples": 3,
-        "median": 140.360667,
-        "min": 140.257959,
-        "max": 141.769625
+        "median": 137.52425,
+        "min": 130.497667,
+        "max": 137.863167
       },
       "awr_change_preview": {
         "samples": 6,
-        "median": 22.521833,
-        "min": 19.11225,
-        "max": 26.757875
+        "median": 18.676146,
+        "min": 17.230125,
+        "max": 21.150541
       },
       "awr_completion_prepare": {
         "samples": 18,
-        "median": 11.651499999999999,
-        "min": 10.332625,
-        "max": 14.541333
+        "median": 10.620916999999999,
+        "min": 9.629458,
+        "max": 12.425167
       },
       "awr_evidence_record": {
         "samples": 18,
-        "median": 15.477292,
-        "min": 13.220041,
-        "max": 18.408916
+        "median": 12.728083,
+        "min": 10.532291,
+        "max": 17.96175
       },
       "awr_operation_get": {
         "samples": 3,
-        "median": 49.479167,
-        "min": 48.482875,
-        "max": 54.932334
+        "median": 46.510291,
+        "min": 45.707708,
+        "max": 47.942875
       },
       "awr_project_status": {
         "samples": 15,
-        "median": 61.046208,
-        "min": 56.440541,
-        "max": 68.470417
+        "median": 55.885417,
+        "min": 52.755041,
+        "max": 63.243042
       },
       "awr_session_checkpoint": {
         "samples": 18,
-        "median": 17.688875000000003,
-        "min": 14.051375,
-        "max": 22.506584
+        "median": 14.7202085,
+        "min": 12.4,
+        "max": 17.89275
       },
       "awr_session_claim": {
         "samples": 6,
-        "median": 14.61475,
-        "min": 10.907125,
-        "max": 17.446375
+        "median": 9.934958,
+        "min": 8.102959,
+        "max": 14.4955
       },
       "awr_session_end": {
         "samples": 18,
-        "median": 11.389771,
-        "min": 9.7805,
-        "max": 16.136708
+        "median": 9.072271,
+        "min": 8.118166,
+        "max": 10.2305
       },
       "awr_session_get": {
         "samples": 6,
-        "median": 28.762916999999998,
-        "min": 8.751291,
-        "max": 52.948125
+        "median": 28.192354,
+        "min": 8.009083,
+        "max": 51.127583
       },
       "awr_session_reply": {
         "samples": 3,
-        "median": 10.922542,
-        "min": 10.762,
-        "max": 11.465291
+        "median": 9.476334,
+        "min": 8.723209,
+        "max": 10.235042
       },
       "awr_session_start": {
         "samples": 18,
-        "median": 21.456417000000002,
-        "min": 16.760208,
-        "max": 24.574541
+        "median": 18.305999999999997,
+        "min": 14.768833,
+        "max": 22.34725
       },
       "awr_session_wait": {
         "samples": 3,
-        "median": 15.949167,
-        "min": 15.459958,
-        "max": 22.241875
+        "median": 14.320625,
+        "min": 14.214375,
+        "max": 23.991209
       },
       "awr_work_get": {
         "samples": 18,
-        "median": 11.6707705,
-        "min": 10.285917,
-        "max": 14.122959
+        "median": 10.469792,
+        "min": 9.436042,
+        "max": 12.205708
       },
       "awr_work_graph": {
         "samples": 27,
-        "median": 12.102125,
-        "min": 10.587208,
-        "max": 17.583917
+        "median": 10.774375,
+        "min": 9.394667,
+        "max": 16.2025
       },
       "awr_work_manage": {
         "samples": 21,
-        "median": 20.454542,
-        "min": 18.605208,
-        "max": 22.573125
+        "median": 17.482708,
+        "min": 15.899166,
+        "max": 20.46325
       },
       "awr_work_prepare": {
         "samples": 45,
-        "median": 41.512584,
-        "min": 31.479083,
-        "max": 577.328125
+        "median": 38.050541,
+        "min": 29.010875,
+        "max": 533.565
       },
       "awr_work_transition": {
         "samples": 57,
-        "median": 79.277125,
-        "min": 7.439541,
-        "max": 141.185459
+        "median": 73.294167,
+        "min": 6.94575,
+        "max": 129.509125
       },
       "cli init --manifest": {
         "samples": 15,
-        "median": 100.404583,
-        "min": 95.3045,
-        "max": 109.07775
+        "median": 92.7635,
+        "min": 88.581125,
+        "max": 104.285083
       },
       "cli work show": {
         "samples": 18,
-        "median": 60.7028955,
-        "min": 54.637,
-        "max": 68.457833
+        "median": 54.7398125,
+        "min": 52.433708,
+        "max": 58.51275
       }
     }
   }
