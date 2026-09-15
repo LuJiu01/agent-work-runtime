@@ -212,7 +212,9 @@ class ExecutionReports:
         draft['work_item_key'] = draft.pop('work')
         draft['branch_id'] = draft.pop('branch')
         # Look up the exact evidence key even after a lost registration response. No duplicate write.
-        found = wf.host.call('evidence', 'show', record['evidence_key'], '--source-sha', record['source_sha'], '--content')
+        # Preflight accepts reports up to 1 MiB; recovery must read that same accepted report.
+        found = wf.host.call('evidence', 'show', record['evidence_key'], '--source-sha', record['source_sha'],
+                             '--content', '--max-bytes', '1048576')
         if found.exit_code == 0 and not found.outcome_unknown:
             existing = found.require()
             e = existing['evidence']

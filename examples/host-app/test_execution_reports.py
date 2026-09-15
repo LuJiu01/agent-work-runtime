@@ -142,7 +142,10 @@ class ExecutionReportTest(unittest.TestCase):
     def test_lost_evidence_registration_reuses_exact_record(self):
         request = self.start()
         self.wf.run(**request); self.collect()
-        reviewed = self.review()
+        reviewed = self.review(checks=[dict(name='Detailed guide review', passed=True,
+            details='Synthetic detailed review of guide examples. ' * 1800,
+            criteria=['Reviewed guide'])])
+        self.assertGreater(Path(reviewed['report']['path']).stat().st_size, 65536)
         original = self.wf.host.call
         def lose(*args, **kwargs):
             result = original(*args, **kwargs)
@@ -156,7 +159,10 @@ class ExecutionReportTest(unittest.TestCase):
         view = self.wf.inspect()
         self.wf.reconcile(view['inspection']['sha256'], 'Inspected saved evidence registration')
         with patch.object(self.wf.host, 'call', wraps=self.wf.host.call) as calls:
-            self.wf.finish_report(reviewed['report']['id'], 'Reviewed saved evidence')
+            try:
+                self.wf.finish_report(reviewed['report']['id'], 'Reviewed saved evidence')
+            except CommandFailed as error:
+                self.fail(str(error.result.error))
         self.assertFalse(any(c.args[:2] == ('evidence', 'add') for c in calls.call_args_list))
 
     def test_scope_key_and_legacy_capability_guards(self):
