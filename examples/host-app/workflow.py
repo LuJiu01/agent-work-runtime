@@ -58,7 +58,8 @@ class Workflow:
             raise ValueError('Executable differs from the trusted pinned checksum')
         self.host = Host(binary, sha256, project,
                          self.path.parent / 'receipts' / str(uuid.uuid4()))
-        self.host.discover(version, ['session.checkpoint', 'context.compile', 'evidence.read_write', 'completion.engineering'])
+        catalog = self.host.discover(version, ['session.checkpoint', 'context.compile', 'evidence.read_write', 'completion.engineering'])
+        self.capabilities = {c['id'] for c in catalog['capabilities'] if c['available']}
         with self.guard():
             if self.path.exists():
                 self.state = json.loads(self.path.read_text())
@@ -69,7 +70,8 @@ class Workflow:
                 if status['project_id'] != project_id:
                     raise ValueError('Project identity differs from the selected binding')
                 self.state = dict(version=1, binding=self.binding, session=None, work=None,
-                                  phase='new', context=None, pending=None, history=[])
+                                  phase='new', context=None, pending=None, history=[],
+                                  last_revision=status['project_revision'])
                 self.save()
 
     @contextmanager
@@ -103,6 +105,12 @@ class Workflow:
         if self.state['phase'] != 'active' or not self.state['session']:
             raise ValueError('An active, explicitly selected session is required')
 
+    def revision(self, expected_revision):
+        revision = self.state.get('last_revision') if expected_revision is None else expected_revision
+        if revision is None:
+            raise ValueError('Read current state before choosing an expected revision')
+        return revision  # Optimistic concurrency still rejects intervening writes.
+
     def perform(self, operation, args, value=None):
         self.available()
         self.state['pending'] = dict(id=str(uuid.uuid4()), operation=operation, args=args,
@@ -131,12 +139,12 @@ class Workflow:
         return value, item
 
     @serialized
-    def begin(self, work, agent, provider, model, expected_revision):
+    def begin(self, work, agent, provider, model, expected_revision=None):
         self.available()
         if self.state['phase'] != 'new':
             raise ValueError('Workflow already has a session; inspect or adopt it explicitly')
         value = self.perform('begin', ['session', 'start', '--work', work, '--agent', agent,
-            '--provider', provider, '--model', model, '--claim', '--expected-revision', str(expected_revision)])
+            '--provider', provider, '--model', model, '--claim', '--expected-revision', str(self.revision(expected_revision))])
         return self.completed(value, session=value['session']['id'], work=work, phase='active')
 
     @serialized
@@ -154,27 +162,85 @@ class Workflow:
     @serialized
     def context(self):
         self.active()
+        return self.fetch_context(prepared=False)
+
+    def fetch_context(self, prepared, goals=()):
         self.state['context'] = None
         self.save()
-        result = self.host.call('context', 'compile', '--session', self.state['session'], '--work', self.state['work'])
+        args = (['work', 'prepare', self.state['work']] if prepared else
+                ['context', 'compile', '--work', self.state['work']])
+        args += ['--session', self.state['session']]
+        for goal in goals:
+            args += ['--goal', goal]
+        result = self.host.call(*args)
         value = result.require()
-        if not value['completeness']['complete'] or not value.get('work_context'):
+        context = value['context'] if prepared else value
+        if not context['completeness']['complete'] or not context.get('work_context'):
             raise ValueError('Context is incomplete; do not execute')
+        if (context['session_id'] != self.state['session'] or
+                context['work_context']['identity']['project_id'] != self.binding['project_id'] or
+                self.state['work'] not in (context['work_context']['identity']['work_item_key'],
+                                          context['work_context']['identity']['work_item_id'])):
+            raise ValueError('Prepared context does not match this workflow')
         receipt = json.loads(result.receipt.read_text())
         output = result.receipt.parent / receipt['stdout']
-        self.state['context'] = dict(hash=value['work_context']['context_hash'], output=str(output),
-                                    sha256=digest(output), revision=value['project_revision'], acknowledged=False)
+        self.state['context'] = dict(hash=context['work_context']['context_hash'], output=str(output),
+                                    sha256=digest(output), revision=value['project_revision'],
+                                    prepared=prepared, acknowledged=False)
+        self.state['last_revision'] = value['project_revision']
         self.save()
         return value  # Full rendered context must actually reach the caller.
+
+    @serialized
+    def prepare(self, observation=None, goals=()):
+        """Fresh preparation on every call; never cache context or invent observations."""
+        self.active()
+        if 'workflow.prepare' not in self.capabilities:
+            return dict(context=self.fetch_context(False, goals), workflow_path='legacy',
+                        management_available=False, observation_recorded=False)
+        value = self.fetch_context(True, goals)
+        value['workflow_path'] = 'prepared'
+        value['observation_recorded'] = False
+        assessment = value['management']
+        # An explicit new observation is recorded even when the contract is unchanged.
+        # With no new observation, only a runtime-requested reassessment is persisted.
+        if 'work.management' in self.capabilities:
+            selected = observation if observation is not None else assessment['observation']
+            if selected is not None and (observation is not None or assessment['record_required']):
+                request = dict(work=self.state['work'], session=self.state['session'],
+                               expected_revision=value['project_revision'], request_key=str(uuid.uuid4()),
+                               contract_fingerprint=assessment['contract_fingerprint'], observation=selected)
+                recorded = self.perform('manage', ['work', 'manage'], request)
+                self.completed(recorded)
+                value.update(management=recorded['assessment'], observation_recorded=True,
+                             project_revision=recorded['project_revision'])
+        value['management_available'] = 'work.management' in self.capabilities
+        return value
+
+    @serialized
+    def progress(self, reason, next_action, expected_revision=None):
+        self.active()
+        self.require_consumed()
+        value = self.perform('progress', ['work', 'progress', self.state['work'],
+            '--session', self.state['session'], '--reason', reason, '--next-action', next_action,
+            '--expected-revision', str(self.revision(expected_revision))])
+        return self.completed(value)
 
     def delivered(self, consumed_hash):
         context = self.state.get('context')
         if not context or context['hash'] != consumed_hash or digest(context['output']) != context['sha256']:
             raise ValueError('Hash does not identify this workflow\'s intact delivered context')
         value = json.loads(Path(context['output']).read_text())
+        if context.get('prepared'):
+            value = value['context']
         if value['session_id'] != self.state['session'] or value['work_context']['context_hash'] != consumed_hash:
             raise ValueError('Delivered context/session mismatch')
         return context
+
+    def require_consumed(self):
+        context = self.state.get('context')
+        if not context or not self.delivered(context['hash'])['acknowledged']:
+            raise ValueError('Consume and acknowledge context before continuing work')
 
     @serialized
     def acknowledge(self, consumed_hash):
@@ -186,26 +252,27 @@ class Workflow:
         return context
 
     @serialized
-    def checkpoint(self, consumed_hash, digest_text, next_action, expected_revision):
+    def checkpoint(self, consumed_hash, digest_text, next_action, expected_revision=None):
         self.active()
         if not self.delivered(consumed_hash)['acknowledged']:
             raise ValueError('Explicit consumption acknowledgement is required before checkpointing')
         value = self.perform('checkpoint', ['session', 'checkpoint', '--session', self.state['session'],
             '--context-hash', consumed_hash, '--digest', digest_text, '--next-action', next_action,
-            '--expected-revision', str(expected_revision)])
+            '--expected-revision', str(self.revision(expected_revision))])
         return self.completed(value, checkpoint=value['checkpoint']['id'])
 
     @serialized
-    def evidence(self, draft, expected_revision):
+    def evidence(self, draft, expected_revision=None):
         self.active()
         if draft.get('work_item_key') != self.state['work']:
             raise ValueError('Evidence must reference the selected work item')
-        value = self.perform('evidence', ['evidence', 'add', '--expected-revision', str(expected_revision)], draft)
+        value = self.perform('evidence', ['evidence', 'add', '--expected-revision', str(self.revision(expected_revision))], draft)
         return self.completed(value)
 
     @serialized
-    def finish(self, completion, reason, expected_revision):
+    def finish(self, completion, reason, expected_revision=None):
         self.available()
+        expected_revision = self.revision(expected_revision)
         if self.state['phase'] == 'active':
             context = self.state.get('context')
             if not context or not self.delivered(context['hash'])['acknowledged']:
@@ -266,24 +333,31 @@ def main():
     begin = sub.add_parser('begin')
     for key in ('work','agent','provider','model'):
         begin.add_argument('--'+key, required=True)
-    begin.add_argument('--expected-revision', type=int, required=True)
+    begin.add_argument('--expected-revision', type=int)
     adopt = sub.add_parser('adopt')
     for key in ('session','work'):
         adopt.add_argument('--'+key, required=True)
     sub.add_parser('context')
+    prepare = sub.add_parser('prepare')
+    prepare.add_argument('--observation', help='JSON file with explicit host observations')
+    prepare.add_argument('--goal', dest='goals', action='append', default=[])
+    progress = sub.add_parser('progress')
+    progress.add_argument('--reason', required=True)
+    progress.add_argument('--next-action', required=True)
+    progress.add_argument('--expected-revision', type=int)
     ack = sub.add_parser('ack')
     ack.add_argument('--consumed-hash', required=True)
     checkpoint = sub.add_parser('checkpoint')
     for key in ('consumed-hash','digest','next-action'):
         checkpoint.add_argument('--'+key, required=True)
-    checkpoint.add_argument('--expected-revision', type=int, required=True)
+    checkpoint.add_argument('--expected-revision', type=int)
     evidence = sub.add_parser('evidence')
     evidence.add_argument('--input', required=True)
-    evidence.add_argument('--expected-revision', type=int, required=True)
+    evidence.add_argument('--expected-revision', type=int)
     finish = sub.add_parser('finish')
     finish.add_argument('--input', required=True)
     finish.add_argument('--reason', required=True)
-    finish.add_argument('--expected-revision', type=int, required=True)
+    finish.add_argument('--expected-revision', type=int)
     inspect = sub.add_parser('inspect')
     inspect.add_argument('--session'); inspect.add_argument('--work')
     reconcile = sub.add_parser('reconcile')
@@ -294,6 +368,8 @@ def main():
     wf = Workflow(args.pop('binary'),args.pop('sha256'),args.pop('version'),args.pop('project'),args.pop('project_id'),args.pop('state'))
     if 'input' in args:
         args['draft' if command == 'evidence' else 'completion'] = json.loads(Path(args.pop('input')).read_text())
+    if command == 'prepare' and args['observation'] is not None:
+        args['observation'] = json.loads(Path(args['observation']).read_text())
     if command == 'checkpoint': args['digest_text'] = args.pop('digest')
     value = getattr(wf, 'acknowledge' if command == 'ack' else command)(**args)
     print(json.dumps(value, ensure_ascii=False, indent=2))

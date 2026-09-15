@@ -99,3 +99,77 @@ class WorkflowTest(unittest.TestCase):
         self.assertEqual(adopted['session']['id'],self.session)
         self.assertIsNone(other.state['context'])
         with self.assertRaises(ValueError):other.acknowledge('a'*64)
+
+    def observation(self, **changes):
+        return dict(observed_at=time.time_ns()//1000000, note='Host reviewed the fixture scope',
+                    **dict(dict(single_outcome=True, bounded_scope=True, single_executor=True,
+                                no_deferred_wait=True, independently_schedulable_units=1,
+                                plan_valid=True, outcome_known=True), **changes))
+
+    def test_preparation_reuses_management_but_always_delivers_fresh_context(self):
+        self.wf.begin('W','writer','fixture','no-model')
+        unknown=self.wf.prepare()
+        self.assertEqual(unknown['management']['decision']['mode'],'undetermined')
+        self.assertFalse(unknown['observation_recorded'])
+        first=self.wf.prepare(self.observation())
+        self.assertTrue(first['observation_recorded'])
+        self.assertEqual(first['management']['decision']['mode'],'lightweight')
+        h=first['context']['work_context']['context_hash']
+        with self.assertRaises(ValueError): self.wf.progress('Review','Deliver')
+        self.wf.acknowledge(h)
+        try:
+            self.wf.progress('Read the required context','Deliver the reviewed guide')
+        except CommandFailed as error:
+            self.fail(str(error.result.error))
+        with patch.object(self.wf.host,'call',wraps=self.wf.host.call) as calls:
+            second=self.wf.prepare()
+        self.assertEqual(calls.call_count,1)
+        self.assertEqual(calls.call_args.args[:2],('work','prepare'))
+        self.assertFalse(second['observation_recorded'])
+        self.assertEqual(second['management']['decision']['mode'],'lightweight')
+        self.assertFalse(self.wf.state['context']['acknowledged'])
+        self.assertIn('Reviewed guide',second['context']['work_context']['rendered_context'])
+
+    def test_new_observations_upgrade_without_downgrade_or_inferred_facts(self):
+        self.wf.begin('W','writer','fixture','no-model')
+        self.wf.prepare(self.observation())
+        upgraded=self.wf.prepare(self.observation(no_deferred_wait=False))
+        self.assertEqual(upgraded['management']['decision']['mode'],'continuous')
+        retained=self.wf.prepare(self.observation())
+        self.assertEqual(retained['management']['decision']['mode'],'continuous')
+        source=self.root/'work.yaml'
+        source.write_text(source.read_text().replace('Reviewed guide','Reviewed complete guide'))
+        changed=self.wf.prepare()
+        self.assertIsNone(changed['management']['observation'])
+        self.assertTrue(changed['management']['record_required'])
+        self.assertIn('Reviewed complete guide',changed['context']['work_context']['rendered_context'])
+
+    def test_legacy_preparation_fallback_is_chosen_before_writing(self):
+        self.wf.begin('W','writer','fixture','no-model')
+        self.wf.capabilities.discard('workflow.prepare')
+        with patch.object(self.wf.host,'call',wraps=self.wf.host.call) as calls:
+            result=self.wf.prepare(self.observation())
+        self.assertEqual(result['workflow_path'],'legacy')
+        self.assertFalse(result['observation_recorded'])
+        self.assertEqual(calls.call_count,1)
+        self.assertEqual(calls.call_args.args[:2],('context','compile'))
+        self.wf.acknowledge(result['context']['work_context']['context_hash'])
+        self.wf.checkpoint(self.wf.state['context']['hash'],'Reviewed','Deliver')
+
+    def test_unknown_management_result_is_never_replayed_or_fallback_written(self):
+        self.wf.begin('W','writer','fixture','no-model')
+        original=self.wf.host.call
+        def lose(*args, **kwargs):
+            result=original(*args,**kwargs)
+            if args[:2]==('work','manage'):
+                result.require()
+                return Result(None,b'',b'',result.receipt,True)
+            return result
+        with patch.object(self.wf.host,'call',side_effect=lose) as calls:
+            with self.assertRaises(CommandFailed):self.wf.prepare(self.observation())
+            self.assertEqual(calls.call_count,2)
+        reopened=self.open_workflow('workflow/state.json')
+        with self.assertRaises(ValueError):reopened.prepare(self.observation())
+        view=reopened.inspect()
+        reopened.reconcile(view['inspection']['sha256'],'Observed the recorded assessment; no replay')
+        self.assertFalse(reopened.prepare()['observation_recorded'])

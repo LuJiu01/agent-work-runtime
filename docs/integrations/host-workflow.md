@@ -36,3 +36,32 @@ so apparent savings cannot come from removing initialization or negative checks
 from the accounting. Measure lightweight and continuous workflows against the
 same acceptance conditions. Tool-return bytes do not establish model-token or
 billing savings.
+
+## Prepare through the host
+
+`Workflow.prepare(observation=None, goals=())` negotiates `workflow.prepare` and
+`work.management` from the pinned program's capability catalog. It calls
+`work prepare` when available and returns full context, readiness, continuity and
+management facts together. Older programs use `context compile`; the result
+explicitly reports that management observations were not recorded.
+
+Provide an observation only after the host has checked those facts. Unknown
+fields remain absent or null. With no new observation, a matching assessment is
+left alone unless AWR requests a new record. Explicit new observations are always
+recorded, including a newly discovered wait or additional executor. Each call
+fetches fresh context and resets its acknowledgement, even when no new management
+record is necessary.
+
+```python
+prepared = workflow.prepare(observation=observed_facts, goals=["G"])
+context = prepared["context"]
+# Deliver context to the agent and consume the returned rendered_context first.
+workflow.acknowledge(context["work_context"]["context_hash"])
+workflow.progress("Reviewed the required context", "Implement the change")
+```
+
+Lifecycle methods can use the workflow's last observed revision when
+`expected_revision` is omitted. This removes repeated argument assembly, not
+concurrency checks: another writer can still cause `RevisionConflict`. Inspect
+and explicitly reconcile that result before proceeding. The original `context`,
+`evidence` and `finish` entry points remain available.
