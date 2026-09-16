@@ -1,0 +1,26 @@
+# One file per machine, at the project root. Copy it and change `root` and
+# `host`; everything else is the same for the whole team.
+#
+# Credentials are never in this file - it is portable and may be committed.
+# Store them per machine instead:
+#   awr workspace credential set --stdin
+# or set AWR_WORKSPACE_ACCESS_KEY and AWR_WORKSPACE_SECRET_KEY.
+#
+#   awr workspace status    # what differs from the workspace
+#   awr workspace publish   # send this host's tracked files
+#   awr workspace sync      # take the peer's files and handoffs
+
+[project]
+key   = "my-project"                    # same on every host; the store prefix
+root  = "/absolute/path/to/project"     # this machine's project root
+host  = "alice-laptop"                  # unique per machine
+track = ["work-ledger.yaml", "infra/evidence", "infra/scripts"]
+# state = ".awr/workspace.json"         # default; relative to this file
+
+[store]
+endpoint = "https://<account-id>.r2.cloudflarestorage.com"
+bucket   = "my-workspace"
+# region     = "cn-beijing"   # Aliyun OSS needs its real region; R2 keeps "auto"
+# addressing = "virtual"      # Aliyun OSS public endpoints refuse path-style
+# prefix     = "team-a"       # when several projects share one bucket
+# path       = "/tmp/store"   # a directory instead of an object store, for tests

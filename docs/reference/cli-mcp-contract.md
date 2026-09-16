@@ -98,7 +98,7 @@ CLI 普通输出面向人阅读：默认列出有界摘要，状态页最多显�
 
 输入 JSON 语法或字段错误返回 `InvalidInput`，不冒充内部序列化错误。若同时存在多个错误，两端的参数解析与文件读取顺序可能不同；修正首个错误后再继续，不依赖多重故障的报错先后顺序。
 
-核心错误保留 `NotFound`、`SourceUnavailable`、`SourceStale`、`SourceConflict`、`RevisionConflict`、`DependencyBlocked`、`ClaimConflict`、`RuleViolation`、`EvidenceMissing`、`MutationUnsupported`、`MutationConflict`、`ContextIncomplete`、`BudgetExceeded`、`InvalidTransition`。`InvalidInput`、`Unsupported`、`Storage`、`Io`、`Json` 表示输入、实现或底层错误。提案 / 恢复错误还可能包括 `proposal_required`、`MutationIncomplete`、`WorkActionIncomplete`、`CheckpointIncomplete`，其中附带的提案或尝试 ID 是恢复入口。
+`WorkspaceConflict` 只来自 `awr workspace`：两端都改过同一个被跟踪文件，工具不自动合并，本地文件保持原样。`WorkspaceContended` 是另一种情形——一次 `publish` 或 `drop` 连续三次提交都被对端抢先，此时没有任何路径被改写，补救是再执行一次同一命令，不需要调解，也不需要读消息来区分。核心错误保留 `NotFound`、`SourceUnavailable`、`SourceStale`、`SourceConflict`、`RevisionConflict`、`DependencyBlocked`、`ClaimConflict`、`RuleViolation`、`EvidenceMissing`、`MutationUnsupported`、`MutationConflict`、`WorkspaceConflict`、`WorkspaceContended`、`ContextIncomplete`、`BudgetExceeded`、`InvalidTransition`。`InvalidInput`、`Unsupported`、`Storage`、`Io`、`Json` 表示输入、实现或底层错误。提案 / 恢复错误还可能包括 `proposal_required`、`MutationIncomplete`、`WorkActionIncomplete`、`CheckpointIncomplete`，其中附带的提案或尝试 ID 是恢复入口。
 
 发现部分写入或通信中断时先检查提案、事件、会话与当前版本，再决定下一步；不能看到进程失败就盲目重试写入。MCP 进程无法绑定项目或协议本身损坏时属于启动 / 协议错误，没有可以读取的领域 `CallToolResult`。
 

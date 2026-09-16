@@ -223,6 +223,13 @@ Installation preserves existing hooks and never approves their trust automatical
 Verify actual trigger delivery in the receiving client; configuration presence and
 synthetic receiver checks alone are insufficient evidence of native activation.
 
+If the project root holds a `remote_workspace.toml`, the `SessionStart` receiver
+also takes what the other machines published before it renders the context, and
+names the paths it moved. That step never fails the session. It pulls, and it
+re-registers only the index entries this host already published that later
+dropped out; it never publishes half-finished local work:
+see the [exchange plane](../reference/workspace-exchange.md#会话开始时的自动取回).
+
 Use the [executable lifecycle example](../../examples/codex/README.md) to check
 AWR behavior on a disposable project. Native MCP and hook activation must be
 verified in the actual receiving client. Configuration presence, synthetic

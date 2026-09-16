@@ -33,6 +33,7 @@ mod work_action;
 mod work_create;
 mod work_edit;
 mod work_prepare;
+mod workspace;
 
 #[derive(Debug, Parser)]
 #[command(
@@ -190,6 +191,8 @@ enum Command {
     },
     /// Diagnose project/database state; apply only explicitly selected runtime repairs.
     Doctor(doctor::DoctorArgs),
+    /// Share tracked project files between machines through an object store.
+    Workspace(workspace::WorkspaceArgs),
     #[command(external_subcommand)]
     Unsupported(Vec<String>),
 }
@@ -258,6 +261,7 @@ fn run(cli: &Cli) -> Result<()> {
         Some(Command::Proposal { command }) => mutation::run(&cli.project, command, cli.json),
         Some(Command::Branch { command }) => branch::run(&cli.project, command, cli.json),
         Some(Command::Doctor(args)) => doctor::run(&cli.project, args, cli.json),
+        Some(Command::Workspace(args)) => workspace::run(&cli.project, args, cli.json),
         None => {
             Cli::command().print_help()?;
             println!();
