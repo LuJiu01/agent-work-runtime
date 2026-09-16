@@ -429,6 +429,32 @@ fn catalog() -> Vec<Capability> {
             ],
         ),
         (
+            "workflow.action_guidance",
+            true,
+            &["work prepare --response-view action"],
+            &[
+                "one_conditional_action",
+                "guidance_max_1024_bytes",
+                "required_context_preserved",
+                "full_and_summary_compatible",
+            ],
+        ),
+        (
+            "client.compaction",
+            true,
+            &[
+                "session compaction observe",
+                "session compaction inspect",
+                "session compaction defer",
+            ],
+            &[
+                "host_reported_completed_compaction",
+                "unknown_metrics_preserved",
+                "native_compaction_unchanged",
+                "no_automatic_session_switch",
+            ],
+        ),
+        (
             "work.management",
             true,
             &["work assess", "work manage"],

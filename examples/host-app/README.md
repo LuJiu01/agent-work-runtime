@@ -49,6 +49,13 @@ timeout outcomes without replaying commands.
 
 ## Explicit work workflow
 
+Preparation's command-line default is now `--response-view action`, negotiated
+through the pinned binary's capabilities. Python callers can use
+`workflow.prepare(response_view="action")`. Hosts can report completed native
+compactions with `observe_compaction`, inspect with `compaction`, and record a
+user's postponement with `defer_compaction`. These never create a native session;
+see the [measurement and guidance contract](../../docs/integrations/context-continuity.md).
+
 `workflow.py` is a reusable thin caller for ordinary engineering work. It uses the
 same `Host` pin checks, argv, public domain commands, and private receipts. It adds
 an OS-locked, atomically saved workflow state with a pinned executable checksum,

@@ -343,6 +343,30 @@ fn native_hook(root: &Path, client: &str, work: &str) -> Result<Value> {
             "client event belongs to a different project".into(),
         ));
     }
+    // An opt-in normalized host envelope, not fields assumed to exist in native hooks.
+    #[derive(serde::Deserialize)]
+    #[serde(deny_unknown_fields)]
+    struct CompactionInput {
+        observation: CompactionObservation,
+        #[serde(default)]
+        policy: CompactionPolicy,
+    }
+    let compaction: Option<CompactionInput> = input
+        .get("awr_compaction")
+        .map(|value| {
+            serde_json::from_value(value.clone())
+                .map_err(|_| Error::InvalidInput("invalid awr_compaction host envelope".into()))
+        })
+        .transpose()?;
+    if let Some(c) = &compaction {
+        if event != "PostCompact" {
+            return Err(Error::InvalidInput(
+                "awr_compaction is valid only after PostCompact".into(),
+            ));
+        }
+        c.observation.validate(now_millis()?)?;
+        c.policy.validate()?;
+    }
     let _lock = lock(root, "clients", &format!("{client}:{external}"))?;
     let mut db = QueryProject::open(root)?;
     let project = db.project.id;
@@ -352,6 +376,21 @@ fn native_hook(root: &Path, client: &str, work: &str) -> Result<Value> {
         field("model")
     };
     let mut binding = new_binding(root, &mut db, client, external, work, None, None, model)?;
+    let compaction = compaction
+        .map(|c| {
+            let expected_revision = db.store.project(project)?.project_revision;
+            awr_runtime::observe_compaction(
+                &mut db.store,
+                root,
+                &awr_runtime::ObserveCompactionRequest {
+                    session: binding.session_id,
+                    expected_revision,
+                    observation: c.observation,
+                    policy: c.policy,
+                },
+            )
+        })
+        .transpose()?;
     if matches!(event, "SessionStart" | "PostCompact") {
         let session = db.store.session(project, binding.session_id)?;
         let pack = bootstrap(
@@ -387,6 +426,14 @@ fn native_hook(root: &Path, client: &str, work: &str) -> Result<Value> {
             "{continuity}\n{}",
             awr_runtime::render_execution_observations(&executions)?
         );
+        let continuity = if let Some(c) = &compaction {
+            format!(
+                "{continuity}\nAction guidance: {}",
+                serde_json::to_string(&c["guidance"])?
+            )
+        } else {
+            continuity
+        };
         let total_tokens = awr_context::token_count(&continuity);
         if total_tokens > 10000 {
             return Err(Error::BudgetExceeded {
@@ -394,9 +441,13 @@ fn native_hook(root: &Path, client: &str, work: &str) -> Result<Value> {
                 budget: 10000,
             });
         }
-        return Ok(
-            json!({"continue":true,"hookSpecificOutput":{"hookEventName":event,"additionalContext":continuity},"awr":{"binding":binding,"context_ready":pack.context.complete,"checkpoint_saved":false,"executions":executions,"additional_context_tokens":total_tokens}}),
-        );
+        let mut result = json!({"continue":true,"hookSpecificOutput":{"hookEventName":event,"additionalContext":continuity},"awr":{"binding":binding,"context_ready":pack.context.complete,"checkpoint_saved":false,"executions":executions,"additional_context_tokens":total_tokens}});
+        if let Some(mut c) = compaction {
+            // The instruction is already in additionalContext; do not duplicate it in metadata.
+            c.as_object_mut().unwrap().remove("guidance");
+            result["awr"]["compaction"] = c;
+        }
+        return Ok(result);
     }
     // Stable native turn IDs deduplicate repeats. Events without IDs also bind their observed
     // source fingerprints, persisted progress and non-checkpoint work revision.

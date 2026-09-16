@@ -70,6 +70,7 @@ pub(crate) fn is_read_only(name: &str) -> bool {
             | "awr_session_get"
             | "awr_session_list"
             | "awr_operation_get"
+            | "awr_compaction_get"
     )
 }
 
@@ -81,13 +82,17 @@ pub(crate) fn call_as(
 ) -> Result<CallToolResult> {
     let view = args.remove("response_view");
     let supported = matches!(name, "awr_work_prepare" | "awr_work_transition");
+    let action =
+        view.as_ref().and_then(Value::as_str) == Some("action") && name == "awr_work_prepare";
     let summary = match view.as_ref() {
         None => false,
         Some(Value::String(view)) if supported && view == "full" => false,
         Some(Value::String(view)) if supported && view == "summary" => true,
+        Some(Value::String(_)) if action => false,
         _ => {
             return Err(Error::InvalidInput(
-                "response_view requires full or summary on a supported work tool".into(),
+                "response_view requires full/summary on a work tool, or action on awr_work_prepare"
+                    .into(),
             ));
         }
     };
@@ -97,11 +102,18 @@ pub(crate) fn call_as(
         ));
     }
     let full_arguments = args.clone();
+    if action {
+        args.insert("response_view".into(), json!("action"));
+    }
     // Presentation is outside the durable request identity and domain execution.
     let mut result = call_as_full(root, name, args, principal)?;
-    if summary && result.is_error != Some(true) {
+    if (summary || action) && result.is_error != Some(true) {
         if let Some(value) = result.structured_content.take() {
-            let mut value = awr_runtime::summarize_work_response(value);
+            let mut value = if summary {
+                awr_runtime::summarize_work_response(value)
+            } else {
+                value
+            };
             if value.get("response_view").is_some() {
                 value["response_view"]["full_result"] = if name == "awr_work_transition" {
                     json!({"tool":"awr_operation_get","arguments":{"request_id":full_arguments["request_id"]},"basis":"same client and project; recorded full result"})
@@ -175,7 +187,9 @@ fn call_as_full(
         }
     }
     let apply = |args| {
-        if crate::lifecycle::NAMES.contains(&name) {
+        if crate::compaction::NAMES.contains(&name) {
+            crate::compaction::call(root, name, Value::Object(args))
+        } else if crate::lifecycle::NAMES.contains(&name) {
             crate::lifecycle::call(root, name, Value::Object(args), client)
         } else if matches!(
             name,
@@ -193,7 +207,9 @@ fn call_as_full(
     }
 }
 
-pub(crate) fn call(root: &Path, name: &str, args: JsonObject) -> Result<CallToolResult> {
+pub(crate) fn call(root: &Path, name: &str, mut args: JsonObject) -> Result<CallToolResult> {
+    let action =
+        name == "awr_work_prepare" && args.remove("response_view") == Some(json!("action"));
     let args = Value::Object(args);
     if serde_json::to_vec(&args)?.len() > 1024 * 1024 {
         return Err(Error::InvalidInput("tool arguments exceed 1 MiB".into()));
@@ -234,7 +250,15 @@ pub(crate) fn call(root: &Path, name: &str, args: JsonObject) -> Result<CallTool
         "awr_work_ready" => ready(&view, parse(args)?)?,
         "awr_work_get" => work(&view, parse(args)?)?,
         "awr_context_compile" => context(&mut view, root, parse(args)?)?,
-        "awr_work_prepare" => awr_runtime::prepare_work(&mut view.store, root, &parse(args)?)?,
+        "awr_work_prepare" => {
+            let request: awr_runtime::PrepareWorkRequest = parse(args)?;
+            let prepared = awr_runtime::prepare_work(&mut view.store, root, &request)?;
+            if action {
+                awr_runtime::guide_prepared_work(&view.store, root, prepared, request.session)?
+            } else {
+                prepared
+            }
+        }
         "awr_completion_prepare" => {
             awr_runtime::prepare_completion(&view.store, root, &parse(args)?)?
         }

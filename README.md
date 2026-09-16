@@ -122,6 +122,12 @@ AWR can supervise commands it launches and bind supported client lifecycle event
 Restoring an arbitrary existing process or the private memory of a native client
 requires that client's cooperation.
 
+The current source also supports [native-compaction observations and precise
+action guidance](docs/integrations/context-continuity.md). Keep native compaction
+enabled, report actual post-compaction occupancy, and prepare a user-approved
+handoff when appropriate. `work prepare --response-view action` returns one
+bounded conditional instruction while preserving required context.
+
 ## Contribute
 
 See [CONTRIBUTING.md](CONTRIBUTING.md) for build and test commands. Public examples

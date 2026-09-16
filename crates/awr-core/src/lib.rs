@@ -39,5 +39,9 @@ pub fn now_millis() -> Result<i64> {
 
 mod client;
 pub use client::ClientBinding;
+mod compaction;
+pub use compaction::*;
+mod guidance;
+pub use guidance::*;
 mod ordinary;
 pub use ordinary::*;

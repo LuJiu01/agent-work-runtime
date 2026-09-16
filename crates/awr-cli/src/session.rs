@@ -33,6 +33,9 @@ impl From<Outcome> for SessionOutcome {
 
 #[derive(Debug, Subcommand)]
 pub enum SessionCommand {
+    /// Observe native compaction and assess continuity without opening a session.
+    #[command(subcommand)]
+    Compaction(crate::compaction::CompactionCommand),
     /// Refresh current facts and continue work in a new agent/provider/model session.
     Resume(crate::resume::ResumeArgs),
     /// Refresh sources and start a session at the supplied project revision.
@@ -253,6 +256,9 @@ fn print(value: &Value, text: &str, json_output: bool) -> Result<()> {
 }
 
 pub fn run(root: &Path, command: &SessionCommand, json_output: bool) -> Result<()> {
+    if let SessionCommand::Compaction(command) = command {
+        return crate::compaction::run(root, command, json_output);
+    }
     if let SessionCommand::Resume(args) = command {
         return crate::resume::run(root, args, json_output);
     }
@@ -263,7 +269,7 @@ pub fn run(root: &Path, command: &SessionCommand, json_output: bool) -> Result<(
     let mut db = RuntimeProject::open(root, refresh)?;
     let project = db.project.id;
     match command {
-        SessionCommand::Resume(_) => unreachable!(),
+        SessionCommand::Resume(_) | SessionCommand::Compaction(_) => unreachable!(),
         SessionCommand::Start {
             work,
             agent,

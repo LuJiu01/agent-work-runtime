@@ -42,7 +42,7 @@ python scripts/release/smoke_install.py .local/distribution-001
 
 Each run uses a new output directory. The installation check uses isolated pip/npm
 installs, verifies both native versions and errors, initializes a Unicode project,
-compiles task context, checks intake diagnosis and verifies the exact 29-tool stdio
+compiles task context, checks intake diagnosis and verifies the exact 32-tool stdio
 MCP catalog. Shared HTTP exposes 30 tools, including project discovery. Previously
 published versions retain their release catalog.
 These are installation checks, not proof of every real-agent business scenario.

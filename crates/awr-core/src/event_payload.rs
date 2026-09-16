@@ -151,6 +151,8 @@ fn domain_fields(kind: &str, payload: &Value) -> Result<()> {
         "action actor expected_revision from intent proposal_id proposal_revision reason source_id target_id target_key target_kind to work_action"
     } else {
         match kind {
+            "client.compaction_observed" => "observation policy",
+            "client.compaction_deferred" => "observation_event_id",
             "management.assessed" => "version request_key input observer assessment",
             "mcp.operation_started" | "mcp.operation_finished" | "mcp.operation_recovered" => {
                 "operation"
@@ -205,6 +207,8 @@ fn domain_fields(kind: &str, payload: &Value) -> Result<()> {
     // These non-null receipt fields anchor the event to the operation that produced it.
     // Optional fields and nested snapshots still come from the typed domain constructors.
     let required = match kind {
+        "client.compaction_observed" => "observation policy",
+        "client.compaction_deferred" => "observation_event_id",
         "management.assessed" => "version request_key input observer assessment",
         "mcp.operation_started" | "mcp.operation_finished" | "mcp.operation_recovered" => {
             "operation"
@@ -276,6 +280,13 @@ fn domain_fields(kind: &str, payload: &Value) -> Result<()> {
             continue;
         }
         let valid = match key.as_str() {
+            "observation" if kind == "client.compaction_observed" => {
+                serde_json::from_value::<crate::CompactionObservation>(value.clone()).is_ok()
+            }
+            "policy" if kind == "client.compaction_observed" => {
+                serde_json::from_value::<crate::CompactionPolicy>(value.clone())
+                    .is_ok_and(|p| p.validate().is_ok())
+            }
             "version" if kind == "management.assessed" => value.as_u64() == Some(1),
             "input" if kind == "management.assessed" => {
                 value.is_object()

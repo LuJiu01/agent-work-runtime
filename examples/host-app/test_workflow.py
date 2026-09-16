@@ -106,6 +106,36 @@ class WorkflowTest(unittest.TestCase):
                                 no_deferred_wait=True, independently_schedulable_units=1,
                                 plan_valid=True, outcome_known=True), **changes))
 
+    def test_compaction_and_guided_preparation_use_the_bound_session_without_model_calls(self):
+        self.begin()
+        native = dict(compaction_id='fixture-compact-1', sequence=1, observed_at=time.time_ns()//1000000,
+                      trigger='automatic', model='fixture-model', source='fixture.full_request',
+                      measurement_scope='full_request', measurement_basis='host_reported',
+                      before_tokens=230000, after_tokens=180000, context_window_tokens=256000)
+        observed = self.wf.observe_compaction(native)
+        self.assertEqual(observed['state'], 'handoff_candidate')
+        self.assertFalse(observed['session_switch_performed'])
+        self.assertEqual(observed['session'], self.session)
+        self.assertIsNone(self.wf.compaction(True)['observation']['usage'])
+        with patch.object(self.wf.host, 'call', wraps=self.wf.host.call) as calls:
+            prepared = self.wf.prepare(response_view='action')
+        self.assertEqual(calls.call_count, 1)
+        self.assertEqual(set(prepared['guidance']), {'when', 'basis', 'next_action', 'recheck'})
+        self.assertIn('ask before opening', prepared['guidance']['next_action'])
+        self.assertIn('Reviewed guide', prepared['context']['work_context']['rendered_context'])
+        self.assertEqual(self.wf.defer_compaction(observed['observation_event_id'])['state'], 'deferred')
+        recorded = self.wf.prepare(self.observation(), response_view='action')
+        self.assertTrue(recorded['observation_recorded'])
+        self.assertFalse(recorded['management']['record_required'])
+        self.assertNotIn('record known observations', recorded['guidance']['next_action'])
+        self.wf.acknowledge(recorded['context']['work_context']['context_hash'])
+        with self.assertRaises(ValueError):
+            self.wf.progress('Reviewed context', 'Deliver', response_view='action')
+        self.wf.capabilities.discard('workflow.action_guidance')
+        fallback = self.wf.prepare(response_view='action')
+        self.assertEqual(fallback['response_view']['view'], 'summary')
+        self.assertEqual(self.wf.state['session'], self.session)
+
     def test_preparation_reuses_management_but_always_delivers_fresh_context(self):
         self.wf.begin('W','writer','fixture','no-model')
         unknown=self.wf.prepare()

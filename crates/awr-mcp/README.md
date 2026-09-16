@@ -119,6 +119,13 @@ revisions, not a calculated increment. See the [recovery contract](../../docs/re
 
 ## Session and continuity tools
 
+The current source adds `awr_compaction_observe`, `awr_compaction_get` and
+`awr_compaction_defer`, with the same per-client session binding and request
+recovery rules. Native host measurements are explicit and missing data remains
+unknown. Prefer `awr_work_prepare` with `response_view: "action"` for one bounded
+instruction; required context and existing completion gates remain. See the
+[compaction and guidance contract](../../docs/integrations/context-continuity.md).
+
 | Tool | Purpose |
 | --- | --- |
 | `awr_session_start` | Bind a host conversation to a work session and optionally claim work. |

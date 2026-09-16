@@ -17,8 +17,8 @@ pub struct PrepareArgs {
     source_sha: Option<String>,
     #[arg(long)]
     budget: Option<usize>,
-    /// Omit duplicate context indexes; required rendered context remains complete.
-    #[arg(long, default_value = "full", value_parser = ["full", "summary"])]
+    /// Summary omits duplicate indexes; action adds one bounded conditional instruction.
+    #[arg(long, default_value = "full", value_parser = ["full", "summary", "action"])]
     response_view: String,
 }
 #[derive(Debug, Args)]
@@ -48,10 +48,17 @@ fn output(mut value: Value, query: &crate::query::QueryProject, json_output: boo
     if json_output {
         println!("{}", serde_json::to_string_pretty(&value)?);
     } else {
-        println!(
-            "Stage: {}\nNext action: {}",
-            value["stage"], value["next_action"]
-        );
+        if let Some(g) = value.get("guidance") {
+            println!(
+                "Stage: {}\nWhen: {}\nBasis: {}\nNext: {}\nRecheck: {}",
+                value["stage"], g["when"], g["basis"], g["next_action"], g["recheck"]
+            );
+        } else {
+            println!(
+                "Stage: {}\nNext action: {}",
+                value["stage"], value["next_action"]
+            );
+        }
         if let Some(context) = value["context"]["work_context"]["rendered_context"].as_str() {
             println!("{context}");
             if let Some(management) = value.get("management") {
@@ -84,10 +91,15 @@ pub fn prepare(root: &Path, args: &PrepareArgs, json_output: bool) -> Result<()>
             budget: args.budget,
         },
     )?;
-    if args.response_view == "summary" {
+    if args.response_view == "action" {
+        value = awr_runtime::guide_prepared_work(&query.store, root, value, args.session)?;
+    }
+    if args.response_view != "full" {
         // Metadata and completeness are checked by output for both views.
         value["ok"] = json!(value["context"]["completeness"]["complete"] == true);
-        value = awr_runtime::summarize_work_response(value);
+        if args.response_view == "summary" {
+            value = awr_runtime::summarize_work_response(value);
+        }
         if value.get("response_view").is_some() {
             value["response_view"]["full_result"] = json!({"command":"work prepare","work":args.work,"session":args.session,"branch":args.branch,"goals":args.goal,"source_sha":args.source_sha,"budget":args.budget,"response_view":"full","basis":"fresh query; compare project_revision and context_hash"});
         }
