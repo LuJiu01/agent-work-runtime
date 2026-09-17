@@ -60,6 +60,8 @@ pub struct StoreConfig {
     pub addressing: Addressing,
     pub prefix: String,
     pub concurrency: usize,
+    /// When true, non-loopback `http://` endpoints are accepted. Default false.
+    pub allow_insecure: bool,
     /// The directory a `local` store uses. Test suites and a single writer.
     pub path: Option<PathBuf>,
 }
@@ -148,6 +150,8 @@ struct RawStore {
     addressing: Option<String>,
     prefix: Option<String>,
     concurrency: Option<usize>,
+    #[serde(default)]
+    allow_insecure: bool,
     path: Option<String>,
     // Declared only so their use is refused with a message that says where
     // credentials do belong. A config is portable and often committed, so a key
@@ -251,18 +255,14 @@ pub fn parse(text: &str, path: &Path, project_root: &Path) -> Result<WorkspaceCo
     let base = path.parent().unwrap_or_else(|| Path::new("."));
     // A hand-edited config routinely carries a stray space; an endpoint is a
     // URL, so whitespace is never part of it.
+    let allow_insecure = store.allow_insecure;
     let endpoint = store
         .endpoint
         .as_deref()
         .map(str::trim)
         .filter(|value| !value.is_empty())
-        .map(|value| {
-            if value.contains("://") {
-                value.to_string()
-            } else {
-                format!("https://{value}")
-            }
-        });
+        .map(|value| normalize_endpoint(value, allow_insecure))
+        .transpose()?;
     let directory = store
         .path
         .as_deref()
@@ -361,9 +361,68 @@ pub fn parse(text: &str, path: &Path, project_root: &Path) -> Result<WorkspaceCo
                 .trim_matches('/')
                 .to_string(),
             concurrency,
+            allow_insecure,
             path: directory,
         },
     })
+}
+
+fn normalize_endpoint(raw: &str, allow_insecure: bool) -> Result<String> {
+    let candidate = if raw.contains("://") {
+        raw.to_string()
+    } else {
+        format!("https://{raw}")
+    };
+    let parsed = url::Url::parse(&candidate).map_err(|error| {
+        Error::InvalidInput(format!(
+            "workspace store.endpoint is not a valid URL: {error}"
+        ))
+    })?;
+    match parsed.scheme() {
+        "https" => {}
+        "http" => {
+            let host = parsed.host_str().unwrap_or("");
+            let loopback = matches!(host, "localhost" | "127.0.0.1" | "::1");
+            if !(allow_insecure || loopback) {
+                return Err(Error::InvalidInput(
+                    "workspace store.endpoint must use https; set store.allow_insecure = true only for a deliberate cleartext lab endpoint (loopback http is allowed)"
+                        .into(),
+                ));
+            }
+        }
+        other => {
+            return Err(Error::InvalidInput(format!(
+                "workspace store.endpoint scheme must be https (or http for loopback/lab), not {other:?}"
+            )));
+        }
+    }
+    if !parsed.username().is_empty() || parsed.password().is_some() {
+        return Err(Error::InvalidInput(
+            "workspace store.endpoint must not carry userinfo; credentials belong in              `awr workspace credential set`"
+                .into(),
+        ));
+    }
+    if parsed.query().is_some() || parsed.fragment().is_some() {
+        return Err(Error::InvalidInput(
+            "workspace store.endpoint must be an origin only (no query or fragment)".into(),
+        ));
+    }
+    let path = parsed.path();
+    if path != "/" && !path.is_empty() {
+        return Err(Error::InvalidInput(
+            "workspace store.endpoint must be an origin only (no path); put a shared prefix in store.prefix"
+                .into(),
+        ));
+    }
+    let host = parsed
+        .host_str()
+        .ok_or_else(|| Error::InvalidInput("workspace store.endpoint is missing a host".into()))?;
+    let mut out = format!("{}://{host}", parsed.scheme());
+    if let Some(port) = parsed.port() {
+        out.push(':');
+        out.push_str(&port.to_string());
+    }
+    Ok(out)
 }
 
 #[cfg(test)]
@@ -576,6 +635,49 @@ bucket   = "awr-workspace-project"
                 .store
                 .concurrency,
             1
+        );
+    }
+    #[test]
+    fn http_endpoints_outside_loopback_are_refused() {
+        let dir = scratch();
+        let body = MINIMAL.replace(
+            "oss-cn-beijing.aliyuncs.com",
+            "http://oss-cn-beijing.aliyuncs.com",
+        );
+        let error = load(&config_path(&dir, &body), &dir)
+            .unwrap_err()
+            .to_string();
+        assert!(error.contains("https"), "{error}");
+    }
+
+    #[test]
+    fn loopback_http_is_allowed_without_a_flag() {
+        let dir = scratch();
+        let body = MINIMAL.replace("oss-cn-beijing.aliyuncs.com", "http://127.0.0.1:9000");
+        let config = load(&config_path(&dir, &body), &dir).unwrap();
+        assert_eq!(config.store.endpoint, "http://127.0.0.1:9000");
+        assert_eq!(config.store.scheme(), "http");
+    }
+
+    #[test]
+    fn endpoint_path_and_userinfo_are_refused() {
+        let dir = scratch();
+        let with_path =
+            MINIMAL.replace("oss-cn-beijing.aliyuncs.com", "https://example.com/bucket");
+        let error = load(&config_path(&dir, &with_path), &dir)
+            .unwrap_err()
+            .to_string();
+        assert!(error.contains("origin"), "{error}");
+        let with_user = MINIMAL.replace(
+            "oss-cn-beijing.aliyuncs.com",
+            "https://user:pass@example.com",
+        );
+        let error = load(&config_path(&dir, &with_user), &dir)
+            .unwrap_err()
+            .to_string();
+        assert!(
+            error.contains("userinfo") || error.contains("credentials"),
+            "{error}"
         );
     }
 }

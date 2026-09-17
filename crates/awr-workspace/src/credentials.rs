@@ -114,26 +114,34 @@ pub fn save(path: &Path, credentials: &Credentials) -> Result<()> {
         std::fs::create_dir_all(parent)?;
     }
     let body = serde_json::to_vec_pretty(credentials)?;
+    // Write through a sibling temp file and rename so a crash mid-write cannot
+    // leave a truncated credentials file that later reads as JSON garbage.
+    let scratch = path.with_extension("json.tmp");
     #[cfg(unix)]
     {
         use std::io::Write;
         use std::os::unix::fs::{OpenOptionsExt, PermissionsExt};
-        // Create owner-only, then write, so the bytes never exist in a file
-        // that another user could open. A pre-existing file keeps its own mode,
-        // so the mode is set again afterwards rather than assumed.
         let mut file = std::fs::OpenOptions::new()
             .write(true)
             .create(true)
             .truncate(true)
             .mode(0o600)
-            .open(path)?;
+            .open(&scratch)?;
         file.write_all(&body)?;
         file.sync_all()?;
+        std::fs::set_permissions(&scratch, std::fs::Permissions::from_mode(0o600))?;
+        std::fs::rename(&scratch, path)?;
+        // A pre-existing destination keeps its mode across some rename cases.
         std::fs::set_permissions(path, std::fs::Permissions::from_mode(0o600))?;
     }
     #[cfg(not(unix))]
     {
-        std::fs::write(path, &body)?;
+        // Windows does not expose a portable 0600 equivalent here. The file
+        // lives under `.awr/`, and operators must keep that directory
+        // owner-only via NTFS ACL; this write path still uses temp+rename so a
+        // crash cannot leave truncated JSON.
+        std::fs::write(&scratch, &body)?;
+        std::fs::rename(&scratch, path)?;
     }
     Ok(())
 }

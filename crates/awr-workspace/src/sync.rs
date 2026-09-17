@@ -14,12 +14,18 @@
 use crate::backend::{Backend, LocalStore, MemoryStore, Precondition, parallel_map};
 use crate::config::WorkspaceConfig;
 use crate::credentials::{self, Credentials};
+use crate::fsutil::{self, EntryKind};
 use crate::layout;
+use crate::{MAX_INDEX_FILES, MAX_OBJECT_BYTES};
 use awr_core::{Error, Result};
 use serde::{Deserialize, Serialize};
 use std::{
     collections::{BTreeMap, BTreeSet},
     path::{Path, PathBuf},
+    sync::{
+        Arc,
+        atomic::{AtomicBool, Ordering},
+    },
 };
 
 /// The manifest is written in the same shape by every client, so a host running
@@ -295,6 +301,10 @@ pub struct Workspace {
     track: Vec<String>,
     concurrency: usize,
     state: State,
+    /// When set and true, pull/sync stop before further local writes.
+    /// SessionStart uses this so a timed-out hook cannot keep mutating sources
+    /// after the agent has already been told the exchange was left for later.
+    cancel: Option<Arc<AtomicBool>>,
 }
 
 impl Workspace {
@@ -319,6 +329,7 @@ impl Workspace {
             track: config.track.clone(),
             concurrency: config.store.concurrency,
             state,
+            cancel: None,
         })
     }
 
@@ -337,6 +348,26 @@ impl Workspace {
 
     pub fn root(&self) -> &Path {
         &self.root
+    }
+
+    /// Attach a cancellation flag checked before local writes.
+    pub fn with_cancel(mut self, cancel: Arc<AtomicBool>) -> Self {
+        self.cancel = Some(cancel);
+        self
+    }
+
+    fn ensure_active(&self) -> Result<()> {
+        if self
+            .cancel
+            .as_ref()
+            .is_some_and(|flag| flag.load(Ordering::Acquire))
+        {
+            return Err(Error::SourceUnavailable(
+                "workspace exchange cancelled: the session-start deadline elapsed before the store answered"
+                    .into(),
+            ));
+        }
+        Ok(())
     }
 
     /// How many requests this run has spent, so distance from the store is an
@@ -362,31 +393,48 @@ impl Workspace {
         let mut out = BTreeSet::new();
         for entry in &self.track {
             layout::check_relpath(entry)?;
-            let full = self.root.join(entry);
-            if full.is_dir() {
-                walk(&self.root, &full, &mut out)?;
-            } else if full.is_file() {
-                out.insert(entry.clone());
+            let full = fsutil::resolve_nofollow(&self.root, entry)?;
+            match fsutil::entry_kind(&full) {
+                Ok(EntryKind::Dir) => walk(&self.root, &full, &mut out)?,
+                Ok(EntryKind::File) => {
+                    out.insert(entry.clone());
+                }
+                Ok(EntryKind::Symlink) => {
+                    return Err(Error::RuleViolation(format!(
+                        "tracked path {entry:?} is a symbolic link; tracked trees never follow links"
+                    )));
+                }
+                Ok(EntryKind::Other) => {}
+                Err(error)
+                    if matches!(
+                        &error,
+                        Error::Io(io) if io.kind() == std::io::ErrorKind::NotFound
+                    ) => {}
+                Err(error) => return Err(error),
+            }
+            if out.len() > MAX_INDEX_FILES {
+                return Err(Error::InvalidInput(format!(
+                    "workspace track expands to more than {MAX_INDEX_FILES} files; narrow project.track"
+                )));
             }
         }
         Ok(out.into_iter().collect())
     }
 
     fn local_bytes(&self, relpath: &str) -> Result<Option<Vec<u8>>> {
-        layout::check_relpath(relpath)?;
-        match std::fs::read(self.root.join(relpath)) {
-            Ok(body) => Ok(Some(body)),
-            Err(error) if error.kind() == std::io::ErrorKind::NotFound => Ok(None),
-            Err(error) => Err(Error::Io(error)),
-        }
+        let path = fsutil::resolve_nofollow(&self.root, relpath)?;
+        fsutil::read_nofollow_optional(&path)
     }
 
     fn write_local(&self, relpath: &str, body: &[u8]) -> Result<()> {
-        layout::check_relpath(relpath)?;
-        let path = self.root.join(relpath);
-        if let Some(parent) = path.parent() {
-            std::fs::create_dir_all(parent)?;
+        self.ensure_active()?;
+        if body.len() as u64 > MAX_OBJECT_BYTES {
+            return Err(Error::InvalidInput(format!(
+                "workspace object {relpath} is {} bytes; maximum is {MAX_OBJECT_BYTES}",
+                body.len()
+            )));
         }
+        let path = fsutil::ensure_writable_nofollow(&self.root, relpath)?;
         crate::backend::write_atomically(&path, body)
     }
 
@@ -404,8 +452,15 @@ impl Workspace {
                         self.project_key
                     )));
                 }
-                for relpath in manifest.files.keys() {
+                if manifest.files.len() > MAX_INDEX_FILES {
+                    return Err(Error::SourceUnavailable(format!(
+                        "workspace manifest {key} names {} files; maximum is {MAX_INDEX_FILES}",
+                        manifest.files.len()
+                    )));
+                }
+                for (relpath, entry) in &manifest.files {
                     layout::check_relpath(relpath)?;
+                    validate_entry(relpath, entry)?;
                 }
                 return Ok(Index {
                     files: manifest.files,
@@ -429,17 +484,32 @@ impl Workspace {
             .map(|item| item.key)
             .filter(|key| layout::relpath_of_pointer(&self.project_key, key).is_some())
             .collect();
+        if keys.len() > MAX_INDEX_FILES {
+            return Err(Error::SourceUnavailable(format!(
+                "workspace pointer set under {prefix} has {} entries; maximum is {MAX_INDEX_FILES}",
+                keys.len()
+            )));
+        }
         let fetched = parallel_map(&keys, self.concurrency, |key| self.backend.get_meta(key))?;
         let mut files = BTreeMap::new();
         for (key, body) in keys.iter().zip(fetched) {
             let Some(relpath) = layout::relpath_of_pointer(&self.project_key, key) else {
-                continue;
+                return Err(Error::SourceUnavailable(format!(
+                    "workspace pointer key {key} is not a project path under {}",
+                    self.project_key
+                )));
             };
             layout::check_relpath(&relpath)?;
-            let Some((body, _etag)) = body else { continue };
-            if let Ok(entry) = serde_json::from_slice::<ManifestEntry>(&body) {
-                files.insert(relpath, entry);
-            }
+            let Some((body, _etag)) = body else {
+                return Err(Error::SourceUnavailable(format!(
+                    "workspace pointer {key} is listed but has no body"
+                )));
+            };
+            let entry: ManifestEntry = serde_json::from_slice(&body).map_err(|_| {
+                Error::SourceUnavailable(format!("workspace pointer {key} is not valid JSON"))
+            })?;
+            validate_entry(&relpath, &entry)?;
+            files.insert(relpath, entry);
         }
         Ok(Index {
             files,
@@ -637,12 +707,29 @@ impl Workspace {
             &plan.pending,
             self.concurrency,
             |(relpath, data, digest)| {
-                let outcome = self.backend.put(
-                    &layout::content(&self.project_key, relpath, digest),
-                    data,
-                    Precondition::Absent,
-                )?;
-                Ok(outcome.created)
+                self.ensure_active()?;
+                let key = layout::content(&self.project_key, relpath, digest);
+                let outcome = self.backend.put(&key, data, Precondition::Absent)?;
+                if outcome.created {
+                    return Ok(true);
+                }
+                // Absent said the object exists. Confirm those bytes are exactly
+                // the digest we are about to name in the index; a wrong object
+                // under a content-addressed key must not let publish succeed.
+                match self.backend.get(&key)? {
+                    Some(existing)
+                        if existing.len() == data.len() && crate::digest(&existing) == *digest =>
+                    {
+                        Ok(false)
+                    }
+                    Some(existing) => Err(Error::SourceUnavailable(format!(
+                        "content object {key} already holds {} bytes that are not {digest}",
+                        existing.len()
+                    ))),
+                    None => Err(Error::SourceUnavailable(format!(
+                        "content object {key} was reported present but could not be read"
+                    ))),
+                }
             },
         )?;
 
@@ -923,13 +1010,14 @@ impl Workspace {
             Some(etag) => {
                 // A store without compare-and-swap still gets an atomic commit:
                 // the manifest is one object, so no peer ever sees half a
-                // publish. What is missing is mutual exclusion, and reading
-                // around the write is what replaces it, for one extra request:
-                // check the index is still the one this commit was built on
-                // immediately before writing, so the window a peer can land in
-                // is one request wide instead of the whole publish; then read
-                // the write back, so a peer that landed inside that one request
-                // is detected instead of overwritten.
+                // publish. What is missing is mutual exclusion. The pre-write
+                // HEAD narrows a detectable stale base to one request, and the
+                // post-write HEAD confirms our bytes landed. It cannot stop a
+                // peer that writes between HEAD and PUT: our PUT overwrites that
+                // peer and the readback sees our ETag. Guarded mode is for
+                // personal sequential hosts on stores without If-Match, not for
+                // concurrent multi-writer safety. Prefer a CAS store when two
+                // machines may publish at once.
                 match self.backend.head(&key)? {
                     Some(current) if current.etag == *etag => {}
                     _ => return Ok(false),
@@ -1043,15 +1131,37 @@ impl Workspace {
 
         let mut pulled = Vec::new();
         for ((relpath, remote_sha, pushed_by), body) in fetches.iter().zip(blobs) {
+            self.ensure_active()?;
             let Some(body) = body else {
                 return Err(Error::SourceUnavailable(format!(
                     "the workspace has no content object for {relpath} ({remote_sha})"
                 )));
             };
+            if body.len() as u64 > MAX_OBJECT_BYTES {
+                return Err(Error::InvalidInput(format!(
+                    "workspace object {relpath} is {} bytes; maximum is {MAX_OBJECT_BYTES}",
+                    body.len()
+                )));
+            }
             if crate::digest(&body) != *remote_sha {
                 return Err(Error::SourceUnavailable(format!(
                     "the content object for {relpath} does not match its index entry"
                 )));
+            }
+            // Re-check immediately before writing: the plan said this path was
+            // absent or still at base, but the agent may have edited it after
+            // the session-start hook began, and a cancelled hook must not write.
+            let current = self.local_bytes(relpath)?;
+            let current_sha = current.as_deref().map(crate::digest);
+            let base = self.base_of(relpath);
+            if current_sha.is_some() && current_sha != base {
+                conflicts.push(Conflict {
+                    path: relpath.clone(),
+                    expected_remote: base,
+                    actual_remote: Some(remote_sha.clone()),
+                    local: current_sha,
+                });
+                continue;
             }
             self.write_local(relpath, &body)?;
             self.state.files.insert(
@@ -1067,6 +1177,7 @@ impl Workspace {
                 pushed_by: pushed_by.clone(),
             });
         }
+        self.ensure_active()?;
         self.save()?;
         Ok(PullReport {
             changed: !pulled.is_empty(),
@@ -1122,7 +1233,8 @@ impl Workspace {
     }
 
     pub fn handoff_push(&mut self, source: &Path, name: &str) -> Result<HandoffPushed> {
-        let body = std::fs::read(source)?;
+        layout::check_component(name)?;
+        let body = fsutil::read_nofollow(source)?;
         let digest = crate::digest(&body);
         let key = layout::handoff(&self.project_key, &self.host, name);
         let outcome = self.backend.put(&key, &body, Precondition::Absent)?;
@@ -1187,7 +1299,14 @@ impl Workspace {
         })?;
         let mut pulled = Vec::new();
         for ((key, etag, origin, name), body) in wanted.iter().zip(fetched) {
+            self.ensure_active()?;
             let Some(body) = body else { continue };
+            if body.len() as u64 > MAX_OBJECT_BYTES {
+                return Err(Error::InvalidInput(format!(
+                    "workspace handoff {key} is {} bytes; maximum is {MAX_OBJECT_BYTES}",
+                    body.len()
+                )));
+            }
             // The directory comes from remote data, so both halves of the
             // target are checked as single path components before it is used.
             layout::check_component(origin)?;
@@ -1237,31 +1356,75 @@ fn walk(root: &Path, base: &Path, out: &mut BTreeSet<String>) -> Result<()> {
             continue;
         }
         let path = entry.path();
-        if entry.file_type()?.is_dir() {
-            // Two directories hold material that never leaves a machine: the
-            // repository's own history, and AWR's local runtime. `track` is the
-            // operator's explicit boundary, so this is a refusal to act on it
-            // rather than a quiet exception to it.
-            if matches!(name.as_str(), ".git" | ".awr") {
+        match fsutil::entry_kind(&path)? {
+            EntryKind::Symlink => {
                 return Err(Error::RuleViolation(format!(
-                    "the tracked tree contains {}; narrow project.track so that neither a Git \
-                     history nor AWR's local runtime is published",
+                    "the tracked tree contains symbolic link {}; tracked trees never follow links",
                     path.display()
                 )));
             }
-            walk(root, &path, out)?;
-            continue;
+            EntryKind::Dir => {
+                // Two directories hold material that never leaves a machine: the
+                // repository's own history, and AWR's local runtime. `track` is the
+                // operator's explicit boundary, so this is a refusal to act on it
+                // rather than a quiet exception to it.
+                if matches!(name.as_str(), ".git" | ".awr") {
+                    return Err(Error::RuleViolation(format!(
+                        "the tracked tree contains {}; narrow project.track so that neither a Git \
+                         history nor AWR's local runtime is published",
+                        path.display()
+                    )));
+                }
+                walk(root, &path, out)?;
+            }
+            EntryKind::File => {
+                let relpath = path
+                    .strip_prefix(root)
+                    .map_err(|_| {
+                        Error::InvalidInput(format!(
+                            "{} is outside the project root",
+                            path.display()
+                        ))
+                    })?
+                    .to_string_lossy()
+                    .replace(std::path::MAIN_SEPARATOR, "/");
+                layout::check_relpath(&relpath)?;
+                out.insert(relpath);
+                if out.len() > MAX_INDEX_FILES {
+                    return Err(Error::InvalidInput(format!(
+                        "workspace track expands to more than {MAX_INDEX_FILES} files; narrow project.track"
+                    )));
+                }
+            }
+            EntryKind::Other => {}
         }
-        let relpath = path
-            .strip_prefix(root)
-            .map_err(|_| {
-                Error::InvalidInput(format!("{} is outside the project root", path.display()))
-            })?
-            .to_string_lossy()
-            .replace(std::path::MAIN_SEPARATOR, "/");
-        out.insert(relpath);
     }
     Ok(())
+}
+
+fn validate_entry(relpath: &str, entry: &ManifestEntry) -> Result<()> {
+    if !is_sha256_hex(&entry.sha256) {
+        return Err(Error::SourceUnavailable(format!(
+            "workspace index entry {relpath} has a malformed sha256"
+        )));
+    }
+    if entry.size > MAX_OBJECT_BYTES {
+        return Err(Error::SourceUnavailable(format!(
+            "workspace index entry {relpath} claims {} bytes; maximum is {MAX_OBJECT_BYTES}",
+            entry.size
+        )));
+    }
+    if let Some(host) = entry.pushed_by.as_deref() {
+        layout::check_component(host)?;
+    }
+    Ok(())
+}
+
+fn is_sha256_hex(value: &str) -> bool {
+    value.len() == 64
+        && value
+            .bytes()
+            .all(|byte| matches!(byte, b'0'..=b'9' | b'a'..=b'f'))
 }
 
 fn short(digest: Option<&str>) -> String {
@@ -1313,6 +1476,7 @@ mod tests {
                 credentials: root.join(".awr/workspace-credentials.json"),
                 store: StoreConfig {
                     backend: "local".to_string(),
+                    allow_insecure: false,
                     path: Some(self.mirror.clone()),
                     endpoint: String::new(),
                     bucket: String::new(),
@@ -1486,6 +1650,167 @@ mod tests {
         let from_pointers = publisher.status(true).unwrap();
         assert_eq!(from_pointers.index_source, "pointers");
         assert!(from_pointers.files.iter().all(|row| row.state == "in_sync"));
+    }
+
+    #[cfg(unix)]
+    #[test]
+    fn publish_refuses_a_tracked_file_symlink() {
+        let fixture = Fixture::new();
+        let dev = fixture.root("dev");
+        let outside = fixture.dir.join("outside-secret.txt");
+        std::fs::write(&outside, b"top-secret-credential").unwrap();
+        fixture.write(&dev, "work-ledger.yaml", "one\n");
+        let link = dev.join("linked.txt");
+        std::os::unix::fs::symlink(&outside, &link).unwrap();
+        let mut config = fixture.config(&dev, "host-a");
+        config.track = vec!["work-ledger.yaml".into(), "linked.txt".into()];
+        let mut publisher = Workspace::open(
+            &config,
+            Box::new(LocalStore::new(fixture.mirror.clone()).unwrap()),
+        )
+        .unwrap();
+        let error = publisher.publish().unwrap_err().to_string();
+        assert!(error.contains("symbolic link"), "{error}");
+        // Nothing under the content prefix should hold the secret.
+        let leaked = std::fs::read_dir(fixture.mirror.join("projects/poc-infra/files"))
+            .into_iter()
+            .flatten()
+            .filter_map(|entry| entry.ok())
+            .any(|entry| {
+                let path = entry.path();
+                path.is_file()
+                    && std::fs::read(&path)
+                        .ok()
+                        .is_some_and(|body| body == b"top-secret-credential")
+            });
+        assert!(!leaked, "symlink target bytes must not enter the store");
+    }
+
+    #[cfg(unix)]
+    #[test]
+    fn publish_refuses_a_directory_symlink_in_the_tracked_tree() {
+        let fixture = Fixture::new();
+        let dev = fixture.root("dev");
+        let outside = fixture.dir.join("outside-dir");
+        std::fs::create_dir_all(&outside).unwrap();
+        std::fs::write(outside.join("secret.txt"), b"dir-secret").unwrap();
+        fixture.write(&dev, "work-ledger.yaml", "one\n");
+        std::os::unix::fs::symlink(&outside, dev.join("infra")).unwrap();
+        let mut publisher = fixture.workspace(&dev, "host-a");
+        let error = publisher.publish().unwrap_err().to_string();
+        assert!(error.contains("symbolic link"), "{error}");
+    }
+
+    #[cfg(unix)]
+    #[test]
+    fn pull_refuses_to_write_through_a_parent_symlink() {
+        let fixture = Fixture::new();
+        let dev = fixture.root("dev");
+        let mini = fixture.root("mini");
+        fixture.write(&dev, "work-ledger.yaml", "one\n");
+        fixture.write(&dev, "infra/a.yaml", "a\n");
+        fixture.workspace(&dev, "host-a").publish().unwrap();
+
+        // Seed the peer with only the ledger so pull still needs infra/a.yaml.
+        fixture.write(&mini, "work-ledger.yaml", "one\n");
+        let mut peer = fixture.workspace(&mini, "host-b");
+        peer.publish().unwrap();
+
+        let outside = fixture.dir.join("outside-mini");
+        std::fs::create_dir_all(&outside).unwrap();
+        std::os::unix::fs::symlink(&outside, mini.join("infra")).unwrap();
+        let error = peer.pull().unwrap_err().to_string();
+        assert!(error.contains("symbolic link"), "{error}");
+        assert!(
+            !outside.join("a.yaml").exists(),
+            "pull must not materialize bytes outside the project root"
+        );
+    }
+
+    #[test]
+    fn publish_fails_when_an_existing_content_object_has_wrong_bytes() {
+        let fixture = Fixture::new();
+        let dev = fixture.root("dev");
+        fixture.write(&dev, "work-ledger.yaml", "honest\n");
+        let digest = crate::digest(b"honest\n");
+        let key = layout::content("poc-infra", "work-ledger.yaml", &digest);
+        // Plant a wrong body under the content-addressed key.
+        let store = LocalStore::new(fixture.mirror.clone()).unwrap();
+        store
+            .put(&key, b"forged-bytes", Precondition::None)
+            .unwrap();
+        let mut publisher =
+            Workspace::open(&fixture.config(&dev, "host-a"), Box::new(store)).unwrap();
+        let error = publisher.publish().unwrap_err().to_string();
+        assert!(
+            error.contains("already holds") || error.contains("not"),
+            "{error}"
+        );
+        // Manifest must not claim the forged object.
+        assert!(
+            !fixture
+                .mirror
+                .join("projects/poc-infra/manifest.json")
+                .exists()
+        );
+    }
+
+    #[test]
+    fn handoff_push_rejects_a_name_with_a_slash() {
+        let fixture = Fixture::new();
+        let dev = fixture.root("dev");
+        fixture.write(&dev, "work-ledger.yaml", "one\n");
+        let body = dev.join("note.json");
+        std::fs::write(&body, br#"{"summary":"x"}"#).unwrap();
+        let mut author = fixture.workspace(&dev, "host-a");
+        let error = author
+            .handoff_push(&body, "foo/bar")
+            .unwrap_err()
+            .to_string();
+        assert!(
+            error.contains("path component") || error.contains("foo/bar"),
+            "{error}"
+        );
+    }
+
+    #[test]
+    fn pointer_index_fails_closed_on_malformed_json() {
+        let fixture = Fixture::new();
+        let dev = fixture.root("dev");
+        fixture.write(&dev, "work-ledger.yaml", "one\n");
+        let store = LocalStore::new(fixture.mirror.clone()).unwrap();
+        store
+            .put(
+                "projects/poc-infra/files/work-ledger.yaml/current.json",
+                b"{not-json",
+                Precondition::None,
+            )
+            .unwrap();
+        let workspace = Workspace::open(&fixture.config(&dev, "host-a"), Box::new(store)).unwrap();
+        let error = workspace.status(true).unwrap_err().to_string();
+        assert!(
+            error.contains("not valid JSON") || error.contains("pointer"),
+            "{error}"
+        );
+    }
+
+    #[test]
+    fn cancel_flag_stops_pull_before_local_writes() {
+        let fixture = Fixture::new();
+        let dev = fixture.root("dev");
+        let mini = fixture.root("mini");
+        fixture.write(&dev, "work-ledger.yaml", "from-dev\n");
+        fixture.workspace(&dev, "host-a").publish().unwrap();
+        let cancel = Arc::new(AtomicBool::new(true));
+        let mut peer = Workspace::open(
+            &fixture.config(&mini, "host-b"),
+            Box::new(LocalStore::new(fixture.mirror.clone()).unwrap()),
+        )
+        .unwrap()
+        .with_cancel(cancel);
+        let error = peer.pull().unwrap_err().to_string();
+        assert!(error.contains("cancelled"), "{error}");
+        assert!(fixture.read(&mini, "work-ledger.yaml").is_none());
     }
 
     /// A store without compare-and-swap still commits atomically: the manifest
@@ -2200,11 +2525,12 @@ mod tests {
 
     /// A store that answers `If-Match` with success but does not enforce it is
     /// the OSS case: the commit is confirmed by reading its own write back.
-    /// It can also be told to land a peer's commit during the commit window,
-    /// which is the only way to observe the index check that narrows it.
+    /// Tests can inject a peer commit either before the pre-write HEAD (detectable)
+    /// or between HEAD and PUT (the true TOCTOU window guarded mode cannot close).
     struct GuardedStore {
         inner: LocalStore,
-        peer: std::sync::Mutex<std::collections::VecDeque<(String, Vec<u8>)>>,
+        peer_before_head: std::sync::Mutex<std::collections::VecDeque<(String, Vec<u8>)>>,
+        peer_before_put: std::sync::Mutex<std::collections::VecDeque<(String, Vec<u8>)>>,
         /// Reads of the index, so a test can see the check around the write.
         index_reads: std::sync::Arc<AtomicUsize>,
     }
@@ -2219,16 +2545,25 @@ mod tests {
             (
                 Self {
                     inner,
-                    peer: std::sync::Mutex::new(std::collections::VecDeque::new()),
+                    peer_before_head: std::sync::Mutex::new(std::collections::VecDeque::new()),
+                    peer_before_put: std::sync::Mutex::new(std::collections::VecDeque::new()),
                     index_reads: index_reads.clone(),
                 },
                 index_reads,
             )
         }
 
-        /// The next read of the index finds that a peer committed first.
+        /// Peer lands before the pre-write HEAD: guarded mode detects this.
         fn peer_commits_first(&self, key: &str, body: &[u8]) {
-            self.peer
+            self.peer_before_head
+                .lock()
+                .unwrap()
+                .push_back((key.to_string(), body.to_vec()));
+        }
+
+        /// Peer lands after HEAD and before PUT: guarded mode overwrites silently.
+        fn peer_commits_between_head_and_put(&self, key: &str, body: &[u8]) {
+            self.peer_before_put
                 .lock()
                 .unwrap()
                 .push_back((key.to_string(), body.to_vec()));
@@ -2250,8 +2585,13 @@ mod tests {
 
         fn head(&self, key: &str) -> Result<Option<crate::backend::ObjectMeta>> {
             self.index_reads.fetch_add(1, Ordering::Relaxed);
-            if let Some((key, body)) = self.peer.lock().unwrap().pop_front() {
-                self.inner.put(&key, &body, Precondition::None)?;
+            {
+                let mut queue = self.peer_before_head.lock().unwrap();
+                if queue.front().is_some_and(|(peer_key, _)| peer_key == key) {
+                    let (peer_key, peer_body) = queue.pop_front().unwrap();
+                    drop(queue);
+                    self.inner.put(&peer_key, &peer_body, Precondition::None)?;
+                }
             }
             self.inner.head(key)
         }
@@ -2266,6 +2606,14 @@ mod tests {
             body: &[u8],
             precondition: Precondition,
         ) -> Result<crate::backend::PutOutcome> {
+            {
+                let mut queue = self.peer_before_put.lock().unwrap();
+                if queue.front().is_some_and(|(peer_key, _)| peer_key == key) {
+                    let (peer_key, peer_body) = queue.pop_front().unwrap();
+                    drop(queue);
+                    self.inner.put(&peer_key, &peer_body, Precondition::None)?;
+                }
+            }
             match precondition {
                 // The store is told to compare and swap and quietly ignores it.
                 Precondition::Match(_) => self.inner.put(key, body, Precondition::None),
@@ -2280,5 +2628,46 @@ mod tests {
         fn delete(&self, key: &str) -> Result<bool> {
             self.inner.delete(key)
         }
+    }
+
+    /// Documents the real guarded-mode window: a peer PUT between our HEAD and
+    /// PUT is overwritten, and readback still reports success. Personal sequential
+    /// use is fine; concurrent multi-writer needs a CAS store.
+    #[test]
+    fn a_guarded_commit_cannot_see_a_peer_between_head_and_put() {
+        let fixture = Fixture::new();
+        let dev = fixture.root("dev");
+        let mini = fixture.root("mini");
+        fixture.write(&mini, "work-ledger.yaml", "one\n");
+        fixture.write(&mini, "infra/b.yaml", "b\n");
+        let mut peer = fixture.workspace(&mini, "host-b");
+        peer.publish().unwrap();
+
+        let manifest = fixture.mirror.join("projects/poc-infra/manifest.json");
+        let seen_by_dev = std::fs::read(&manifest).unwrap();
+        fixture.write(&mini, "infra/c.yaml", "c\n");
+        peer.publish().unwrap();
+        let written_by_peer = std::fs::read(&manifest).unwrap();
+        std::fs::write(&manifest, &seen_by_dev).unwrap();
+
+        let store = GuardedStore::new(LocalStore::new(fixture.mirror.clone()).unwrap());
+        store.peer_commits_between_head_and_put(
+            "projects/poc-infra/manifest.json",
+            &written_by_peer,
+        );
+        fixture.write(&dev, "infra/a.yaml", "a\n");
+        let mut publisher =
+            Workspace::open(&fixture.config(&dev, "host-a"), Box::new(store)).unwrap();
+        let report = publisher.publish().unwrap();
+        assert!(report.contended.is_empty(), "{report:?}");
+        assert!(report.conflicts.is_empty(), "{report:?}");
+        let index: serde_json::Value =
+            serde_json::from_slice(&std::fs::read(&manifest).unwrap()).unwrap();
+        // Our path landed; the peer path that arrived inside the window did not.
+        assert!(index["files"].get("infra/a.yaml").is_some(), "{index}");
+        assert!(
+            index["files"].get("infra/c.yaml").is_none(),
+            "peer write between HEAD and PUT was overwritten: {index}"
+        );
     }
 }

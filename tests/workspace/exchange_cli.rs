@@ -862,3 +862,240 @@ fn a_private_path_in_the_index_is_not_written_by_sync() {
         "sync must not write a Git hook from the index"
     );
 }
+
+#[cfg(unix)]
+#[test]
+fn symlink_publish_is_refused_at_cli_and_does_not_leak() {
+    let fixture = Fixture::new();
+    let outside = fixture.base.join("outside-secret.env");
+    fs::write(&outside, b"CLI-SECRET-TOKEN").unwrap();
+    let link = fixture.dev.join("linked-secret.txt");
+    std::os::unix::fs::symlink(&outside, &link).unwrap();
+    fixture.configure_track(
+        &fixture.dev,
+        "macbook-codex",
+        &["work-ledger.yaml", "linked-secret.txt"],
+    );
+    let (code, report) = fixture.refused(&fixture.dev, &["publish"]);
+    assert_eq!(code, 1, "{report}");
+    assert_eq!(report["code"], "RuleViolation", "{report}");
+    let message = report["message"].as_str().unwrap_or("");
+    assert!(message.contains("symbolic link"), "{report}");
+    assert!(
+        !walk_store_contains(&fixture.store, b"CLI-SECRET-TOKEN"),
+        "CLI publish must not upload symlink targets"
+    );
+}
+
+#[test]
+fn handoff_push_rejects_slash_name_at_cli() {
+    let fixture = Fixture::new();
+    fixture.ok(&fixture.dev, &["publish"]);
+    let note = fixture.dev.join("note.json");
+    fs::write(&note, br#"{"summary":"x"}"#).unwrap();
+    let (code, report) = fixture.refused(
+        &fixture.dev,
+        &[
+            "handoff",
+            "push",
+            "--file",
+            note.to_str().unwrap(),
+            "--name",
+            "foo/bar",
+        ],
+    );
+    assert_eq!(code, 1);
+    assert_eq!(report["code"], "RuleViolation");
+    let message = report["message"].as_str().unwrap_or("");
+    assert!(
+        message.contains("path component") || message.contains("foo/bar"),
+        "{report}"
+    );
+}
+
+#[test]
+fn publish_fails_closed_when_content_object_is_forged() {
+    let fixture = Fixture::new();
+    fixture.configure_track(&fixture.dev, "macbook-codex", &["work-ledger.yaml"]);
+    fixture.write(&fixture.dev, "work-ledger.yaml", "v1\n");
+    fixture.ok(&fixture.dev, &["publish"]);
+
+    // Forge the content object that currently matches local bytes.
+    let mut corrupted = false;
+    let files_root = fixture.store.join("projects/poc-infra/files");
+    if let Ok(walk) = fs::read_dir(&files_root) {
+        'outer: for entry in walk.flatten() {
+            let path = entry.path();
+            if !path.is_dir() {
+                continue;
+            }
+            if let Ok(objs) = fs::read_dir(&path) {
+                for obj in objs.flatten() {
+                    let p = obj.path();
+                    let name = p.file_name().and_then(|s| s.to_str()).unwrap_or("");
+                    if name == "current.json" || !p.is_file() {
+                        continue;
+                    }
+                    let local = fixture.read(&fixture.dev, "work-ledger.yaml").unwrap();
+                    if fs::read(&p).ok().as_deref() == Some(local.as_bytes()) {
+                        fs::write(&p, b"FORGED-CLI-BYTES").unwrap();
+                        corrupted = true;
+                        break 'outer;
+                    }
+                }
+            }
+        }
+    }
+    assert!(corrupted, "expected to find a content object to forge");
+
+    // Drop index entries so publish tries to re-register local bytes against the forged object.
+    let manifest = fixture.store.join("projects/poc-infra/manifest.json");
+    let mut value: serde_json::Value =
+        serde_json::from_slice(&fs::read(&manifest).unwrap()).unwrap();
+    value["files"].as_object_mut().unwrap().clear();
+    fs::write(&manifest, serde_json::to_vec_pretty(&value).unwrap()).unwrap();
+
+    let (code, report) = fixture.refused(&fixture.dev, &["publish"]);
+    assert_eq!(code, 1, "{report}");
+    assert_eq!(report["code"], "SourceUnavailable", "{report}");
+    let message = report["message"].as_str().unwrap_or("");
+    assert!(
+        message.contains("already holds") || message.contains("content object"),
+        "{report}"
+    );
+}
+
+#[test]
+fn http_endpoint_outside_loopback_is_refused_at_cli() {
+    let fixture = Fixture::new();
+    fs::write(
+        fixture.dev.join("remote_workspace.toml"),
+        format!(
+            "[project]\nkey = \"poc-infra\"\nroot = {}\nhost = \"macbook-codex\"\ntrack = [\"work-ledger.yaml\"]\n\n[store]\nendpoint = \"http://oss-cn-beijing.aliyuncs.com\"\nbucket = \"x\"\n",
+            serde_json::to_string(&fixture.dev.display().to_string()).unwrap(),
+        ),
+    )
+    .unwrap();
+    let (code, report) = fixture.refused(&fixture.dev, &["status"]);
+    assert_eq!(code, 1);
+    assert_eq!(report["code"], "InvalidInput");
+    let message = report["message"].as_str().unwrap_or("");
+    assert!(message.contains("https"), "{report}");
+}
+
+#[test]
+fn malformed_pointer_fails_closed_at_cli_status() {
+    let fixture = Fixture::new();
+    let pointer = fixture
+        .store
+        .join("projects/poc-infra/files/work-ledger.yaml/current.json");
+    fs::create_dir_all(pointer.parent().unwrap()).unwrap();
+    fs::write(&pointer, b"{not-json").unwrap();
+    let (code, report) = fixture.refused(&fixture.dev, &["status", "--pointers"]);
+    assert_eq!(code, 1, "{report}");
+    assert_eq!(report["code"], "SourceUnavailable", "{report}");
+    let message = report["message"].as_str().unwrap_or("");
+    assert!(
+        message.contains("pointer") || message.contains("JSON") || message.contains("valid"),
+        "{report}"
+    );
+}
+
+#[test]
+fn credential_set_roundtrip_never_echoes_secret() {
+    let fixture = Fixture::new();
+    let mut child = Command::new(env!("CARGO_BIN_EXE_awr"))
+        .args([
+            "--project",
+            fixture.dev.to_str().unwrap(),
+            "--json",
+            "workspace",
+            "credential",
+            "set",
+            "--stdin",
+        ])
+        .stdin(Stdio::piped())
+        .stdout(Stdio::piped())
+        .stderr(Stdio::piped())
+        .spawn()
+        .unwrap();
+    {
+        let stdin = child.stdin.as_mut().unwrap();
+        stdin
+            .write_all(br#"{"access_key":"AKIA_TEST","secret_key":"super-secret-value"}"#)
+            .unwrap();
+    }
+    let out = child.wait_with_output().unwrap();
+    assert!(
+        out.status.success(),
+        "{}",
+        String::from_utf8_lossy(&out.stderr)
+    );
+    let status = fixture.ok(&fixture.dev, &["credential", "status"]);
+    let rendered = status.to_string();
+    assert!(!rendered.contains("super-secret-value"), "{rendered}");
+    assert_eq!(status["complete"], true);
+}
+
+#[cfg(unix)]
+#[test]
+fn credential_file_mode_is_600() {
+    let fixture = Fixture::new();
+    let mut child = Command::new(env!("CARGO_BIN_EXE_awr"))
+        .args([
+            "--project",
+            fixture.dev.to_str().unwrap(),
+            "workspace",
+            "credential",
+            "set",
+            "--stdin",
+        ])
+        .stdin(Stdio::piped())
+        .stdout(Stdio::piped())
+        .stderr(Stdio::piped())
+        .spawn()
+        .unwrap();
+    child
+        .stdin
+        .as_mut()
+        .unwrap()
+        .write_all(br#"{"access_key":"AKIA_TEST","secret_key":"secret"}"#)
+        .unwrap();
+    let out = child.wait_with_output().unwrap();
+    assert!(
+        out.status.success(),
+        "{}",
+        String::from_utf8_lossy(&out.stderr)
+    );
+    use std::os::unix::fs::PermissionsExt;
+    let path = fixture.dev.join(".awr/workspace-credentials.json");
+    let mode = fs::metadata(&path).unwrap().permissions().mode() & 0o777;
+    assert_eq!(mode, 0o600, "mode={mode:o}");
+}
+
+fn walk_store_contains(root: &Path, needle: &[u8]) -> bool {
+    fn walk(path: &Path, needle: &[u8]) -> bool {
+        let Ok(meta) = fs::symlink_metadata(path) else {
+            return false;
+        };
+        if meta.file_type().is_symlink() {
+            return false;
+        }
+        if meta.is_file() {
+            return fs::read(path)
+                .ok()
+                .is_some_and(|body| body.windows(needle.len()).any(|w| w == needle));
+        }
+        if meta.is_dir() {
+            if let Ok(rd) = fs::read_dir(path) {
+                for entry in rd.flatten() {
+                    if walk(&entry.path(), needle) {
+                        return true;
+                    }
+                }
+            }
+        }
+        false
+    }
+    walk(root, needle)
+}

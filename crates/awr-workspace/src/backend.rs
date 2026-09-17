@@ -6,6 +6,7 @@
 //! not "is this R2" but "can this store compare and swap" - one capability bit,
 //! `supports_if_match`, which the commit path reads to choose between mutual
 //! exclusion and a read-back that detects a lost race instead.
+use crate::MAX_OBJECT_BYTES;
 use awr_core::{Error, Result};
 use std::{
     collections::BTreeMap,
@@ -180,6 +181,13 @@ impl Backend for LocalStore {
     }
 
     fn put(&self, key: &str, body: &[u8], precondition: Precondition) -> Result<PutOutcome> {
+        if body.len() as u64 > MAX_OBJECT_BYTES {
+            return Err(Error::InvalidInput(format!(
+                "workspace object {key} is {} bytes; maximum is {MAX_OBJECT_BYTES}",
+                body.len()
+            )));
+        }
+
         self.requests.fetch_add(1, Ordering::Relaxed);
         let path = self.path(key)?;
         if let Some(parent) = path.parent() {
@@ -331,6 +339,13 @@ impl Backend for MemoryStore {
     }
 
     fn put(&self, key: &str, body: &[u8], precondition: Precondition) -> Result<PutOutcome> {
+        if body.len() as u64 > MAX_OBJECT_BYTES {
+            return Err(Error::InvalidInput(format!(
+                "workspace object {key} is {} bytes; maximum is {MAX_OBJECT_BYTES}",
+                body.len()
+            )));
+        }
+
         self.requests.fetch_add(1, Ordering::Relaxed);
         let mut objects = self
             .objects

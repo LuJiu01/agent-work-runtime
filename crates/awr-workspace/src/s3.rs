@@ -24,7 +24,7 @@ use ureq::http::Request;
 /// A single object is read into memory, so its size is bounded. Content objects
 /// for tracked sources and evidence sit far below this; a bigger one is a
 /// mistake to surface rather than a file to stream.
-pub const MAX_OBJECT_BYTES: u64 = 64 * 1024 * 1024;
+pub use crate::MAX_OBJECT_BYTES;
 /// A store outside the region answers in about a second; the timeout is what
 /// stops one slow object from stalling a bounded fan-out for minutes.
 const TIMEOUT: Duration = Duration::from_secs(60);
@@ -316,6 +316,12 @@ impl Backend for S3Store {
     }
 
     fn put(&self, key: &str, body: &[u8], precondition: Precondition) -> Result<PutOutcome> {
+        if body.len() as u64 > MAX_OBJECT_BYTES {
+            return Err(Error::InvalidInput(format!(
+                "workspace object {key} is {} bytes; maximum is {MAX_OBJECT_BYTES}",
+                body.len()
+            )));
+        }
         match precondition {
             Precondition::None => self.put_with(key, body, false, None),
             Precondition::Absent => self.put_with(key, body, true, None),
@@ -528,6 +534,7 @@ mod tests {
         S3Store::new(
             StoreConfig {
                 backend: "s3".to_string(),
+                allow_insecure: false,
                 path: None,
                 endpoint: endpoint.to_string(),
                 bucket: "awr-workspace-project".to_string(),

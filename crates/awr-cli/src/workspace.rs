@@ -14,6 +14,10 @@ use serde_json::{Value, json};
 use std::{
     io::Read,
     path::{Path, PathBuf},
+    sync::{
+        Arc,
+        atomic::{AtomicBool, AtomicUsize, Ordering},
+    },
     time::{Duration, Instant},
 };
 
@@ -161,7 +165,7 @@ pub fn session_start(root: &Path) -> Option<String> {
         return None;
     }
     let root = root.to_path_buf();
-    match within_budget(NOTICE_BUDGET, move || notice(&root, &path)) {
+    match within_budget(NOTICE_BUDGET, move |cancel| notice(&root, &path, cancel)) {
         Some(Ok(notice)) => notice,
         Some(Err(error)) => Some(format!(
             "Workspace exchange is configured but did not run: {error}\nThe session continues. \
@@ -178,25 +182,34 @@ pub fn session_start(root: &Path) -> Option<String> {
 
 /// Run `job` on its own thread and stop waiting for it after `budget`.
 ///
-/// The thread is left behind rather than cancelled - a blocked request cannot be
-/// - and dies with this short-lived process. Nothing it does is unsafe to
-/// interrupt: objects and the state file are written whole, so a later session
-/// simply re-runs the part that did not finish.
+/// When the budget elapses the shared cancel flag is set so the worker stops
+/// before further local writes. A blocked network call cannot be preempted, but
+/// pull/sync check the flag before each filesystem mutation and before saving
+/// workspace state, so a timed-out SessionStart does not keep rewriting sources
+/// after the agent has already been told the exchange was left for later.
 fn within_budget<F>(budget: Duration, job: F) -> Option<Result<Option<String>>>
 where
-    F: FnOnce() -> Result<Option<String>> + Send + 'static,
+    F: FnOnce(Arc<AtomicBool>) -> Result<Option<String>> + Send + 'static,
 {
+    let cancel = Arc::new(AtomicBool::new(false));
     let (sender, receiver) = std::sync::mpsc::channel();
+    let worker_cancel = Arc::clone(&cancel);
     std::thread::spawn(move || {
-        let _ = sender.send(job());
+        let _ = sender.send(job(worker_cancel));
     });
-    receiver.recv_timeout(budget).ok()
+    match receiver.recv_timeout(budget) {
+        Ok(result) => Some(result),
+        Err(_) => {
+            cancel.store(true, Ordering::Release);
+            None
+        }
+    }
 }
 
 /// Take the peer's files and handoffs, and describe what moved.
-fn notice(root: &Path, path: &Path) -> Result<Option<String>> {
+fn notice(root: &Path, path: &Path, cancel: Arc<AtomicBool>) -> Result<Option<String>> {
     let config = config::load(path, root)?;
-    let mut workspace = open(&config)?;
+    let mut workspace = open(&config)?.with_cancel(cancel);
     let outdir = workspace.root().join(DEFAULT_HANDOFF_DIR);
     let report = workspace.sync(&outdir)?;
     // An entry this host published can be dropped by a peer committing from a
@@ -789,12 +802,31 @@ mod tests {
     #[test]
     fn the_budget_stops_waiting_for_a_job_that_never_finishes() {
         let started = Instant::now();
-        let answer = within_budget(Duration::from_millis(50), || {
-            std::thread::sleep(Duration::from_secs(30));
+        let saw_cancel = Arc::new(AtomicBool::new(false));
+        let flag = Arc::clone(&saw_cancel);
+        let answer = within_budget(Duration::from_millis(50), move |cancel| {
+            // Wait until the parent marks us cancelled, then report it.
+            let deadline = Instant::now() + Duration::from_secs(2);
+            while Instant::now() < deadline {
+                if cancel.load(Ordering::Acquire) {
+                    flag.store(true, Ordering::Release);
+                    break;
+                }
+                std::thread::sleep(Duration::from_millis(5));
+            }
             Ok(Some("too late".to_string()))
         });
         assert!(answer.is_none());
         assert!(started.elapsed() < Duration::from_secs(5));
+        // Give the worker a moment to observe the flag.
+        let deadline = Instant::now() + Duration::from_secs(1);
+        while Instant::now() < deadline && !saw_cancel.load(Ordering::Acquire) {
+            std::thread::sleep(Duration::from_millis(5));
+        }
+        assert!(
+            saw_cancel.load(Ordering::Acquire),
+            "timed-out budget must signal cancel so workers stop writing"
+        );
     }
 
     fn publish_report(contended: Vec<String>) -> awr_workspace::sync::PublishReport {
@@ -885,15 +917,50 @@ mod tests {
     /// A job that finishes inside the budget is reported as it finished,
     /// including the "nothing worth saying" answer.
     #[test]
+
+    /// A slow job that checks cancel must observe the flag after the budget
+    /// elapses, and must not be treated as a successful notice.
+    #[test]
+    fn cancel_stops_further_work_after_budget() {
+        let writes = Arc::new(AtomicUsize::new(0));
+        let counter = Arc::clone(&writes);
+        let answer = within_budget(Duration::from_millis(40), move |cancel| {
+            // Simulate a multi-step sync: keep going until cancelled.
+            for _ in 0..200 {
+                if cancel.load(Ordering::Acquire) {
+                    break;
+                }
+                std::thread::sleep(Duration::from_millis(5));
+                counter.fetch_add(1, Ordering::SeqCst);
+            }
+            // After cancel, refuse to "write".
+            if cancel.load(Ordering::Acquire) {
+                return Err(Error::SourceUnavailable(
+                    "workspace exchange cancelled: the session-start deadline elapsed before the store answered"
+                        .into(),
+                ));
+            }
+            Ok(Some("should-not-land".into()))
+        });
+        assert!(answer.is_none(), "budget must elapse");
+        // Worker may still be finishing the current sleep; give it a moment.
+        std::thread::sleep(Duration::from_millis(80));
+        let steps = writes.load(Ordering::SeqCst);
+        assert!(
+            steps < 200,
+            "cancel should stop the loop early, steps={steps}"
+        );
+    }
+
     fn a_job_inside_the_budget_is_reported() {
         assert_eq!(
-            within_budget(Duration::from_secs(5), || Ok(None))
+            within_budget(Duration::from_secs(5), |_| Ok(None))
                 .expect("the job answered")
                 .expect("the job succeeded"),
             None
         );
         assert_eq!(
-            within_budget(Duration::from_secs(5), || Ok(Some("moved".to_string())))
+            within_budget(Duration::from_secs(5), |_| Ok(Some("moved".to_string())))
                 .expect("the job answered")
                 .expect("the job succeeded"),
             Some("moved".to_string())

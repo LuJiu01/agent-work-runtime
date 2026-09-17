@@ -17,6 +17,7 @@
 pub mod backend;
 pub mod config;
 pub mod credentials;
+pub mod fsutil;
 pub mod layout;
 pub mod s3;
 pub mod sigv4;
@@ -25,6 +26,19 @@ pub mod sync;
 pub use backend::{Backend, LocalStore, MemoryStore, ObjectMeta, Precondition, PutOutcome};
 pub use config::{StoreConfig, WorkspaceConfig};
 pub use sync::{Workspace, open_backend};
+
+/// Hard ceiling for one content object, one handoff, and one local read.
+///
+/// The exchange plane is for project sources and evidence, not bulk media. The
+/// same budget bounds response bodies from the store and bodies leaving the
+/// local filesystem, so a single oversized file cannot pin memory on either end.
+pub const MAX_OBJECT_BYTES: u64 = 64 * 1024 * 1024;
+
+/// Maximum number of paths a workspace index may name.
+///
+/// A corrupted or hostile manifest must not force this host to materialize an
+/// unbounded path set into memory or onto disk.
+pub const MAX_INDEX_FILES: usize = 10_000;
 
 /// The content address of an object, and the identity of a tracked file.
 pub fn digest(body: &[u8]) -> String {
