@@ -703,42 +703,29 @@ async fn stdio_discovers_tools_and_survives_protocol_and_argument_errors() {
     let before = f.logical_state();
     let client = f.client().await;
     let tools = client.list_all_tools().await.unwrap();
-    assert_eq!(tools.len(), awr_mcp::TOOL_NAMES.len());
+    assert_eq!(tools.len(), awr_mcp::domains::DOMAINS.len());
     let names = tools
         .iter()
         .map(|t| t.name.as_ref())
         .collect::<std::collections::BTreeSet<_>>();
-    assert_eq!(names, awr_mcp::TOOL_NAMES.into_iter().collect());
+    assert_eq!(
+        names,
+        awr_mcp::domains::DOMAINS
+            .iter()
+            .map(|d| d.name)
+            .collect::<std::collections::BTreeSet<_>>()
+    );
     assert!(
         serde_json::to_vec(&tools).unwrap().len() < 32_768,
         "catalog must stay compact: {} bytes",
         serde_json::to_vec(&tools).unwrap().len()
     );
     for tool in &tools {
-        let read = ![
-            "awr_change_apply",
-            "awr_change_recover",
-            "awr_work_manage",
-            "awr_compaction_observe",
-            "awr_compaction_defer",
-            "awr_work_transition",
-            "awr_event_append",
-            "awr_evidence_record",
-            "awr_session_start",
-            "awr_session_checkpoint",
-            "awr_session_end",
-            "awr_session_resume",
-            "awr_session_claim",
-            "awr_session_wait",
-            "awr_session_reply",
-            "awr_operation_recover",
-            "awr_source_reindex",
-        ]
-        .contains(&tool.name.as_ref());
-        assert_eq!(
-            tool.annotations.as_ref().unwrap().read_only_hint,
-            Some(read)
-        );
+        let annotations = tool.annotations.as_ref().unwrap();
+        // Domain entries can dispatch both reads and writes, so they are not
+        // advertised as read-only; exact child semantics stay in the manifest.
+        assert_eq!(annotations.read_only_hint, Some(false));
+        assert_eq!(annotations.destructive_hint, Some(false));
         assert_eq!(tool.input_schema["additionalProperties"], false);
     }
     assert!(
@@ -1456,7 +1443,7 @@ async fn legacy_stdio_negotiation_keeps_protocol_stdout_and_clean_eof() {
             }
             2 => assert_eq!(
                 reply["result"]["tools"].as_array().unwrap().len(),
-                awr_mcp::TOOL_NAMES.len()
+                awr_mcp::domains::DOMAINS.len()
             ),
             _ => assert_eq!(reply["result"]["structuredContent"]["read_only"], true),
         }
@@ -1470,4 +1457,77 @@ async fn legacy_stdio_negotiation_keeps_protocol_stdout_and_clean_eof() {
             .success()
     );
     assert_eq!(f.logical_state(), before);
+}
+
+#[tokio::test]
+async fn two_level_progressive_disclosure_shrinks_startup_and_routes_children() {
+    let f = Fixture::new();
+    let client = f.client().await;
+    // Level 1: only bounded domains are advertised by default.
+    let tools = client.list_all_tools().await.unwrap();
+    assert_eq!(tools.len(), awr_mcp::domains::DOMAINS.len());
+    for tool in &tools {
+        assert!(awr_mcp::domains::is_public_domain(&tool.name));
+    }
+    let advertised = serde_json::to_vec(&tools).unwrap().len();
+    assert!(
+        advertised < 8192,
+        "level-1 catalog must stay bounded: {advertised}"
+    );
+    // Level 2: empty discovery returns exact child names and schemas.
+    let manifest = success(call(&client, "awr_query", json!({})).await);
+    assert_eq!(manifest["mode"], "manifest");
+    assert_eq!(manifest["domain"], "awr_query");
+    assert_eq!(manifest["child_total"], 4);
+    let names: Vec<&str> = manifest["children"]
+        .as_array()
+        .unwrap()
+        .iter()
+        .map(|c| c["name"].as_str().unwrap())
+        .collect();
+    assert_eq!(
+        names,
+        [
+            "awr_project_status",
+            "awr_work_ready",
+            "awr_work_get",
+            "awr_search"
+        ]
+    );
+    assert!(manifest["children"][0]["input_schema"]["properties"].is_object());
+    // Level 3: child execution routes through the domain entry.
+    let ready = success(
+        call(
+            &client,
+            "awr_query",
+            json!({"child_tool":"awr_work_ready","arguments":{}}),
+        )
+        .await,
+    );
+    assert_eq!(ready["ready_total"], 2);
+    // Integrated hosts may still call the flat child name directly.
+    let direct = success(call(&client, "awr_work_ready", json!({})).await);
+    assert_eq!(direct["ready_total"], 2);
+    // Child names outside the domain are rejected without dispatch.
+    let error = timeout(
+        Duration::from_secs(30),
+        client.call_tool(
+            CallToolRequestParams::new("awr_query").with_arguments(
+                json!({"child_tool":"awr_session_start","arguments":{}})
+                    .as_object()
+                    .unwrap()
+                    .clone(),
+            ),
+        ),
+    )
+    .await
+    .unwrap();
+    assert!(error.is_err());
+    assert!(
+        error
+            .unwrap_err()
+            .to_string()
+            .contains("child_tool is not a member"),
+        "expected membership rejection"
+    );
 }
