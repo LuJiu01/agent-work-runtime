@@ -68,7 +68,12 @@ pub fn capabilities() -> Value {
             "work.touch",
             "source.ingest",
             "source.approve",
-            "source.activate"
+            "source.activate",
+            "session.start",
+            "claim.acquire",
+            "claim.renew",
+            "claim.release",
+            "claim.handoff"
         ],
         "isolation": "repeatable_read",
         "cursor_protocol": CURSOR_PROTOCOL

@@ -40,3 +40,10 @@ cargo run -p awr-server -- query --op work.prepare --body '{"tenant_id":"...","p
 ```
 
 Unknown query names return `Unsupported` without changing personal CLI/MCP.
+
+## Sessions and leases
+
+Claims are unique per work item while `state='active'`. Lease expiry uses
+`clock_timestamp()` after the project lock, not transaction `now()`. Renew
+replays keep the original `expires_at`. Wait records do not extend the lease.
+Handoff increments the work fence so the previous actor cannot write.

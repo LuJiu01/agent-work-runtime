@@ -2,6 +2,7 @@
 //! Personal SQLite runtime does not depend on this crate.
 mod bootstrap;
 mod error;
+mod lease;
 mod migrate;
 mod path;
 mod read;
@@ -10,6 +11,7 @@ mod tx;
 
 pub use bootstrap::Bootstrap;
 pub use error::{PgError, PgResult};
+pub use lease::{ClaimRecord, LeaseStore, SessionRecord};
 pub use migrate::{EXPECTED_SCHEMA_VERSION, check_schema, migrate};
 pub use path::{
     MAX_FILE_BYTES, MAX_PACKAGE_BYTES, MAX_SOURCE_FILES, validate_package, validate_source_path,
@@ -38,6 +40,6 @@ mod tests {
     #[test]
     fn schema_contract_is_stable() {
         assert_eq!(SCHEMA, "awr_team");
-        assert_eq!(EXPECTED_SCHEMA_VERSION, 1);
+        assert_eq!(EXPECTED_SCHEMA_VERSION, 2);
     }
 }
