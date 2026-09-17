@@ -76,3 +76,14 @@ Authors cannot approve their own review round; a new bundle hash invalidates
 the previous round. `work_runtime.state='completed'` requires
 `selected_completion_id`. Ordinary confirmation is allowed only when the
 current contract already selects that policy.
+
+
+## Import and restore
+
+Import is freeze → export → dry-run → load → activate. The same
+`import_key` and manifest hash replay the original job and do not create
+duplicate work. Divergent local sources are rejected instead of last-write
+wins. Historical self-reports stay `caller_asserted`. Restore mints a new
+coordinator epoch, revokes restored credentials, fails pending outbox rows
+instead of replaying them, and refuses a SQLite file rollback after the
+team project has accepted new revisions.
