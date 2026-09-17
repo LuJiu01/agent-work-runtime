@@ -333,6 +333,61 @@ impl SourceStore {
         let contract_hash = contract
             .hash()
             .map_err(|e| PgError::Protocol(e.to_string()))?;
+        if let Some(spec) = files.iter().find(|(path, _)| path == "graph.json") {
+            let parsed: serde_json::Value =
+                serde_json::from_slice(&spec.1).map_err(|e| PgError::Protocol(e.to_string()))?;
+            let edges: Vec<crate::graph::DependencyEdge> = serde_json::from_value(
+                parsed
+                    .get("edges")
+                    .cloned()
+                    .unwrap_or(serde_json::json!([])),
+            )
+            .map_err(|e| PgError::Protocol(e.to_string()))?;
+            let nodes: Vec<String> = parsed
+                .get("nodes")
+                .and_then(|v| v.as_array())
+                .map(|rows| {
+                    rows.iter()
+                        .filter_map(|v| v.as_str().map(str::to_owned))
+                        .collect()
+                })
+                .unwrap_or_else(|| vec![contract.work_id.as_str().to_string()]);
+            crate::graph::validate_required_graph(&nodes, &edges)?;
+        }
+        let claimed: i64 = tx
+            .query_one(
+                "SELECT count(*) FROM awr_team.claims
+                 WHERE tenant_id=$1 AND project_id=$2 AND work_id=$3 AND state='active'",
+                &[
+                    &tenant_id,
+                    &project_id,
+                    &contract.work_id.as_str().to_string(),
+                ],
+            )
+            .await?
+            .get(0);
+        if claimed > 0 {
+            let current = tx
+                .query_opt(
+                    "SELECT c.contract_hash FROM awr_team.work_contracts c
+                     JOIN awr_team.projects p
+                       ON p.tenant_id=c.tenant_id AND p.id=c.project_id
+                      AND p.active_snapshot_id=c.snapshot_id
+                     WHERE c.tenant_id=$1 AND c.project_id=$2 AND c.work_id=$3",
+                    &[
+                        &tenant_id,
+                        &project_id,
+                        &contract.work_id.as_str().to_string(),
+                    ],
+                )
+                .await?;
+            if let Some(row) = current {
+                let old_hash: String = row.get(0);
+                if old_hash != contract_hash {
+                    return Err(PgError::ClaimBlocksActivation);
+                }
+            }
+        }
         let work_id = contract.work_id.as_str().to_string();
         let title = contract.external_key.clone();
         let contract_json =

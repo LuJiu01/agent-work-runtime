@@ -44,6 +44,22 @@ pub enum PgError {
     Forbidden,
     #[error("stale fence")]
     StaleFence,
+    #[error("dependency cycle")]
+    DependencyCycle,
+    #[error("missing required dependency")]
+    MissingDependency,
+    #[error("resource conflict")]
+    ResourceConflict,
+    #[error("scope unsupported")]
+    ScopeUnsupported,
+    #[error("parent evidence required")]
+    ParentEvidenceRequired,
+    #[error("dependency binding invalid")]
+    BindingInvalid,
+    #[error("claimed work blocks activation")]
+    ClaimBlocksActivation,
+    #[error("graph budget exceeded")]
+    GraphBudgetExceeded,
     #[error("{0}")]
     Db(#[from] tokio_postgres::Error),
     #[error("{0}")]

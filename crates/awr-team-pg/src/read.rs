@@ -66,6 +66,7 @@ pub fn capabilities() -> Value {
         ],
         "commands": [
             "work.touch",
+            "work.propose_split",
             "source.ingest",
             "source.approve",
             "source.activate",
