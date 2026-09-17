@@ -6,6 +6,7 @@ import hashlib
 import json
 from pathlib import Path
 import platform
+import os
 import queue
 import statistics
 import subprocess
@@ -58,7 +59,11 @@ class Rpc:
     def start(self):
         began = time.perf_counter_ns()
         self.errors = (self.recorder.directory/f'server-{len(self.recorder.rows)}.stderr').open('wb')
-        self.process = subprocess.Popen([str(self.binary),'--project',str(self.root)],stdin=subprocess.PIPE,stdout=subprocess.PIPE,stderr=self.errors)
+        env = dict(os.environ)
+        # Keep the benchmark's historical call-count and text metrics comparable:
+        # exercise the exact flat tool names instead of domain discovery.
+        env['AWR_MCP_TOOL_EXPOSURE_MODE'] = 'flat'
+        self.process = subprocess.Popen([str(self.binary),'--project',str(self.root)],stdin=subprocess.PIPE,stdout=subprocess.PIPE,stderr=self.errors,env=env)
         lines = queue.Queue()
         stream = self.process.stdout
         def pump():

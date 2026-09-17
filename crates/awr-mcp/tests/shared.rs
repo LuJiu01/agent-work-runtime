@@ -495,13 +495,24 @@ async fn official_sdk_clients_discover_and_call_the_same_http_endpoint() {
             .await
             .unwrap()
             .unwrap();
+        // Default hierarchical exposure advertises project discovery plus
+        // bounded domains; flat child names remain callable for integrated hosts.
         let tools = client.list_all_tools().await.unwrap();
-        assert_eq!(tools.len(), awr_mcp::tools().len() + 1);
-        assert!(
-            tools
-                .iter()
-                .any(|tool| tool.name == "awr_operation_recover")
-        );
+        assert_eq!(tools.len(), awr_mcp::domains::DOMAINS.len() + 1);
+        assert!(tools.iter().any(|tool| tool.name == "awr_projects_list"));
+        assert!(tools.iter().all(|tool| {
+            tool.name == "awr_projects_list" || awr_mcp::domains::is_public_domain(&tool.name)
+        }));
+        let manifest = client
+            .call_tool(
+                CallToolRequestParams::new("awr_continuity")
+                    .with_arguments(json!({"project":"alpha"}).as_object().unwrap().clone()),
+            )
+            .await
+            .unwrap();
+        let value = manifest.structured_content.unwrap();
+        assert_eq!(value["mode"], "manifest");
+        assert_eq!(value["child_total"], 5);
         let catalog = client
             .call_tool(CallToolRequestParams::new("awr_projects_list"))
             .await

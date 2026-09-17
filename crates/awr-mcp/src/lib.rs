@@ -3,6 +3,7 @@ pub use awr_core::{Error, Result};
 mod arguments;
 mod changes;
 mod compaction;
+pub mod domains;
 pub mod hub;
 mod lifecycle;
 mod operations;
@@ -40,11 +41,32 @@ impl AwrServer {
         }
     }
     fn catalog(&self) -> Vec<Tool> {
-        if self.hub.is_some() {
+        let shared = self.hub.is_some();
+        if domains::ExposureMode::from_env() == domains::ExposureMode::Hierarchical {
+            let mut catalog = domains::domain_tools(shared);
+            // Project discovery stays visible on shared endpoints; it is the
+            // only entry point that resolves the required `project` key.
+            if shared {
+                if let Some(tool) = schema::shared_tools()
+                    .into_iter()
+                    .find(|tool| tool.name == "awr_projects_list")
+                {
+                    catalog.insert(0, tool);
+                }
+            }
+            catalog
+        } else if shared {
             schema::shared_tools()
         } else {
             tools()
         }
+    }
+    /// Flat names remain callable in hierarchical mode: the advertised catalog
+    /// shrinks, while already-integrated hosts keep working.
+    fn callable(&self, name: &str) -> bool {
+        self.catalog().iter().any(|t| t.name == name)
+            || (domains::ExposureMode::from_env() == domains::ExposureMode::Hierarchical
+                && (crate::schema::TOOL_NAMES.contains(&name) || name == "awr_projects_list"))
     }
 }
 
@@ -77,7 +99,8 @@ impl ServerHandler for AwrServer {
         request: CallToolRequestParams,
         context: RequestContext<RoleServer>,
     ) -> std::result::Result<CallToolResponse, ErrorData> {
-        if self.get_tool(&request.name).is_none() {
+        let mut name: String = request.name.to_string();
+        if !self.callable(&name) && !domains::is_domain(&name) {
             return Err(ErrorData::new(
                 ErrorCode::METHOD_NOT_FOUND,
                 "unknown AWR tool",
@@ -85,6 +108,71 @@ impl ServerHandler for AwrServer {
             ));
         }
         let mut args = request.arguments.unwrap_or_default();
+        if domains::is_domain(&name) {
+            let shared = self.hub.is_some();
+            let project_key = if shared {
+                args.remove("project")
+                    .and_then(|v| v.as_str().map(str::to_owned))
+            } else {
+                None
+            };
+            let child_tool = args
+                .remove("child_tool")
+                .and_then(|v| v.as_str().map(str::to_owned));
+            let child_args = args
+                .remove("arguments")
+                .filter(|v| v.is_object())
+                .and_then(|v| v.as_object().cloned());
+            match (child_tool, child_args) {
+                (None, _) if args.is_empty() => {
+                    let flat = if shared {
+                        schema::shared_tools()
+                    } else {
+                        tools()
+                    };
+                    if let (Some(hub), Some(key)) = (&self.hub, &project_key) {
+                        let principal = context
+                            .extensions
+                            .get::<axum::http::request::Parts>()
+                            .and_then(|parts| parts.extensions.get::<Principal>())
+                            .cloned();
+                        let principal = principal.ok_or_else(|| {
+                            ErrorData::invalid_params("authenticated client required", None)
+                        })?;
+                        hub.select(&principal, key, false).map_err(|error| {
+                            ErrorData::internal_error(
+                                serde_json::to_string(&error.report()).unwrap(),
+                                None,
+                            )
+                        })?;
+                    }
+                    let value = domains::manifest(&name, &flat, shared);
+                    return Ok(CallToolResult::structured(value).into());
+                }
+                (Some(child), Some(map)) => {
+                    if !domains::DOMAINS
+                        .iter()
+                        .any(|d| d.name == name && d.children.contains(&child.as_str()))
+                    {
+                        return Err(ErrorData::invalid_params(
+                            "child_tool is not a member of this domain",
+                            None,
+                        ));
+                    }
+                    name = child;
+                    args = serde_json::Map::from_iter(map);
+                    if let Some(key) = project_key {
+                        args.insert("project".into(), serde_json::json!(key));
+                    }
+                }
+                _ => {
+                    return Err(ErrorData::invalid_params(
+                        "provide both child_tool and arguments, or neither for discovery",
+                        None,
+                    ));
+                }
+            }
+        }
         let principal = context
             .extensions
             .get::<axum::http::request::Parts>()
@@ -94,7 +182,7 @@ impl ServerHandler for AwrServer {
             let principal = principal
                 .as_ref()
                 .ok_or_else(|| ErrorData::invalid_params("authenticated client required", None))?;
-            if request.name == "awr_projects_list" {
+            if name == "awr_projects_list" {
                 if !args.is_empty() {
                     return Err(ErrorData::invalid_params(
                         "project catalog takes no arguments",
@@ -107,7 +195,7 @@ impl ServerHandler for AwrServer {
                 .remove("project")
                 .and_then(|v| v.as_str().map(str::to_owned));
             match selected {
-                Some(key) => hub.select(&principal, &key, !operations::is_read_only(&request.name)),
+                Some(key) => hub.select(&principal, &key, !operations::is_read_only(&name)),
                 None => Err(Error::InvalidInput(
                     "shared MCP calls require an explicit project key".into(),
                 )),
@@ -132,11 +220,7 @@ impl ServerHandler for AwrServer {
         })?;
         let result = tokio::task::spawn_blocking(move || {
             let _permit = permit;
-            project.call(
-                &request.name,
-                args,
-                principal.as_ref().map(|p| p.id.as_str()),
-            )
+            project.call(&name, args, principal.as_ref().map(|p| p.id.as_str()))
         })
         .await
         .map_err(|e| ErrorData::internal_error(format!("MCP domain worker failed: {e}"), None))?;
