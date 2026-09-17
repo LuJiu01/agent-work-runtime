@@ -17,6 +17,7 @@ TARGETS = {
     "Darwin-arm64": ("darwin-arm64", "aarch64-apple-darwin", "macosx_15_0_arm64", "darwin", "arm64"),
     "Darwin-x86_64": ("darwin-x64", "x86_64-apple-darwin", "macosx_15_0_x86_64", "darwin", "x64"),
     "Linux-x86_64": ("linux-x64-gnu", "x86_64-unknown-linux-gnu", "linux_x86_64", "linux", "x64"),
+    "Linux-aarch64": ("linux-arm64-gnu", "aarch64-unknown-linux-gnu", "linux_aarch64", "linux", "arm64"),
     "Windows-AMD64": ("win32-x64", "x86_64-pc-windows-msvc", "win_amd64", "win32", "x64"),
 }
 PLATFORMS = {target[0] for target in TARGETS.values()}
@@ -88,7 +89,7 @@ def main():
     args = parser.parse_args()
     target_info = TARGETS.get(f"{platform.system()}-{platform.machine()}")
     if not target_info:
-        raise ValueError("native distribution build is supported only on macOS arm64/x64, Linux x64 and Windows x64")
+        raise ValueError("native distribution build is supported only on macOS arm64/x64, Linux arm64/x64 and Windows x64")
     target, rust_target, wheel_platform, npm_os, npm_cpu = target_info
     source_sha = run(["git", "rev-parse", "HEAD"])
     if run(["git", "status", "--porcelain"]):
@@ -175,7 +176,7 @@ def main():
     if npm_os == "linux":
         # PyPI requires a manylinux-compatible wheel, not an unverified linux_* tag.
         for wheel in wheels.glob("*.whl"):
-            run([sys.executable, "-m", "auditwheel", "repair", "--plat", "manylinux_2_39_x86_64", "-w", publish, wheel])
+            run([sys.executable, "-m", "auditwheel", "repair", "--plat", f"manylinux_2_39_{wheel_platform.removeprefix('linux_')}", "-w", publish, wheel])
     run([sys.executable, "-m", "twine", "check", "--strict", *publish.glob("*.whl")])
     metadata["artifacts"] = {p.name: digest(p) for p in sorted(publish.iterdir())}
     write_json(output / "manifest.json", metadata)

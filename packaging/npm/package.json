@@ -27,6 +27,7 @@
     "@originoneai/agent-work-runtime-darwin-arm64": "0.4.0",
     "@originoneai/agent-work-runtime-darwin-x64": "0.4.0",
     "@originoneai/agent-work-runtime-linux-x64-gnu": "0.4.0",
+    "@originoneai/agent-work-runtime-linux-arm64-gnu": "0.4.0",
     "@originoneai/agent-work-runtime-win32-x64": "0.4.0"
   }
 }
