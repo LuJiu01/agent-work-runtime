@@ -301,8 +301,10 @@ fn notice_lines(
                 Path::new(&item.path)
                     .strip_prefix(&outdir)
                     .unwrap_or_else(|_| Path::new(&item.path))
-                    .display()
-                    .to_string()
+                    .components()
+                    .map(|part| part.as_os_str().to_string_lossy())
+                    .collect::<Vec<_>>()
+                    .join("/")
             })
             .collect();
         lines.extend(list(&paths.iter().map(String::as_str).collect::<Vec<_>>()));
@@ -741,9 +743,9 @@ fn credential(project: &Path, command: &CredentialCommand, json_output: bool) ->
 
 #[cfg(test)]
 mod tests {
-    use std::sync::atomic::AtomicUsize;
     use super::*;
     use clap::Parser;
+    use std::sync::atomic::AtomicUsize;
 
     #[derive(Debug, Parser)]
     #[command(name = "awr")]

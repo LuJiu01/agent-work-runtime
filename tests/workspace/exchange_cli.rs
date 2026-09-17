@@ -421,7 +421,14 @@ fn credentials_are_stored_off_the_command_line_and_never_echoed() {
     }
 
     let status = fixture.ok(&fixture.dev, &["credential", "status"]);
+    // Unix reports owner-only mode; Windows leaves mode unset and relies on directory ACL.
+    #[cfg(unix)]
     assert_eq!(status["mode"], "600");
+    #[cfg(not(unix))]
+    assert!(
+        status.get("mode").is_none() || status["mode"].is_null(),
+        "{status}"
+    );
     let rendered = status.to_string();
     for secret in ["AKIAIOSFODNN7EXAMPLE", "synthetic-secret-value"] {
         assert!(!rendered.contains(secret), "status echoed {secret}");
