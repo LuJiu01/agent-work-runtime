@@ -1,13 +1,13 @@
 {
   "schema_version": 1,
   "title": "AWR Team V1 evidence matrix",
-  "notice": "Automated protocol coverage is not real-agent acceptance. real_agent_clients remains false until two distinct Agent clients complete collaboration, handoff, review and acceptance against a live Team project.",
+  "notice": "Automated protocol coverage is not a production SLA. One live dual-client run used Kimi Code CLI 2.0.0 and ZCode CLI 0.16.5 on a dedicated Team project. real_agent_accepted counts that live flow, not 69 agent-replayed TCs. Do not tag a release from this matrix.",
   "release_candidate": false,
   "tag_pushed": false,
   "counts": {
     "required": 69,
     "protocol_implemented": 69,
-    "real_agent_accepted": 0
+    "real_agent_accepted": 1
   },
   "cases": [
     {
@@ -1053,5 +1053,34 @@
       "status": "protocol_covered_not_agent_accepted",
       "blocker": null
     }
-  ]
+  ],
+  "live_agent_run": {
+    "status": "locally_verified",
+    "git_head": "313f501b1a36086dff68d081b03f18acd6acf18e",
+    "clients": [
+      {
+        "product": "Kimi Code CLI",
+        "version": "2.0.0",
+        "actor_id": "kimi-cli"
+      },
+      {
+        "product": "ZCode CLI",
+        "version": "0.16.5",
+        "actor_id": "zcode-cli"
+      }
+    ],
+    "project_key": "p11-live",
+    "work_id": "work-p11",
+    "receipt_id": "01M2RW29SNQ0738MVTCKF0ZSX7",
+    "execution_id": "01M2RW1CPY4JYJB8E9C9A81YA3",
+    "oracle": {
+      "receipts": 1,
+      "active_holder": "zcode-cli",
+      "executions": 1,
+      "pass": true
+    },
+    "flow": "kimi claimed and fixed add(); handoff; zcode verified and extended tests; human reviewer approved; complete",
+    "evidence_path": "ledger/evidence/TEAM-P11/live-dual-cli.json",
+    "not_a_release_tag": true
+  }
 }
