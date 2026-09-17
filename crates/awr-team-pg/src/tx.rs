@@ -143,7 +143,7 @@ impl TeamStore {
     }
 }
 
-async fn bind_scope(
+pub(crate) async fn bind_scope(
     tx: &tokio_postgres::Transaction<'_>,
     tenant: &str,
     project: &str,
@@ -223,6 +223,6 @@ fn hash_request(request: &CommandRequest) -> PgResult<String> {
     awr_team::request_hash(&value).map_err(|e| PgError::Protocol(e.to_string()))
 }
 
-fn new_id() -> String {
+pub(crate) fn new_id() -> String {
     ulid::Ulid::new().to_string()
 }

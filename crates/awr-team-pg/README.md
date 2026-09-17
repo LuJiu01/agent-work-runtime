@@ -18,3 +18,7 @@ Default `cargo test --workspace` compiles this crate but does not run the
 PostgreSQL tests, so CI without Postgres stays green. `awr-server migrate`
 is a no-op when `awr_team.schema_state` already matches; it refuses to start
 when the version is missing or unexpected.
+
+Source publish is `ingest` → independent `approve` → `activate`. Unsafe paths
+are rejected before any snapshot row is written. Default tests cover path
+safety without Postgres; `--features pg-tests` covers activation on PostgreSQL 17.
