@@ -45,11 +45,16 @@ pub struct OrganizationReport {
     pub business_execution_ready: bool,
     pub executable_work: Vec<String>,
     pub executable_work_total: usize,
+    #[serde(skip)]
+    pub(crate) executable_keys: BTreeSet<String>,
+    #[serde(skip)]
+    pub(crate) structured_keys: BTreeSet<String>,
     pub sources: Vec<serde_json::Value>,
     pub goals: Vec<serde_json::Value>,
     pub goal_total: usize,
     pub gaps: Vec<OrganizationGap>,
     pub gap_total: usize,
+    pub historical_gap_total: usize,
     pub truncated: bool,
     pub actions: Vec<OrganizationAction>,
     pub minimal_structure: &'static str,
@@ -58,6 +63,9 @@ pub struct OrganizationReport {
     pub source_sha: Option<String>,
     pub source_completed: usize,
     pub verified_completed: usize,
+    pub completion_not_checked: usize,
+    pub completion_check_blocked: usize,
+    pub completion_verification_failed: usize,
     pub user_confirmed_completed: usize,
     pub business_checked_completed: usize,
     pub ordinary_work_policies: Vec<serde_json::Value>,
@@ -125,11 +133,14 @@ impl OrganizationReport {
             business_execution_ready: false,
             executable_work: vec![],
             executable_work_total: 0,
+            executable_keys: BTreeSet::new(),
+            structured_keys: BTreeSet::new(),
             sources: vec![],
             goals: vec![],
             goal_total: 0,
             gaps: vec![],
             gap_total: 0,
+            historical_gap_total: 0,
             truncated: false,
             actions: vec![],
             minimal_structure: MINIMUM,
@@ -138,6 +149,9 @@ impl OrganizationReport {
             source_sha: None,
             source_completed: 0,
             verified_completed: 0,
+            completion_not_checked: 0,
+            completion_check_blocked: 0,
+            completion_verification_failed: 0,
             user_confirmed_completed: 0,
             business_checked_completed: 0,
             ordinary_work_policies: vec![],
@@ -427,9 +441,13 @@ pub fn inspect_organization(
     let mut structured_unfinished = 0;
     let mut required_cancelled = false;
     let mut verification_budget = 16 * 1024 * 1024;
-    for projected in works {
+    // Current work gets the diagnostic budget first; history cannot crowd it out.
+    let mut ordered: Vec<_> = works.iter().collect();
+    ordered.sort_by_key(|w| w.item.status == WorkStatus::Completed);
+    for projected in ordered {
         let work = &projected.item;
         let key = &work.meta.external_key;
+        let previous_gaps = result.gap_total;
         if work.archived {
             result.source_archived += 1;
             continue;
@@ -539,6 +557,7 @@ pub fn inspect_organization(
                         "work",
                     ),
                 }
+                result.historical_gap_total += result.gap_total - previous_gaps;
                 continue;
             }
             if structured && source_sha.is_some() {
@@ -551,22 +570,31 @@ pub fn inspect_organization(
                     &mut verification_budget,
                 ) {
                     Ok(()) => result.verified_completed += 1,
-                    Err(error) => result.gap(
-                        "completion_unverified",
-                        key,
-                        &error.report().message,
-                        vec![work.meta.source_ref.clone()],
-                        "evidence",
-                    ),
+                    Err(error) => {
+                        result.completion_verification_failed += 1;
+                        result.gap(
+                            "completion_verification_failed",
+                            key,
+                            &error.report().message,
+                            vec![work.meta.source_ref.clone()],
+                            "evidence",
+                        );
+                    }
                 }
+            } else if source_sha.is_none() {
+                result.completion_not_checked += 1;
+                result.gap("completion_not_checked", key, "Not checked in this query: no explicit source SHA was supplied. This is neither a verification failure nor proof of completion. Inspect the original report and its recorded source version; never fill historical evidence with current HEAD.", vec![work.meta.source_ref.clone()], "evidence");
             } else {
-                result.gap("completion_unverified", key, "Source declares completed; resolve structural gaps and supply an explicit source SHA to verify current acceptance reports.", vec![work.meta.source_ref.clone()], "evidence");
+                result.completion_check_blocked += 1;
+                result.gap("completion_check_blocked", key, "Verification was requested but structural gaps prevent checking this completion. Resolve the cited gaps and recheck the explicit source version.", vec![work.meta.source_ref.clone()], "evidence");
             }
+            result.historical_gap_total += result.gap_total - previous_gaps;
             continue;
         }
         unfinished += 1;
         if structured {
             structured_unfinished += 1;
+            result.structured_keys.insert(key.clone());
         }
         let mut blocked = false;
         if let Some(ready) = readiness.get(key.as_str()) {
@@ -596,6 +624,7 @@ pub fn inspect_organization(
             blocked = true;
         }
         if structured && !blocked {
+            result.executable_keys.insert(key.clone());
             result.executable_work_total += 1;
             if result.executable_work.len() < 100 {
                 result.executable_work.push(key.clone());

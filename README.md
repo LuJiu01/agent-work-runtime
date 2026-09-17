@@ -128,6 +128,11 @@ enabled, report actual post-compaction occupancy, and prepare a user-approved
 handoff when appropriate. `work prepare --response-view action` returns one
 bounded conditional instruction while preserving required context.
 
+The current source also provides [daily work navigation and small edits](docs/reference/daily-work.md):
+`status` separates continuation, claimable work, waits and blockers, and summarizes
+historical verification. `work edit` previews common field changes without manual
+YAML editing. Existing integrations can select `status --view full` for the earlier shape.
+
 ## Contribute
 
 See [CONTRIBUTING.md](CONTRIBUTING.md) for build and test commands. Public examples

@@ -26,6 +26,11 @@ pub enum Error {
     ClaimConflict(String),
     #[error("rule violation: {0}")]
     RuleViolation(String),
+    #[error("rule violation: {message}")]
+    SensitiveSource {
+        message: String,
+        location: DiagnosticLocation,
+    },
     #[error("required evidence missing: {0}")]
     EvidenceMissing(String),
     #[error("mutation unsupported: {0}")]
@@ -150,7 +155,7 @@ impl Error {
             Self::RevisionConflict { .. } => "RevisionConflict",
             Self::DependencyBlocked(_) => "DependencyBlocked",
             Self::ClaimConflict(_) => "ClaimConflict",
-            Self::RuleViolation(_) => "RuleViolation",
+            Self::RuleViolation(_) | Self::SensitiveSource { .. } => "RuleViolation",
             Self::EvidenceMissing(_) => "EvidenceMissing",
             Self::MutationUnsupported(_) => "MutationUnsupported",
             Self::ProposalRequired { .. } => "proposal_required",
@@ -176,6 +181,13 @@ impl Error {
             code: self.code(),
             message: crate::safe_diagnostic(&self.to_string()),
             details: (match self {
+                Self::SensitiveSource { message, location } => {
+                    let mut details = crate::secrets::sensitive_rejection_details(message).unwrap_or_default();
+                    details["location"] = serde_json::json!(location);
+                    details["rule"] = serde_json::json!("source.public_content");
+                    details["repair"] = serde_json::json!("Inspect the indicated source locally. Remove actual values or use explicit redacted placeholders. For public schemas use a structured type definition or a complete value-free type declaration; do not disable scanning.");
+                    Some(details)
+                }
                 Self::InvalidSource(diagnostic) => Some(serde_json::json!({
                     "location":diagnostic.location,"rule":diagnostic.rule,"repair":diagnostic.repair
                 })),

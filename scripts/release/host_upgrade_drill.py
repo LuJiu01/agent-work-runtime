@@ -111,7 +111,7 @@ def drill(old, new, out):
         ids_before = {t: db.execute(f'SELECT id FROM "{t}" ORDER BY id').fetchall() for t in ids_after}
     assert ids_before == ids_after, "upgrade changed project, source or task identity"
     assert digest(root / "legacy-app.json") == legacy
-    assert native(new, root, "status")["organization"]["verified_completed"] == 0
+    assert native(new, root, "status", "--view", "full")["organization"]["verified_completed"] == 0
     rejected = None
     if new_caps["database"]["schema_version"] > old_manifest["schema"]:
         protected = db_rows(root)

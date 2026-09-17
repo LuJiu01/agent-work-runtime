@@ -7,6 +7,8 @@ use std::{collections::BTreeMap, path::Path};
 
 #[derive(Debug, Subcommand)]
 pub enum WorkCommand {
+    /// Preview a small edit by work ID; apply the reviewed change without editing YAML.
+    Edit(crate::work_edit::EditArgs),
     /// Inspect dependencies, impact, readiness and claims without admitting execution.
     Graph {
         #[arg(long)]
@@ -189,7 +191,15 @@ pub fn status(
     json_output: bool,
     cached: bool,
 ) -> Result<()> {
-    status_with_scope(root, reference, source_sha, json_output, cached, None)
+    status_with_scope(
+        root,
+        reference,
+        source_sha,
+        json_output,
+        cached,
+        None,
+        false,
+    )
 }
 pub fn status_with_scope(
     root: &Path,
@@ -198,6 +208,7 @@ pub fn status_with_scope(
     json_output: bool,
     cached: bool,
     scope: Option<&awr_runtime::StatusScope>,
+    action_view: bool,
 ) -> Result<()> {
     if source_sha.is_some_and(|s| !is_source_sha(s)) {
         return Err(Error::InvalidInput(
@@ -240,7 +251,12 @@ pub fn status_with_scope(
         &report,
     )?;
     if let Some(scope) = scope {
-        let mut value = awr_runtime::summarize_status(
+        let project_status = if action_view {
+            awr_runtime::action_status
+        } else {
+            awr_runtime::summarize_status
+        };
+        let mut value = project_status(
             &query.store,
             &query.project,
             scope,
@@ -254,9 +270,48 @@ pub fn status_with_scope(
         query.check_revision()?;
         if json_output {
             println!("{}", serde_json::to_string(&value)?);
+        } else if action_view {
+            println!(
+                "Project: {} | {} selected\nContinue: {} | Claimable: {} | Waiting: {} | Blocked: {}\nNext: {}",
+                query.project.name,
+                value["total"],
+                value["current_total"],
+                value["ready_count"],
+                value["waiting_count"],
+                value["blocked_count"],
+                value["guidance"]["next_action"].as_str().unwrap_or("")
+            );
+            for bucket in ["current", "ready", "waiting", "blocked"] {
+                for item in value[bucket].as_array().into_iter().flatten() {
+                    println!(
+                        "  {bucket}: {} — {}",
+                        item["key"].as_str().unwrap_or(""),
+                        item["next_action"].as_str().unwrap_or("Inspect work show")
+                    );
+                }
+            }
+            for gap in value["organization"]["gaps"]
+                .as_array()
+                .into_iter()
+                .flatten()
+            {
+                println!(
+                    "  {} [{}]: {}",
+                    gap["code"].as_str().unwrap_or(""),
+                    gap["target"].as_str().unwrap_or(""),
+                    gap["detail"].as_str().unwrap_or("")
+                );
+            }
+            println!(
+                "History: {} source-completed; {} not checked in this query; {} failed verification; {} checks blocked.\nDetails: awr work show KEY; awr status --view full; awr intake inspect --source-sha SHA",
+                value["history"]["source_completed"],
+                value["history"]["not_checked"],
+                value["history"]["verification_failed"],
+                value["history"]["check_blocked"]
+            );
         } else {
             println!(
-                "Project: {} | {} selected | {} active | {} ready | {} blocked\nNext: {}\nDetails: awr status; awr work show KEY",
+                "Project: {} | {} selected | {} active | {} ready | {} not selectable\nNext: {}\nDetails: awr status --view full; awr work show KEY",
                 query.project.name,
                 value["total"],
                 value["current_total"],
@@ -404,6 +459,9 @@ pub fn ready(
     value["ready_total"] = json!(report.ready.len());
     value["truncated"] = json!(report.ready.len() > limit);
     value["blocked_total"] = json!(report.blocked.len());
+    value["queue_basis"] = json!(
+        "new claims only; blocked_total means not selectable, including active work; use status for continuation and waits"
+    );
     value["diagnostic_counts"] = json!(counts);
     value["blocked_sample"] = json!(
         report
@@ -417,6 +475,7 @@ pub fn ready(
     if json_output {
         println!("{}", serde_json::to_string_pretty(&value)?);
     } else {
+        println!("Claim queue only. Use awr status for current continuation and waits.");
         println!(
             "Ready: {}; not selectable: {}; revision: {}",
             report.ready.len(),
@@ -445,6 +504,7 @@ pub fn ready(
 
 pub fn work(root: &Path, command: &WorkCommand, json_output: bool) -> Result<()> {
     match command {
+        WorkCommand::Edit(args) => crate::work_edit::run(root, args, json_output),
         WorkCommand::Graph {
             root: roots,
             branch,

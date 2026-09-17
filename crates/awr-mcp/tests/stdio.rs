@@ -663,7 +663,7 @@ async fn project_organization_guides_repairs_and_preserves_readonly_mcp_state() 
     f.reindex();
     let client = f.client().await;
     let before = f.logical_state();
-    let initial = success(call(&client, "awr_project_status", json!({})).await);
+    let initial = success(call(&client, "awr_project_status", json!({"view":"full"})).await);
     assert_eq!(initial["organization"]["state"], "needs_organization");
     assert!(
         initial["organization"]["gaps"]
@@ -687,7 +687,7 @@ async fn project_organization_guides_repairs_and_preserves_readonly_mcp_state() 
     assert_eq!(f.logical_state(), unchanged);
     f.reindex();
     let before = f.logical_state();
-    let ready = success(call(&client, "awr_project_status", json!({})).await);
+    let ready = success(call(&client, "awr_project_status", json!({"view":"full"})).await);
     assert_eq!(ready["organization"]["state"], "ready");
     assert_eq!(ready["organization"]["executable_work"], json!(["W"]));
     assert_eq!(ready["suggested_work"]["external_key"], "W");
@@ -767,6 +767,58 @@ async fn stdio_discovers_tools_and_survives_protocol_and_argument_errors() {
     success(call(&client, "awr_project_status", json!({})).await);
     client.cancel().await.unwrap();
     assert_eq!(f.logical_state(), before);
+}
+
+#[tokio::test]
+async fn work_edit_shortcut_keeps_readonly_preview_review_and_original_journal() {
+    let f = Fixture::new();
+    let client = f.client().await;
+    let before = f.logical_state();
+    let bytes = fs::read(f.root.join("work.yaml")).unwrap();
+    let input = json!({"request_id":"small-edit","reason":"Clarify the task title","change":{"kind":"work_edit","work":"W","fields":{"title":"Reviewed analysis"}}});
+    let preview = success(call(&client, "awr_change_preview", input.clone()).await);
+    assert_eq!(preview["view"], "work_edit");
+    assert_eq!(preview["read_only"], true);
+    assert!(preview.get("preview").is_none());
+    assert_eq!(f.logical_state(), before);
+    assert_eq!(fs::read(f.root.join("work.yaml")).unwrap(), bytes);
+    let mut apply = input.clone();
+    apply["expected_revision"] = preview["project_revision"].clone();
+    apply["expected_preview"] = preview["preview_fingerprint"].clone();
+    // Applying an unbound shortcut is rejected even if its preview hash is known.
+    error(
+        call(&client, "awr_change_apply", apply.clone()).await,
+        "InvalidInput",
+    );
+    apply["change"] = preview["change"].clone();
+    let saved = success(call(&client, "awr_change_apply", apply.clone()).await);
+    assert_eq!(saved["write_outcome"], "applied");
+    assert_eq!(
+        success(call(&client, "awr_change_apply", apply).await)["already_recorded"],
+        true
+    );
+    let status = success(
+        call(
+            &client,
+            "awr_change_status",
+            json!({"kind":"work_edit","request_id":"small-edit"}),
+        )
+        .await,
+    );
+    assert_eq!(status["found"], true);
+    assert_eq!(status["proposal_id"], saved["proposal_id"]);
+    let (store, project) = f.store();
+    let work = store.work_item(project.id, "W").unwrap();
+    assert_eq!(work.item.title, "Reviewed analysis");
+    assert_eq!(work.item.status, awr_core::WorkStatus::Ready);
+    for fields in [
+        json!({"status":"completed"}),
+        json!({"verification":{"level":"verified"}}),
+        json!({"owner":"other-agent"}),
+    ] {
+        error(call(&client,"awr_change_preview",json!({"request_id":"bad-edit","reason":"Attempt unsupported field","change":{"kind":"work_edit","work":"W","fields":fields}})).await,"MutationUnsupported");
+    }
+    client.cancel().await.unwrap();
 }
 
 #[tokio::test]

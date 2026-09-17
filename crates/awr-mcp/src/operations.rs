@@ -300,12 +300,13 @@ fn status(view: &ReadProject, args: StatusArgs) -> Result<Value> {
         goal: args.goal,
         milestone: args.milestone,
     };
-    let summary = match args.view.as_deref().unwrap_or("full") {
+    let action_view = args.view.as_deref().unwrap_or("action") == "action";
+    let summary = match args.view.as_deref().unwrap_or("action") {
         "full" if scope.is_empty() => false,
-        "summary" => true,
+        "summary" | "action" => true,
         _ => {
             return Err(Error::InvalidInput(
-                "view must be full or summary; scopes require summary".into(),
+                "view must be action, full or summary; scopes require action or summary".into(),
             ));
         }
     };
@@ -324,7 +325,12 @@ fn status(view: &ReadProject, args: StatusArgs) -> Result<Value> {
         &ready,
     )?;
     if summary {
-        return awr_runtime::summarize_status(
+        let project_status = if action_view {
+            awr_runtime::action_status
+        } else {
+            awr_runtime::summarize_status
+        };
+        return project_status(
             &view.store,
             &view.project,
             &scope,
@@ -415,6 +421,7 @@ fn ready(view: &ReadProject, args: ReadyArgs) -> Result<Value> {
     Ok(
         json!({"branch_id":branch,"ready":report.ready.iter().take(args.limit).map(ready_brief).collect::<Vec<_>>(),
         "ready_total":report.ready.len(),"truncated":report.ready.len()>args.limit,"blocked_total":report.blocked.len(),
+        "queue_basis":"new claims only; blocked_total means not selectable, including active work; use status for continuation and waits",
         "diagnostic_counts":counts,"blocked_sample":report.blocked.iter().take(3).map(ready_brief).collect::<Vec<_>>(),"organization":organization}),
     )
 }

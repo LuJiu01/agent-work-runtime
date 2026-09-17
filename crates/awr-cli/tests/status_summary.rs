@@ -49,7 +49,7 @@ impl Project {
 #[test]
 fn summary_preserves_counts_focus_and_explicit_omissions() {
     let p = Project::new();
-    let full = ok(&p.0, &["status"]);
+    let full = ok(&p.0, &["status", "--view", "full"]);
     let summary = ok(&p.0, &["status", "--view", "summary", "--goal", "G"]);
     assert!(full.get("view").is_none());
     assert_eq!(summary["schema_version"], 1);
@@ -83,7 +83,7 @@ fn exact_scope_never_silently_hides_invalid_selection() {
     assert_eq!(selected["current_total"], 1);
     assert_eq!(selected["ready_count"], 1);
     for args in [
-        vec!["status", "--work", "W000"],
+        vec!["status", "--view", "full", "--work", "W000"],
         vec!["status", "--view", "summary", "--goal", "MISSING"],
         vec!["status", "--view", "summary", "--work", "MISSING"],
         vec!["status", "--view", "summary", "--milestone", "MISSING"],

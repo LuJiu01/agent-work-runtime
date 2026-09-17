@@ -32,6 +32,8 @@ mod read;
 mod resume;
 mod work_action;
 mod work_create;
+mod work_edit;
+pub use work_edit::edit_work;
 mod work_graph;
 pub use work_graph::{WorkGraphRequest, work_graph};
 mod response_view;
@@ -167,6 +169,8 @@ pub use batch::*;
 
 mod status_summary;
 pub use status_summary::{StatusScope, summarize_status};
+mod status_action;
+pub use status_action::action_status;
 
 mod organization_change;
 pub use organization_change::{

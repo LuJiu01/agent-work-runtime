@@ -39,7 +39,7 @@ client, change kind and caller-selected `request_id`:
    `expected_preview` from that review. Version/source conflicts require a fresh
    review. An already-recorded identical request returns its original outcome.
 3. `awr_change_status`: send the original `request_id` and `kind` (`create`,
-   `batch` or `edit`). This remains available when a partial write left stale sources.
+   `batch`, `edit` or `work_edit`). This remains available when a partial write left stale sources.
 4. `awr_change_recover`: after inspecting a pending outcome, send the same identity
    and the current `expected_revision`. Recovery preserves externally edited bytes
    and reports which phases actually completed; it does not start another executor.
@@ -58,6 +58,13 @@ its journal merely by guessing the request ID. Stdio has one local client identi
 The `reason` and field values describe the caller's intent; they do not independently
 verify it. Batch/edit attribution uses the actual MCP client as `delegated_agent`.
 The API does not grant a human-confirmation completion path to an Agent.
+
+For title/summary/priority/next-action changes, use the [small edit shortcut](daily-work.md):
+`change:{kind:"work_edit",work:"KEY",fields:{next_action:"Review the draft"}}`.
+Its preview returns compact changed fields and a normalized `change`, plus
+`preview_fingerprint` at the top level. Apply that returned change so retries
+retain the reviewed source fingerprint. General create/batch/edit responses keep
+their existing full preview shape.
 
 ### Create a draft
 

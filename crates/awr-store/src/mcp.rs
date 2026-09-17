@@ -202,6 +202,32 @@ impl Store {
             })
             .collect()
     }
+    /// Unresolved waits survive an ended session and are scoped to the work branch.
+    /// No UI sample limit may turn an old unanswered question into available work.
+    pub fn pending_work_waits(
+        &self,
+        project: Id,
+        work: Id,
+        branch: Option<Id>,
+    ) -> Result<Vec<McpWait>> {
+        let mut query = self.conn.prepare("SELECT json_extract(e.payload_json,'$.wait') FROM events e JOIN sessions s ON s.id=e.session_id AND s.project_id=e.project_id WHERE e.project_id=?1 AND s.work_item_id=?2 AND s.branch_id IS ?3 AND e.event_type='mcp.wait_created' AND NOT EXISTS(SELECT 1 FROM events r WHERE r.project_id=e.project_id AND r.event_type='mcp.wait_replied' AND json_extract(r.payload_json,'$.wait.id')=json_extract(e.payload_json,'$.wait.id')) ORDER BY e.project_revision").map_err(db_error)?;
+        let values = query
+            .query_map(
+                params![
+                    project.to_string(),
+                    work.to_string(),
+                    branch.map(|b| b.to_string())
+                ],
+                |r| r.get::<_, String>(0),
+            )
+            .map_err(db_error)?;
+        values
+            .map(|v| {
+                serde_json::from_str(&v.map_err(db_error)?)
+                    .map_err(|_| Error::Storage("invalid MCP wait receipt".into()))
+            })
+            .collect()
+    }
     pub fn create_mcp_wait(
         &mut self,
         project: Id,

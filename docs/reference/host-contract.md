@@ -739,8 +739,11 @@ Follow the [matched upgrade and rollback procedure](../release/DISTRIBUTIONS.md#
 returns compact JSON under `--json`. The same selectors are available in
 `awr_project_status` as `view: "summary"`, `work: ["KEY"]`, `goal`, and `milestone`.
 Selectors intersect exact source-declared associations; unknown references are errors.
-No selectors means all projected work. The default full view remains compatible;
-selectors on that view are rejected rather than ignored.
+No selectors means all projected work. The earlier full view remains available
+explicitly; selectors on that view are rejected rather than ignored. The current
+source defaults to the [action queue](daily-work.md), which distinguishes
+continuation, claimable work, waits and actual blockers. Pin `view:"full"` in
+integrations requiring the previous default shape.
 
 The summary includes source status counts, current work, the next action, readiness
 and blocking codes, all-source freshness, project organization gaps and registered

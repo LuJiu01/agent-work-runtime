@@ -11,7 +11,7 @@ use serde::Serialize;
 use serde_json::Value;
 use std::{borrow::Cow, sync::LazyLock};
 
-pub const SECRET_POLICY_VERSION: u32 = 4;
+pub const SECRET_POLICY_VERSION: u32 = 5;
 pub const SENSITIVE_CONTENT_WITHHELD: &str = "[sensitive content withheld]";
 const REJECTION: &str =
     "sensitive content is not accepted; remove secret values or use explicit redacted placeholders";
@@ -50,6 +50,18 @@ static ASSIGNMENT: LazyLock<Regex> = LazyLock::new(|| {
 static ENV_ASSIGNMENT: LazyLock<Regex> = LazyLock::new(|| {
     Regex::new(r"(?:^|[\s;])(?:export[ \t]+)?[A-Z_][A-Z0-9_]{1,80}[ \t]*=[ \t]*")
         .expect("fixed environment assignment pattern")
+});
+
+// Only complete, value-free declarations qualify. A bare YAML field, object
+// literal, initializer, literal type or arbitrary type expression does not.
+static TYPE_DECLARATION: LazyLock<Regex> = LazyLock::new(|| {
+    let primitive = r"(?:string|number|boolean|unknown|never|undefined|null)(?:\[\])?";
+    let field = format!(
+        r"(?:readonly[ \t]+)?[A-Za-z_$][\w$]*\??[ \t]*:[ \t]*{primitive}(?:[ \t]*\|[ \t]*{primitive})*[ \t]*"
+    );
+    Regex::new(&format!(
+        r"(?m)^[ \t]*(?:export[ \t]+)?(?:declare[ \t]+)?(?:(?:interface|class)[ \t]+[A-Za-z_$][\w$]*|type[ \t]+[A-Za-z_$][\w$]*[ \t]*=)[ \t]*\{{\s*(?:{field}(?:[;,]|\r?\n)\s*)*(?:{field})?\s*\}}[ \t]*;?[ \t]*\r?$"
+    )).expect("fixed value-free declaration pattern")
 });
 
 /// A diagnostic category is safe to disclose; matched text and key names are not.
@@ -182,27 +194,32 @@ fn normalized(text: &str) -> Cow<'_, str> {
     if !text.contains('\\') && !text.chars().any(|c| folded_char(c) != Some(c)) {
         return Cow::Borrowed(text);
     }
-    let mut out = String::with_capacity(text.len());
-    let mut chars = text.chars().peekable();
-    while let Some(mut c) = chars.next() {
-        if c == '\\' && chars.peek() == Some(&'u') {
-            let mut candidate = chars.clone();
-            candidate.next();
-            let hex: String = candidate.by_ref().take(4).collect();
-            if hex.len() == 4
-                && hex.bytes().all(|b| b.is_ascii_hexdigit())
-                && let Ok(code) = u32::from_str_radix(&hex, 16)
-                && let Some(decoded) = char::from_u32(code)
-            {
-                c = decoded;
-                chars = candidate;
+    Cow::Owned(normalized_chars(text).map(|(_, c)| c).collect())
+}
+
+fn normalized_chars(text: &str) -> impl Iterator<Item = (usize, char)> + '_ {
+    let mut chars = text.char_indices().peekable();
+    std::iter::from_fn(move || {
+        loop {
+            let (offset, mut c) = chars.next()?;
+            if c == '\\' && chars.peek().is_some_and(|(_, c)| *c == 'u') {
+                let mut candidate = chars.clone();
+                candidate.next();
+                let hex: String = candidate.by_ref().take(4).map(|(_, c)| c).collect();
+                if hex.len() == 4
+                    && hex.bytes().all(|b| b.is_ascii_hexdigit())
+                    && let Ok(code) = u32::from_str_radix(&hex, 16)
+                    && let Some(decoded) = char::from_u32(code)
+                {
+                    c = decoded;
+                    chars = candidate;
+                }
+            }
+            if let Some(c) = folded_char(c) {
+                return Some((offset, c));
             }
         }
-        if let Some(c) = folded_char(c) {
-            out.push(c);
-        }
-    }
-    Cow::Owned(out)
+    })
 }
 
 fn placeholder(text: &str) -> bool {
@@ -252,52 +269,73 @@ fn has_value(rest: &str) -> bool {
 
 pub fn sensitive_text_category(text: &str) -> Option<SensitiveCategory> {
     let text = normalized(text);
-    if KNOWN.is_match(&text)
-        || BEARER_AUTH.captures_iter(&text).any(|capture| {
-            let value = &capture[1];
-            // An unlabelled ordinary word is prose, not proof of an opaque token.
-            // Actual Authorization assignments/headers below reject values of ANY shape/length.
-            value.len() >= 32
-                || (value.len() >= 8
-                    && (value
-                        .bytes()
-                        .any(|b| b.is_ascii_digit() || b"+/_=-".contains(&b))
-                        || (value.bytes().skip(1).any(|b| b.is_ascii_uppercase())
-                            && value.bytes().any(|b| b.is_ascii_lowercase()))))
+    sensitive_match(&text).map(|(category, _)| category)
+}
+
+/// Offset is in normalized text; callers must map it back before displaying it.
+fn sensitive_match(text: &str) -> Option<(SensitiveCategory, usize)> {
+    let credential = KNOWN
+        .find(text)
+        .map(|m| m.start())
+        .or_else(|| {
+            BEARER_AUTH
+                .captures_iter(text)
+                .find(|capture| {
+                    let value = &capture[1];
+                    // An unlabelled ordinary word is prose, not proof of an opaque token.
+                    // Actual Authorization assignments/headers below reject values of ANY shape/length.
+                    value.len() >= 32
+                        || (value.len() >= 8
+                            && (value
+                                .bytes()
+                                .any(|b| b.is_ascii_digit() || b"+/_=-".contains(&b))
+                                || (value.bytes().skip(1).any(|b| b.is_ascii_uppercase())
+                                    && value.bytes().any(|b| b.is_ascii_lowercase()))))
+                })
+                .map(|c| c.get(0).unwrap().start())
         })
-        || BASIC_AUTH.captures_iter(&text).any(|capture| {
-            // RFC 7617 section 2 encodes user-id:password, not ordinary words
-            // following "basic". Accept omitted padding for detection as well.
-            // https://www.rfc-editor.org/rfc/rfc7617#section-2
-            STANDARD
-                .decode(&capture[1])
-                .or_else(|_| STANDARD_NO_PAD.decode(&capture[1]))
-                .is_ok_and(|bytes| bytes.contains(&b':'))
-        })
-    {
-        return Some(SensitiveCategory::Credential);
+        .or_else(|| {
+            BASIC_AUTH
+                .captures_iter(text)
+                .find(|capture| {
+                    // RFC 7617 section 2 encodes user-id:password, not ordinary words
+                    // following "basic". Accept omitted padding for detection as well.
+                    // https://www.rfc-editor.org/rfc/rfc7617#section-2
+                    STANDARD
+                        .decode(&capture[1])
+                        .or_else(|_| STANDARD_NO_PAD.decode(&capture[1]))
+                        .is_ok_and(|bytes| bytes.contains(&b':'))
+                })
+                .map(|c| c.get(0).unwrap().start())
+        });
+    if let Some(offset) = credential {
+        return Some((SensitiveCategory::Credential, offset));
     }
-    if ASSIGNMENT.find_iter(&text).any(|m| {
+    let declarations: Vec<_> = TYPE_DECLARATION.find_iter(text).collect();
+    if let Some(m) = ASSIGNMENT.find_iter(text).find(|m| {
         has_value(&text[m.end()..])
             && !definition_after_assignment(&text[m.end()..])
-            && !narrative_authorization(&text, m.as_str(), m.start(), m.end())
+            && !narrative_authorization(text, m.as_str(), m.start(), m.end())
+            && !declarations
+                .iter()
+                .any(|d| d.start() <= m.start() && m.end() < d.end())
     }) {
-        return Some(SensitiveCategory::LabelledValue);
+        return Some((SensitiveCategory::LabelledValue, m.start()));
     }
-    if ENV_ASSIGNMENT.find_iter(&text).any(|m| {
-        environment_assignment(&text, m.as_str(), m.start())
+    if let Some(m) = ENV_ASSIGNMENT.find_iter(text).find(|m| {
+        environment_assignment(text, m.as_str(), m.start())
             && has_value(&text[m.end()..])
             && !definition_after_assignment(&text[m.end()..])
     }) {
-        return Some(SensitiveCategory::EnvironmentDump);
+        return Some((SensitiveCategory::EnvironmentDump, m.start()));
     }
-    if PRIVATE_BLOCK
-        .find_iter(&text)
-        .any(|m| has_value(&text[m.end()..]))
+    if let Some(m) = PRIVATE_BLOCK
+        .find_iter(text)
+        .find(|m| has_value(&text[m.end()..]))
     {
-        return Some(SensitiveCategory::PrivatePrompt);
+        return Some((SensitiveCategory::PrivatePrompt, m.start()));
     }
-    if ENV_BLOCK.find_iter(&text).any(|m| {
+    if let Some(m) = ENV_BLOCK.find_iter(text).find(|m| {
         let rest = &text[m.end()..];
         let value = rest.trim_start();
         let whitespace = &rest[..rest.len() - value.len()];
@@ -305,7 +343,7 @@ pub fn sensitive_text_category(text: &str) -> Option<SensitiveCategory> {
             && has_value(value)
             && !definition_after_assignment(rest)
     }) {
-        return Some(SensitiveCategory::EnvironmentDump);
+        return Some((SensitiveCategory::EnvironmentDump, m.start()));
     }
     None
 }
@@ -546,6 +584,38 @@ pub fn ensure_public_bytes(bytes: &[u8]) -> Result<()> {
     }
     Ok(())
 }
+
+/// Add safe source coordinates without retaining or echoing the matched content.
+/// Decoded structured-only findings have no invented line or column.
+pub fn ensure_public_source(bytes: &[u8], locator: &str) -> Result<()> {
+    match ensure_public_bytes(bytes) {
+        Err(Error::RuleViolation(message)) if sensitive_rejection_details(&message).is_some() => {
+            let mut location = crate::DiagnosticLocation {
+                locator: Some(locator.into()),
+                ..Default::default()
+            };
+            if let Ok(original) = std::str::from_utf8(bytes) {
+                let text = normalized(original);
+                if let Some((_, start)) = sensitive_match(&text) {
+                    let start = start + text[start..].len() - text[start..].trim_start().len();
+                    let mut position = 0;
+                    if let Some((offset, _)) = normalized_chars(original).find(|(_, c)| {
+                        let found = position == start;
+                        position += c.len_utf8();
+                        found
+                    }) {
+                        let prefix = &original[..offset];
+                        location.line = Some(prefix.bytes().filter(|b| *b == b'\n').count() + 1);
+                        location.column =
+                            Some(prefix.rsplit('\n').next().unwrap_or("").chars().count() + 1);
+                    }
+                }
+            }
+            Err(Error::SensitiveSource { message, location })
+        }
+        result => result,
+    }
+}
 pub fn ensure_public_value(value: &Value) -> Result<()> {
     if let Some(category) = sensitive_value_category(value) {
         Err(Error::RuleViolation(category.rejection()))
@@ -621,6 +691,61 @@ mod tests {
     use serde_json::json;
 
     #[test]
+    fn complete_primitive_type_declarations_are_not_secret_assignments() {
+        for text in [
+            "interface Login { password: string; }",
+            "class Login { password: string; }",
+            "```ts\nexport interface Login {\n  username: string;\n  password: string\n}\n```",
+            "type Login = { readonly password: string | undefined; token: string[] };",
+        ] {
+            ensure_public_text(text).unwrap_or_else(|e| panic!("{text}: {e}"));
+        }
+        for text in [
+            "password: string",
+            "password = string",
+            r#"{"password":"string"}"#,
+            "const login = { password: string };",
+            "interface Login { password: string = suppliedValue; }",
+            "class Login { password: string = suppliedValue; }",
+            "interface Login { password: 'suppliedValue'; }",
+            "interface Login { password: string; token: suppliedValue; }",
+            "interface Login { password: string; }\npassword: suppliedValue",
+            "interface Login { password: string; }\nBasic YTpi",
+        ] {
+            assert!(ensure_public_text(text).is_err(), "{text}");
+        }
+    }
+
+    #[test]
+    fn source_diagnostics_map_normalization_to_original_coordinates_without_echo() {
+        for (text, line, column) in [
+            ("# 中文\n\n  password: synthetic-private-value", 3, 3),
+            ("# 中文\n  ｐａｓｓｗｏｒｄ： synthetic-private-value", 2, 3),
+            ("# 中文\n  pa\u{200b}ssword: synthetic-private-value", 2, 3),
+            ("# 中文\n  pa\\u0073sword: synthetic-private-value", 2, 3),
+        ] {
+            let report = ensure_public_source(text.as_bytes(), "README.md")
+                .unwrap_err()
+                .report();
+            assert_eq!(report.code, "RuleViolation");
+            let details = report.details.as_ref().unwrap();
+            assert_eq!(details["location"]["locator"], "README.md");
+            assert_eq!(details["location"]["line"], line);
+            assert_eq!(details["location"]["column"], column);
+            assert_eq!(details["rule"], "source.public_content");
+            assert!(
+                !serde_json::to_string(&report)
+                    .unwrap()
+                    .contains("synthetic-private-value")
+            );
+            assert!(
+                crate::render_diagnostic_details(Some(details))
+                    .contains(&format!("README.md:{line}:{column}"))
+            );
+        }
+    }
+
+    #[test]
     fn command_configuration_and_permission_narratives_are_not_dumps_or_headers() {
         for text in [
             "Expected count APP_EXPECTED_TASKS=134; keep the original source.",
@@ -667,7 +792,10 @@ mod tests {
             let report = ensure_public_text(text).unwrap_err().report();
             assert_eq!(report.code, "RuleViolation");
             assert_eq!(report.details.as_ref().unwrap()["category"], category);
-            assert_eq!(report.details.as_ref().unwrap()["policy_version"], 4);
+            assert_eq!(
+                report.details.as_ref().unwrap()["policy_version"],
+                SECRET_POLICY_VERSION
+            );
             assert!(!serde_json::to_string(&report).unwrap().contains(text));
         }
     }
