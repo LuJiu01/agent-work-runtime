@@ -18,4 +18,9 @@ a clean database and returns successfully when the expected version is
 already present. The application role is not table owner and does not
 receive `BYPASSRLS`. Event history is insert-only for that role.
 
+Source publish is ingest → approve → activate. Path checks, hashing and
+parser binding happen before the project lock. The lock only writes already
+hashed, immutable rows. An unactivated candidate cannot be read as the
+current contract. A failed activation keeps the previous `active_snapshot_id`.
+
 This is not a production high-availability topology.
