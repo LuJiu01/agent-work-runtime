@@ -16,7 +16,7 @@ use std::{
     path::{Path, PathBuf},
     sync::{
         Arc,
-        atomic::{AtomicBool, AtomicUsize, Ordering},
+        atomic::{AtomicBool, Ordering},
     },
     time::{Duration, Instant},
 };
@@ -741,6 +741,7 @@ fn credential(project: &Path, command: &CredentialCommand, json_output: bool) ->
 
 #[cfg(test)]
 mod tests {
+    use std::sync::atomic::AtomicUsize;
     use super::*;
     use clap::Parser;
 
