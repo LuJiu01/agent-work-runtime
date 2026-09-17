@@ -8,6 +8,7 @@ exports.run = function run(command) {
     'darwin-arm64': 'darwin-arm64',
     'darwin-x64': 'darwin-x64',
     'linux-x64': 'linux-x64-gnu',
+    'linux-arm64': 'linux-arm64-gnu',
     'win32-x64': 'win32-x64',
   };
   const target = targets[`${process.platform}-${process.arch}`];

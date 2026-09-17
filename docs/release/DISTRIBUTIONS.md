@@ -17,14 +17,23 @@ awr-mcp --version
 | macOS arm64 | macOS 15+; `macosx_15_0_arm64` wheel |
 | macOS Intel x64 | macOS 15+; `macosx_15_0_x86_64` wheel |
 | Linux x64 GNU | glibc 2.39+; `manylinux_2_39_x86_64` wheel |
+| Linux arm64 GNU | glibc 2.39+; `manylinux_2_39_aarch64` wheel |
 | Windows x64 | `win_amd64` wheel; native checks run on Windows Server 2025 |
+
+Both Linux targets need glibc 2.39 or newer, the Ubuntu 24.04 baseline. Pip rejects the
+`manylinux_2_39_x86_64` and `manylinux_2_39_aarch64` wheels on older systems, and the npm
+launcher checks the runtime glibc before resolving the native package, failing with
+`this Linux distribution requires glibc 2.39 or newer (Ubuntu 24.04 baseline).` Debian 12
+and the Raspberry Pi OS releases based on it (glibc 2.36) are out of scope. Check a target
+machine with `ldd --version | head -n 1` or
+`node -p "process.report.getReport().header.glibcVersionRuntime"`.
 
 Python launchers require Python 3.9+, npm launchers Node 22.14+. Distribution checks
 run Python 3.12 and Node 24. Other architectures and older operating systems need
 separate verification. Git-bound operations require Git; SQLite is bundled.
 
 The npm wrapper depends on exact-version optional native packages ending in
-`-darwin-arm64`, `-darwin-x64`, `-linux-x64-gnu` and `-win32-x64`. Keep optional dependencies enabled.
+`-darwin-arm64`, `-darwin-x64`, `-linux-x64-gnu`, `-linux-arm64-gnu` and `-win32-x64`. Keep optional dependencies enabled.
 There is no install script or network downloader. Wheels embed the binaries.
 Native payloads include source identity, binary hashes and dependency license notices.
 Only explicit packaging inputs and binaries are included; internal records and AWR
@@ -56,8 +65,8 @@ so an authentication failure in one registry does not hide the other's result.
 Trusted publishers bind this repository, workflow and environment.
 
 The assembler requires matching source/version identities, clean trees, matching
-artifact hashes and successful installation receipts for all four platforms. It
-produces five npm archives, four wheels, a release manifest and `SHA256SUMS`.
+artifact hashes and successful installation receipts for all five platforms. It
+produces six npm archives, five wheels, a release manifest and `SHA256SUMS`.
 Native archives and wheels carry Apache-2.0 and applicable third-party notices.
 
 Stable versions publish with npm `latest`; development/prerelease versions use
@@ -66,7 +75,7 @@ upload partly succeeds, compare the actual registry bytes before any retry. Use 
 verified assembled archives for a manual npm upload if interactive authentication
 is required; never replace them with a fresh unverified build.
 
-After publication, download all nine registry files, compare hashes, and install
+After publication, download all eleven registry files, compare hashes, and install
 both channels into fresh environments. GitHub release assets contain the same
 packages, checksums and aggregate manifest. Raw execution records stay local or in
 isolated CI artifacts and are not committed to the repository.

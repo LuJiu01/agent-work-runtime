@@ -43,7 +43,7 @@ class ReleaseChecks(unittest.TestCase):
         npm.mkdir()
         artifacts = {}
         tag = "next" if "-" in version else "latest"
-        for suffix in ["", "-darwin-arm64", "-darwin-x64", "-linux-x64-gnu", "-win32-x64"]:
+        for suffix in ["", "-darwin-arm64", "-darwin-x64", "-linux-x64-gnu", "-linux-arm64-gnu", "-win32-x64"]:
             path = npm / ("package" + suffix + ".tgz")
             metadata = json.dumps({"name": "@originoneai/agent-work-runtime" + suffix,
                                    "version": version, "publishConfig": {"tag": tag}}).encode()
@@ -64,7 +64,7 @@ class ReleaseChecks(unittest.TestCase):
                 with patch.object(sys, "argv", ["publish_npm.py", str(root)]), patch("publish_npm.subprocess.run") as run, redirect_stdout(io.StringIO()):
                     publish_npm.main()
                 commands = [call.args[0] for call in run.call_args_list]
-                self.assertEqual(len(commands), 5)
+                self.assertEqual(len(commands), 6)
                 self.assertTrue(all(c[c.index("--tag")+1] == tag for c in commands))
                 self.assertEqual(Path(commands[-1][2]).name, "package.tgz")
                 self.assertIn("package-darwin-x64.tgz", [Path(c[2]).name for c in commands[:-1]])
@@ -147,7 +147,7 @@ class ReleaseChecks(unittest.TestCase):
                         assemble_release.main()
                         result = json.loads((root / "release/release-manifest.json").read_text())
                         self.assertEqual((result["version"], result["python_version"], result["channel"]), ("0.2.0", "0.2.0", "latest"))
-                        self.assertEqual(len(result["artifacts"]), 9)
+                        self.assertEqual(len(result["artifacts"]), 11)
                         self.assertIn("darwin-x64", result["platforms"])
 
 
