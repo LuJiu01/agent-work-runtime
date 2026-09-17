@@ -13,6 +13,9 @@ impl Bootstrap {
                  REVOKE UPDATE, DELETE ON awr_team.events FROM {ident};
                  REVOKE UPDATE, DELETE ON awr_team.source_snapshots FROM {ident};
                  REVOKE UPDATE, DELETE ON awr_team.execution_receipts FROM {ident};
+                 REVOKE UPDATE, DELETE ON awr_team.evidence FROM {ident};
+                 REVOKE UPDATE, DELETE ON awr_team.review_decisions FROM {ident};
+                 REVOKE UPDATE, DELETE ON awr_team.completion_receipts FROM {ident};
                  REVOKE ALL ON awr_team.schema_state FROM {ident};"
             ))
             .await?;

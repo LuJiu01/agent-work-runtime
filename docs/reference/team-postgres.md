@@ -66,3 +66,13 @@ before side effects; a duplicate delivery returns the journaled outcome without 
 new effect key. `unknown` sets `recovery_blocked` and keeps resource reservations.
 `cancel_requested` is not `cancelled`. Callers cannot mint `trusted_executor`
 receipts. Uncontrolled third parties do not receive an exactly-once claim.
+
+
+## Evidence and completion
+
+Completion receipts are written only through the domain `complete` entry.
+`caller_asserted` reports cannot satisfy `trusted_execution_and_review`.
+Authors cannot approve their own review round; a new bundle hash invalidates
+the previous round. `work_runtime.state='completed'` requires
+`selected_completion_id`. Ordinary confirmation is allowed only when the
+current contract already selects that policy.

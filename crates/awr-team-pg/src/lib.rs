@@ -8,6 +8,7 @@ mod lease;
 mod migrate;
 mod path;
 mod read;
+mod review;
 mod runner;
 mod source;
 mod tx;
@@ -28,6 +29,7 @@ pub use read::{
     EventCursor, EventPage, EventRecord, PreparedWork, ReadStore, WorkGraph, capabilities,
     dispatch_query,
 };
+pub use review::{CompletionReceipt, EvidenceRecord, ReviewRound, ReviewStore};
 pub use runner::{CrashPoint, ReferenceRunner, RunnerOutcome};
 pub use source::{CandidateRecord, CurrentSource, IngestRequest, SourceFile, SourceStore};
 pub use tx::{CommandOutcome, CommandRequest, TeamStore};
@@ -49,6 +51,6 @@ mod tests {
     #[test]
     fn schema_contract_is_stable() {
         assert_eq!(SCHEMA, "awr_team");
-        assert_eq!(EXPECTED_SCHEMA_VERSION, 4);
+        assert_eq!(EXPECTED_SCHEMA_VERSION, 5);
     }
 }
