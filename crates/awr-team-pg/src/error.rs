@@ -32,6 +32,18 @@ pub enum PgError {
     EpochChanged,
     #[error("session not found")]
     SessionNotFound,
+    #[error("claim held")]
+    ClaimHeld,
+    #[error("lease expired")]
+    LeaseExpired,
+    #[error("recovery blocked")]
+    RecoveryBlocked,
+    #[error("open wait blocks progress")]
+    WaitOpen,
+    #[error("forbidden")]
+    Forbidden,
+    #[error("stale fence")]
+    StaleFence,
     #[error("{0}")]
     Db(#[from] tokio_postgres::Error),
     #[error("{0}")]
