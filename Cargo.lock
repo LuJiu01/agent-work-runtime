@@ -226,6 +226,16 @@ dependencies = [
 ]
 
 [[package]]
+name = "awr-team"
+version = "0.4.0"
+dependencies = [
+ "serde",
+ "serde_json",
+ "sha2",
+ "thiserror",
+]
+
+[[package]]
 name = "awr-workspace"
 version = "0.4.0"
 dependencies = [
