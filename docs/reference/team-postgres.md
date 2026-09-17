@@ -47,3 +47,11 @@ Claims are unique per work item while `state='active'`. Lease expiry uses
 `clock_timestamp()` after the project lock, not transaction `now()`. Renew
 replays keep the original `expires_at`. Wait records do not extend the lease.
 Handoff increments the work fence so the previous actor cannot write.
+
+## Dependencies and conflicts
+
+Required dependency graphs are rejected if they cycle or reference missing
+work. Resource reservations treat directory prefixes as overlapping path
+segments (`src/foo` vs `src/foo/bar`), not raw string prefixes (`src/a` vs
+`src/abc`). Splitting a work item does not complete the parent. Unknown
+scopes are rejected instead of falling back to `main`.
