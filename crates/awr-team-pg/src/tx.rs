@@ -29,6 +29,10 @@ impl TeamStore {
         Self { url: url.into() }
     }
 
+    pub(crate) fn url(&self) -> &str {
+        &self.url
+    }
+
     async fn connect(&self) -> PgResult<Client> {
         crate::connect(&self.url).await
     }

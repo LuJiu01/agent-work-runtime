@@ -24,3 +24,19 @@ hashed, immutable rows. An unactivated candidate cannot be read as the
 current contract. A failed activation keeps the previous `active_snapshot_id`.
 
 This is not a production high-availability topology.
+
+## Consistent reads
+
+`work.prepare`, `work.graph`, `session.inspect` and `events.list` run in
+`REPEATABLE READ`. Event cursors are `awr-team-cursor-v1:{epoch}:{revision}:{index}`.
+A changed coordinator epoch returns `EPOCH_CHANGED` instead of skipping history.
+Required hard rules are never dropped to fit a context budget.
+
+Experimental entry:
+
+```sh
+cargo run -p awr-server -- query --op capabilities
+cargo run -p awr-server -- query --op work.prepare --body '{"tenant_id":"...","project_id":"...","work_id":"work-a"}'
+```
+
+Unknown query names return `Unsupported` without changing personal CLI/MCP.
