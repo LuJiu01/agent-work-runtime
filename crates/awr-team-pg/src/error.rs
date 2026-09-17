@@ -66,6 +66,18 @@ pub enum PgError {
     ScopeExceeded,
     #[error("exactly-once unsupported")]
     ExactlyOnceUnsupported,
+    #[error("evidence invalid")]
+    EvidenceInvalid,
+    #[error("review required")]
+    ReviewRequired,
+    #[error("author cannot review")]
+    AuthorCannotReview,
+    #[error("completion rejected")]
+    CompletionRejected,
+    #[error("policy downgrade")]
+    PolicyDowngrade,
+    #[error("context incomplete")]
+    ContextIncomplete,
     #[error("{0}")]
     Db(#[from] tokio_postgres::Error),
     #[error("{0}")]
