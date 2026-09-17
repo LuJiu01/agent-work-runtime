@@ -18,6 +18,7 @@
     "awr-runtime",
     "awr-source",
     "awr-store",
+    "awr-team",
     "awr-workspace"
   ],
   "required_gates": ["environment", "build", "ignored_inventory", "workspace", "doctests", "crash_recovery", "cli_mcp_parity", "cli_lifecycle", "native_cli", "workflow_oracle", "workflow_scenarios", "format", "source_unchanged"],
