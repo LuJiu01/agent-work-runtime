@@ -11,6 +11,7 @@ STDIO_TOOLS = frozenset({
     "awr_work_assess", "awr_work_manage",
     "awr_work_graph", "awr_change_preview", "awr_change_apply",
     "awr_change_status", "awr_change_recover",
+    "awr_compaction_observe", "awr_compaction_get", "awr_compaction_defer",
 })
 
 

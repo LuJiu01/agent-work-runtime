@@ -166,9 +166,13 @@ class Workflow:
         self.active()
         return self.fetch_context(prepared=False)
 
-    def response_args(self, view):
+    def response_args(self, view, prepared=False):
+        if view == 'action' and prepared:
+            if 'workflow.action_guidance' in self.capabilities:
+                return ['--response-view', 'action']
+            view = 'summary'  # Negotiate before execution; no fallback write.
         if view not in ('full', 'summary'):
-            raise ValueError('response_view must be full or summary')
+            raise ValueError('response_view must be full or summary; action is preparation-only')
         return (['--response-view', view] if view == 'summary' and
                 'workflow.response_summary' in self.capabilities else [])
 
@@ -179,7 +183,7 @@ class Workflow:
                 ['context', 'compile', '--work', self.state['work']])
         args += ['--session', self.state['session']]
         if prepared:
-            args += self.response_args(response_view)
+            args += self.response_args(response_view, prepared=True)
         for goal in goals:
             args += ['--goal', goal]
         result = self.host.call(*args)
@@ -205,7 +209,7 @@ class Workflow:
     def prepare(self, observation=None, goals=(), response_view='full'):
         """Fresh preparation on every call; never cache context or invent observations."""
         self.active()
-        self.response_args(response_view)  # Validate before any call or mutation.
+        self.response_args(response_view, prepared=True)  # Validate before any call or mutation.
         if 'workflow.prepare' not in self.capabilities:
             return dict(context=self.fetch_context(False, goals), workflow_path='legacy',
                         management_available=False, observation_recorded=False)
@@ -225,8 +229,48 @@ class Workflow:
                 self.completed(recorded)
                 value.update(management=recorded['assessment'], observation_recorded=True,
                              project_revision=recorded['project_revision'])
+                if response_view == 'action' and 'workflow.action_guidance' in self.capabilities:
+                    # The mutation changed the assessment: never return an obsolete instruction.
+                    value = self.fetch_context(True, goals, response_view)
+                    value.update(workflow_path='prepared', observation_recorded=True)
         value['management_available'] = 'work.management' in self.capabilities
         return value
+
+    @serialized
+    def observe_compaction(self, observation, policy=None, expected_revision=None):
+        """Called by a host after native compaction completes, never by a round timer.
+
+        The adapter must supply stable event identity/sequence and actual telemetry.
+        Missing measurements stay absent. This performs no model call or window change.
+        """
+        self.active()
+        if 'client.compaction' not in self.capabilities:
+            raise ValueError('Pinned AWR does not support native compaction observations')
+        request = dict(session=self.state['session'], expected_revision=self.revision(expected_revision),
+                       observation=observation)
+        if policy is not None:
+            request['policy'] = policy
+        value = self.perform('observe_compaction', ['session', 'compaction', 'observe'], request)
+        return self.completed(value)
+
+    @serialized
+    def compaction(self, include_observation=False):
+        # Read-only inspection remains available after a lost write response.
+        if not self.state['session']:
+            raise ValueError('Select a session before inspecting compaction')
+        args = ['session', 'compaction', 'inspect', '--session', self.state['session']]
+        if include_observation:
+            args.append('--include-observation')
+        return self.host.ok(*args)
+
+    @serialized
+    def defer_compaction(self, observation_event_id, expected_revision=None):
+        """Caller invokes this after the user postpones; it does not grant approval."""
+        self.active()
+        value = self.perform('defer_compaction', ['session', 'compaction', 'defer', '--session',
+            self.state['session'], '--observation-event-id', observation_event_id,
+            '--expected-revision', str(self.revision(expected_revision))])
+        return self.completed(value)
 
     @serialized
     def progress(self, reason, next_action, expected_revision=None, response_view='full'):
@@ -375,7 +419,14 @@ def main():
     prepare = sub.add_parser('prepare')
     prepare.add_argument('--observation', help='JSON file with explicit host observations')
     prepare.add_argument('--goal', dest='goals', action='append', default=[])
-    prepare.add_argument('--response-view', choices=['full', 'summary'], default='full')
+    prepare.add_argument('--response-view', choices=['full', 'summary', 'action'], default='action')
+    compact = sub.add_parser('observe-compaction', help='Call after a completed native compaction')
+    compact.add_argument('--input', required=True, help='JSON with observation, optional policy and expected_revision')
+    compact_get = sub.add_parser('compaction')
+    compact_get.add_argument('--include-observation', action='store_true')
+    compact_defer = sub.add_parser('defer-compaction')
+    compact_defer.add_argument('--observation-event-id', required=True)
+    compact_defer.add_argument('--expected-revision', type=int)
     progress = sub.add_parser('progress')
     progress.add_argument('--reason', required=True)
     progress.add_argument('--next-action', required=True)
@@ -414,7 +465,7 @@ def main():
     reconcile.add_argument('--session'); reconcile.add_argument('--work')
     args = vars(p.parse_args()); command = args.pop('command')
     wf = Workflow(args.pop('binary'),args.pop('sha256'),args.pop('version'),args.pop('project'),args.pop('project_id'),args.pop('state'))
-    if command in ('run', 'prepare-report'):
+    if command in ('run', 'prepare-report', 'observe-compaction'):
         args = json.loads(Path(args.pop('input')).read_text())
     elif 'input' in args:
         args['draft' if command == 'evidence' else 'completion'] = json.loads(Path(args.pop('input')).read_text())

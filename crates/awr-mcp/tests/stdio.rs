@@ -13,6 +13,84 @@ const CRITERION: &str = "Deliver the reviewed analysis";
 const WORK: &str = "work_items:\n- id: W\n  title: Prepare customer analysis\n  status: ready\n  owner: business-coordinator\n  next_action: Draft the analysis\n  depends_on: [D]\n  acceptance: [Deliver the reviewed analysis]\n  verification:\n    evidence_level: none\n  evidence: []\n- id: D\n  title: Required input\n  status: completed\n- id: NEXT\n  title: Prepare follow-up\n  status: ready\n  next_action: Review next steps\n  acceptance: [Follow-up is available]\n";
 const MANIFEST: &str = "[project]\nname='MCP fixture'\nexternal_key='mcp-fixture'\n[[sources]]\ndomain='ledger'\nrole='primary'\npath='work.yaml'\nadapter='yaml-ledger-v1'\n[[sources]]\ndomain='rules'\nrole='primary'\npath='rules.md'\nadapter='markdown-rules-v1'\n[[sources]]\ndomain='goal'\nrole='primary'\npath='goal.md'\nadapter='markdown-heading-v1'\n[sources.options]\nstatus='active'\n[[sources]]\ndomain='decisions'\nrole='supporting'\npath='decisions'\nadapter='markdown-directory-v1'\n";
 
+#[tokio::test]
+async fn action_view_preserves_exact_context_and_compaction_stdio_matches_runtime() {
+    let f = Fixture::new();
+    let session = f.session("W", true, None).session.id;
+    let client = f.client().await;
+    let full = success(
+        call(
+            &client,
+            "awr_work_prepare",
+            json!({"work":"W","session":session}),
+        )
+        .await,
+    );
+    let action = success(
+        call(
+            &client,
+            "awr_work_prepare",
+            json!({"work":"W","session":session,"response_view":"action"}),
+        )
+        .await,
+    );
+    assert_eq!(
+        full["context"]["work_context"]["rendered_context"],
+        action["context"]["work_context"]["rendered_context"]
+    );
+    assert_eq!(
+        full["context"]["work_context"]["context_hash"],
+        action["context"]["work_context"]["context_hash"]
+    );
+    assert_eq!(
+        full["management"]["decision"]["required_actions"],
+        action["management"]["decision"]["required_actions"]
+    );
+    assert!(serde_json::to_vec(&action).unwrap().len() < serde_json::to_vec(&full).unwrap().len());
+    assert_eq!(action["response_view"]["view"], "action");
+    assert_eq!(
+        action["response_view"]["full_result"]["tool"],
+        "awr_work_prepare"
+    );
+    let observation = json!({"compaction_id":"stdio-compact","sequence":1,"observed_at":now_millis().unwrap(),"trigger":"automatic","model":"fixture-model","source":"fixture.full_request","measurement_scope":"full_request","measurement_basis":"host_reported","after_tokens":180000,"context_window_tokens":256000});
+    success(
+        call(
+            &client,
+            "awr_compaction_observe",
+            json!({"session":session,"expected_revision":f.rev(),"observation":observation}),
+        )
+        .await,
+    );
+    let mcp = success(
+        call(
+            &client,
+            "awr_compaction_get",
+            json!({"session":session,"include_observation":true}),
+        )
+        .await,
+    );
+    let (store, _) = f.store();
+    let runtime = awr_runtime::inspect_compaction(
+        &store,
+        &f.root,
+        &awr_runtime::InspectCompactionRequest {
+            session,
+            include_observation: true,
+        },
+    )
+    .unwrap();
+    assert_eq!(runtime, mcp);
+    let basic = call(&client, "awr_work_prepare", json!({"work":"W","budget":1})).await;
+    let guided = call(
+        &client,
+        "awr_work_prepare",
+        json!({"work":"W","budget":1,"response_view":"action"}),
+    )
+    .await;
+    assert_eq!(body(&basic), body(&guided));
+    client.cancel().await.unwrap();
+}
+
 struct Fixture {
     root: PathBuf,
 }
@@ -633,13 +711,16 @@ async fn stdio_discovers_tools_and_survives_protocol_and_argument_errors() {
     assert_eq!(names, awr_mcp::TOOL_NAMES.into_iter().collect());
     assert!(
         serde_json::to_vec(&tools).unwrap().len() < 32_768,
-        "catalog must stay compact"
+        "catalog must stay compact: {} bytes",
+        serde_json::to_vec(&tools).unwrap().len()
     );
     for tool in &tools {
         let read = ![
             "awr_change_apply",
             "awr_change_recover",
             "awr_work_manage",
+            "awr_compaction_observe",
+            "awr_compaction_defer",
             "awr_work_transition",
             "awr_event_append",
             "awr_evidence_record",

@@ -68,6 +68,12 @@ and explicitly reconcile that result before proceeding. The original `context`,
 
 ## Optional concise results
 
+For a single conditional instruction with explicit basis and recheck triggers,
+use preparation's new `--response-view action` / `response_view: "action"`.
+See [context continuity](context-continuity.md) for its byte budget, retained
+requirements, capability negotiation and native-compaction host protocol.
+The `full` and `summary` modes below retain their existing meaning.
+
 Use `--response-view summary` with CLI `work prepare` or source work transitions
 (including `work complete`). MCP `awr_work_prepare` and `awr_work_transition`
 accept `response_view: "summary"`. The default is `full`. Hosts negotiate the CLI

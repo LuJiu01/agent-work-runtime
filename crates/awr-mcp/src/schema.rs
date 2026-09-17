@@ -1,7 +1,7 @@
 use rmcp::model::{Tool, ToolAnnotations};
 use serde_json::{Value, json};
 
-pub const TOOL_NAMES: [&str; 29] = [
+pub const TOOL_NAMES: [&str; 32] = [
     "awr_project_status",
     "awr_work_ready",
     "awr_work_get",
@@ -31,20 +31,87 @@ pub const TOOL_NAMES: [&str; 29] = [
     "awr_change_apply",
     "awr_change_status",
     "awr_change_recover",
+    "awr_compaction_observe",
+    "awr_compaction_get",
+    "awr_compaction_defer",
 ];
+
+fn compaction_tools() -> Vec<Tool> {
+    let selector = |mut properties: Value, required: &[&str]| {
+        properties["session"] = text();
+        properties["conversation"] = text();
+        let mut schema = object(properties, required);
+        schema["anyOf"] = json!([{"required":["session"]},{"required":["conversation"]}]);
+        schema
+    };
+    let count = optional(json!({"type":"integer","minimum":0}));
+    let observation = object(
+        json!({
+            "compaction_id":{"type":"string","minLength":1,"maxLength":256},
+            "sequence":{"type":"integer","minimum":1},"observed_at":{"type":"integer","minimum":1},
+            "trigger":{"type":"string","enum":["automatic","manual"]},"model":text(),"source":text(),
+            "measurement_scope":{"type":"string","enum":["full_request","history_only","unknown"]},
+            "measurement_basis":{"type":"string","enum":["host_reported","estimated","unknown"]},
+            "before_tokens":count,"after_tokens":count,"context_window_tokens":optional(json!({"type":"integer","minimum":1,"maximum":1000000000})),"duration_ms":count,
+            "usage":optional(object(json!({"input_tokens":count,"output_tokens":count,"cached_input_tokens":count,"cost_usd":optional(json!({"type":"number","minimum":0}))}), &[]))
+        }),
+        &[
+            "compaction_id",
+            "sequence",
+            "observed_at",
+            "trigger",
+            "model",
+            "source",
+            "measurement_scope",
+            "measurement_basis",
+        ],
+    );
+    vec![
+        tool(
+            "awr_compaction_observe",
+            "Record completed native compaction: stable ID, increasing sequence, actual request usage/capacity; omit unknowns. One action; no session switch or compaction disable.",
+            selector(
+                json!({"expected_revision":revision(),"observation":observation,"policy":object(json!({"post_compaction_threshold_percent":{"type":"integer","minimum":1,"maximum":100,"default":50}}), &["post_compaction_threshold_percent"])}),
+                &["expected_revision", "observation"],
+            ),
+            false,
+            false,
+        ),
+        tool(
+            "awr_compaction_get",
+            "Read latest compaction action. include_observation adds measurements/costs. Runtime-only; source freshness is not verified.",
+            selector(
+                json!({"include_observation":{"type":"boolean","default":false}}),
+                &[],
+            ),
+            true,
+            false,
+        ),
+        tool(
+            "awr_compaction_defer",
+            "After user postponement, defer the latest observation until next compaction. No permission grant or session switch.",
+            selector(
+                json!({"expected_revision":revision(),"observation_event_id":text()}),
+                &["expected_revision", "observation_event_id"],
+            ),
+            false,
+            false,
+        ),
+    ]
+}
 
 fn workflow_tools() -> Vec<Tool> {
     vec![
         tool(
             "awr_work_assess",
-            "Assess management intensity from source contracts and retained runtime/host observations. Unknown facts stay unknown; classification never grants execution or changes completion policy.",
+            "Assess management from contracts and attributed observations. Unknowns stay unknown; no execution grant or completion-policy change.",
             object(json!({"work":text(),"branch":branch()}), &["work"]),
             true,
             false,
         ),
         tool(
             "awr_work_manage",
-            "Record attributed host observations and an explainable management decision for the same task. Requires the current contract fingerprint, session and stable request key. Never automatically downgrades continuous management.",
+            "Record attributed management observations for the current contract/session and stable key. Continuous management never automatically downgrades.",
             object(
                 json!({"work":text(),"session":text(),"expected_revision":revision(),"request_key":text(),"contract_fingerprint":text(),"observation":object(json!({
                 "observed_at":{"type":"integer","minimum":0},"note":text(),
@@ -65,7 +132,7 @@ fn workflow_tools() -> Vec<Tool> {
         ),
         tool(
             "awr_work_prepare",
-            "Read readiness and the required context together. Consume the returned context before checkpointing; preparation does not claim work or change completion requirements.",
+            "Prepare readiness and required context. Consume context before checkpointing; no claim or completion-policy change.",
             object(
                 json!({"work":text(),"session":optional(text()),"branch":branch(),"goals":strings(),"source_sha":optional(text()),"budget":{"type":"integer","minimum":1,"maximum":100000}}),
                 &["work"],
@@ -75,7 +142,7 @@ fn workflow_tools() -> Vec<Tool> {
         ),
         tool(
             "awr_completion_prepare",
-            "Read a real local completion report, validate its current acceptance coverage and derive its actual hash and evidence mapping. No verification is executed and no evidence or completion is recorded. Level is caller asserted.",
+            "Validate actual report bytes and current acceptance coverage; derive hash/evidence mapping. No verification execution or completion. Level is caller asserted.",
             object(
                 json!({"work":text(),"report":text(),"evidence_key":text(),"source_sha":text(),"level":levels(),"branch":branch()}),
                 &["work", "report", "evidence_key", "source_sha", "level"],
@@ -101,7 +168,7 @@ fn change_tools() -> Vec<Tool> {
     vec![
         tool(
             "awr_work_graph",
-            "Inspect required dependencies, affected dependents, readiness and claims. Roots select changed work plus affected dependents and required ancestors; closure is never silently truncated. The host owns execution and concurrency.",
+            "Read dependencies, dependents, readiness and claims. Roots include required ancestors; no silent closure truncation. Host owns execution/concurrency.",
             object(
                 json!({"roots":strings(),"branch":branch(),"limit":{"type":"integer","minimum":1,"maximum":1000,"default":100}}),
                 &[],
@@ -111,7 +178,7 @@ fn change_tools() -> Vec<Tool> {
         ),
         tool(
             "awr_change_preview",
-            "Preview a source-backed create, batch or edit on a read-only snapshot. Choose a stable request_id for this change; preserve it on apply/status/recover. Consume the exact returned preview before applying.",
+            "Preview source create/batch/edit without writing. Keep request_id across apply/status/recover; review this exact preview before apply.",
             object(
                 json!({"request_id":key,"reason":text(),"change":change}),
                 &["request_id", "reason", "change"],
@@ -121,7 +188,7 @@ fn change_tools() -> Vec<Tool> {
         ),
         tool(
             "awr_change_apply",
-            "Apply the exact reviewed source preview at expected_revision. Uses the source-change journal, queried by awr_change_status, not awr_operation_get. Changed sources/revisions or occupied planning contracts conflict; drafts do not become executable automatically.",
+            "Apply reviewed preview at expected_revision. Query awr_change_status for outcome. Changed sources/revisions or occupied contracts conflict; drafts remain non-executable.",
             object(
                 json!({"request_id":key,"reason":text(),"change":change,"expected_revision":revision(),"expected_preview":text()}),
                 &[
@@ -137,7 +204,7 @@ fn change_tools() -> Vec<Tool> {
         ),
         tool(
             "awr_change_status",
-            "Inspect this client's durable source-change outcome, including pending recovery when sources are stale. Use the original kind and request_id. A missing receipt does not prove no external work occurred.",
+            "Inspect this client's source-change outcome even with stale sources. Use original kind/request_id. Missing receipt does not prove no effect.",
             object(
                 json!({"request_id":key,"kind":kind}),
                 &["request_id", "kind"],
@@ -147,7 +214,7 @@ fn change_tools() -> Vec<Tool> {
         ),
         tool(
             "awr_change_recover",
-            "Explicitly recover the original source-change journal after inspecting its outcome. Uses the same client, kind and request_id; never starts an Agent. Related-file changes are recoverable, not a filesystem transaction.",
+            "Recover inspected source change with the same client/kind/request_id. No Agent launch. Related-file writes are recoverable, not atomic.",
             object(
                 json!({"request_id":key,"kind":kind,"expected_revision":revision()}),
                 &["request_id", "kind", "expected_revision"],
@@ -159,7 +226,11 @@ fn change_tools() -> Vec<Tool> {
 }
 
 fn object(properties: Value, required: &[&str]) -> Value {
-    json!({"type":"object","properties":properties,"required":required,"additionalProperties":false})
+    let mut schema = json!({"type":"object","properties":properties,"additionalProperties":false});
+    if !required.is_empty() {
+        schema["required"] = json!(required);
+    }
+    schema
 }
 fn text() -> Value {
     json!({"type":"string"})
@@ -173,7 +244,7 @@ fn optional(mut schema: Value) -> Value {
     schema
 }
 fn branch() -> Value {
-    json!({"type":["string","null"],"description":"Work-branch name/ID; main is explicit baseline. Omit for current selection."})
+    json!({"type":["string","null"],"description":"Branch name/ID; main=baseline; omitted=current."})
 }
 fn revision() -> Value {
     json!({"type":"integer","minimum":0,"maximum":i64::MAX})
@@ -324,13 +395,19 @@ pub fn tools() -> Vec<Tool> {
     catalog.extend(continuity_tools());
     catalog.extend(workflow_tools());
     catalog.extend(change_tools());
+    catalog.extend(compaction_tools());
     for entry in &mut catalog {
         if matches!(
             entry.name.as_ref(),
             "awr_work_prepare" | "awr_work_transition"
         ) {
             let schema = std::sync::Arc::make_mut(&mut entry.input_schema);
-            schema["properties"].as_object_mut().unwrap().insert("response_view".into(),json!({"type":"string","enum":["full","summary"],"default":"full","description":"Optional presentation; full context and errors remain. Summary transitions require request_id for the full durable receipt. View selection does not change request identity."}));
+            let views = if entry.name == "awr_work_prepare" {
+                json!(["full", "summary", "action"])
+            } else {
+                json!(["full", "summary"])
+            };
+            schema["properties"].as_object_mut().unwrap().insert("response_view".into(),json!({"type":"string","enum":views,"default":"full","description":"Action: one conditional instruction; required context stays. Summary writes need request_id. Views do not change identity."}));
         }
         if entry
             .annotations
@@ -340,7 +417,7 @@ pub fn tools() -> Vec<Tool> {
             && !crate::changes::NAMES.contains(&entry.name.as_ref())
         {
             let schema = std::sync::Arc::make_mut(&mut entry.input_schema);
-            schema["properties"].as_object_mut().unwrap().insert("request_id".into(),json!({"type":"string","minLength":1,"maxLength":256,"description":"Stable identity chosen before the first attempt. Required for shared HTTP writes; reuse exactly the same ID and arguments after a lost response."}));
+            schema["properties"].as_object_mut().unwrap().insert("request_id".into(),json!({"type":"string","minLength":1,"maxLength":256,"description":"Stable ID; required on HTTP. Inspect loss; reuse exact arguments."}));
         }
         if matches!(
             entry.name.as_ref(),
@@ -526,7 +603,9 @@ pub(crate) fn shared_tools() -> Vec<Tool> {
         let schema = std::sync::Arc::make_mut(&mut tool.input_schema);
         schema["properties"].as_object_mut().unwrap().insert("project".into(),
             json!({"type":"string","description":"Registered project key from awr_projects_list. Required on every call; never a filesystem path."}));
-        schema["required"]
+        schema
+            .entry("required")
+            .or_insert_with(|| json!([]))
             .as_array_mut()
             .unwrap()
             .push(json!("project"));

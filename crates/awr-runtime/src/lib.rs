@@ -5,7 +5,14 @@ pub use awr_core::{Error, Result};
 mod artifact;
 mod branch;
 mod branch_close;
+mod compaction;
 mod completion;
+pub use compaction::{
+    DeferCompactionRequest, InspectCompactionRequest, ObserveCompactionRequest, defer_compaction,
+    inspect_compaction, observe_compaction,
+};
+mod guidance;
+pub use guidance::guide_prepared_work;
 mod doctor;
 mod document;
 mod host_save;

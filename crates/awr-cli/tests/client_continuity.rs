@@ -115,6 +115,45 @@ fn automatic_stop_and_compact_save_persisted_work_and_deduplicate() {
         started["awr"]["binding"]["session_id"]
     );
 }
+
+#[test]
+fn post_compact_accepts_explicit_host_metrics_without_assuming_native_token_fields() {
+    let p = Project::new();
+    let started = p.hook("compact-conversation", "SessionStart", None);
+    let input = json!({"session_id":"compact-conversation","hook_event_name":"PostCompact","cwd":p.0,"model":"client-test",
+        "awr_compaction":{"observation":{"compaction_id":"native-1","sequence":1,"observed_at":awr_core::now_millis().unwrap(),"trigger":"automatic","model":"client-test","source":"host.full_request","measurement_scope":"full_request","measurement_basis":"host_reported","after_tokens":180000,"context_window_tokens":256000}}});
+    let args = [
+        "client",
+        "hook",
+        "--client",
+        "codex",
+        "--work",
+        "INTAKE-001",
+    ];
+    let recorded = decode(p.run(&args, Some(&input)));
+    assert_eq!(
+        recorded["awr"]["binding"]["session_id"],
+        started["awr"]["binding"]["session_id"]
+    );
+    assert_eq!(recorded["awr"]["compaction"]["state"], "handoff_candidate");
+    assert!(
+        recorded["hookSpecificOutput"]["additionalContext"]
+            .as_str()
+            .unwrap()
+            .contains("Action guidance:")
+    );
+    let again = decode(p.run(&args, Some(&input)));
+    assert_eq!(again["awr"]["compaction"]["already_recorded"], true);
+    assert_eq!(
+        again["awr"]["compaction"]["recorded_event_id"],
+        recorded["awr"]["compaction"]["recorded_event_id"]
+    );
+    let plain = p.hook("compact-conversation", "PostCompact", None);
+    assert!(plain["awr"].get("compaction").is_none());
+    let mut invalid = input;
+    invalid["hook_event_name"] = json!("PreCompact");
+    assert!(!p.run(&args, Some(&invalid)).status.success());
+}
 #[test]
 fn conversations_keep_separate_next_actions_and_checkpoints() {
     let p = Project::new();

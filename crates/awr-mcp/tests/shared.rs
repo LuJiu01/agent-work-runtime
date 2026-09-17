@@ -22,6 +22,118 @@ const READER: &str = "synthetic-reader-credential-for-http-fixtures";
 const COLLEAGUE: &str = "synthetic-colleague-credential-for-http-fixtures";
 
 #[tokio::test]
+async fn compaction_http_isolated_recoverable_and_wait_guidance_has_priority() {
+    let a = ProjectFixture::new("Continue the guide");
+    let b = ProjectFixture::new("Separate guide");
+    let config = registry(&a, &b);
+    let mut server = Server::start(&config).await;
+    let start = ok(server
+        .call(
+            WRITER,
+            "awr_session_start",
+            start_args("alpha", "W", "compact-window", a.revision(), true),
+        )
+        .await);
+    let sid = start["session"]["id"].clone();
+    let observation = json!({"compaction_id":"host-compact-1","sequence":1,"observed_at":now_millis().unwrap(),"trigger":"automatic","model":"fixture-model","source":"fixture.full_request","measurement_scope":"full_request","measurement_basis":"host_reported","after_tokens":180000,"before_tokens":230000,"context_window_tokens":256000});
+    let args = json!({"project":"alpha","conversation":"compact-window","expected_revision":a.revision(),"request_id":"compaction-one","observation":observation,"policy":{"post_compaction_threshold_percent":60}});
+    error(
+        server
+            .call(READER, "awr_compaction_observe", args.clone())
+            .await,
+        "RuleViolation",
+    );
+    let recorded = ok(server
+        .call(WRITER, "awr_compaction_observe", args.clone())
+        .await);
+    assert_eq!(recorded["state"], "handoff_candidate");
+    assert_eq!(recorded["session_switch_performed"], false);
+    let revision = a.revision();
+    let replay = ok(server.call(WRITER, "awr_compaction_observe", args).await);
+    assert_eq!(replay["recorded_event_id"], recorded["recorded_event_id"]);
+    assert_eq!(replay["operation"]["replayed"], true);
+    assert_eq!(revision, a.revision());
+    error(
+        server
+            .call(
+                COLLEAGUE,
+                "awr_compaction_get",
+                json!({"project":"alpha","session":sid}),
+            )
+            .await,
+        "RuleViolation",
+    );
+    error(
+        server
+            .call(
+                WRITER,
+                "awr_compaction_get",
+                json!({"project":"beta","session":sid}),
+            )
+            .await,
+        "NotFound",
+    );
+    let prep = ok(server
+        .call(
+            WRITER,
+            "awr_work_prepare",
+            json!({"project":"alpha","work":"W","session":sid,"response_view":"action"}),
+        )
+        .await);
+    assert!(
+        prep["guidance"]["next_action"]
+            .as_str()
+            .unwrap()
+            .contains("ask before opening")
+    );
+    let wait=ok(server.call(WRITER,"awr_session_wait",json!({"project":"alpha","session":sid,"expected_revision":a.revision(),"request_id":"switch-question","question":"Continue this work in a fresh window?","context_hash":prep["context"]["work_context"]["context_hash"],"digest":"Checkpoint preserves the guide state","next_action":"Await user decision"})).await);
+    let waiting = ok(server
+        .call(
+            WRITER,
+            "awr_compaction_get",
+            json!({"project":"alpha","conversation":"compact-window"}),
+        )
+        .await);
+    assert!(
+        waiting["guidance"]["next_action"]
+            .as_str()
+            .unwrap()
+            .contains("do not repeat")
+    );
+    ok(server.call(WRITER,"awr_session_reply",json!({"project":"alpha","wait":wait["wait"]["id"],"reply":"Continue here for now","expected_revision":a.revision(),"request_id":"postpone-reply"})).await);
+    let deferred=ok(server.call(WRITER,"awr_compaction_defer",json!({"project":"alpha","session":sid,"observation_event_id":recorded["observation_event_id"],"expected_revision":a.revision(),"request_id":"postpone-compaction"})).await);
+    assert_eq!(deferred["state"], "deferred");
+    let conn = rusqlite::Connection::open(a.root.join(".awr/state.db")).unwrap();
+    conn.execute_batch("CREATE TRIGGER fixture_lost_compaction_response BEFORE INSERT ON events WHEN new.event_type='mcp.operation_finished' BEGIN SELECT RAISE(ABORT,'synthetic lost compaction response'); END;").unwrap();
+    let mut observation = observation;
+    observation["compaction_id"] = json!("host-compact-2");
+    observation["sequence"] = json!(2);
+    let args = json!({"project":"alpha","session":sid,"expected_revision":a.revision(),"request_id":"compaction-lost-response","observation":observation});
+    let unknown = server
+        .call(WRITER, "awr_compaction_observe", args.clone())
+        .await;
+    assert_eq!(unknown["structuredContent"]["write_outcome"], "unknown");
+    let rev = a.revision();
+    server.call(WRITER, "awr_compaction_observe", args).await;
+    assert_eq!(rev, a.revision());
+    conn.execute_batch("DROP TRIGGER fixture_lost_compaction_response;")
+        .unwrap();
+    drop(conn);
+    ok(server.call(WRITER,"awr_operation_recover",json!({"project":"alpha","request_id":"compaction-lost-response","expected_revision":a.revision()})).await);
+    let recovered = ok(server
+        .call(
+            WRITER,
+            "awr_compaction_get",
+            json!({"project":"alpha","session":sid,"include_observation":true}),
+        )
+        .await);
+    assert_eq!(recovered["observation"]["sequence"], 2);
+    assert_eq!(recovered["state"], "handoff_candidate");
+    assert!(recovered["observation"]["usage"].is_null());
+    server.stop().await;
+}
+
+#[tokio::test]
 async fn concise_http_results_keep_client_isolation_and_unknown_outcomes() {
     let a = ProjectFixture::new("Write a concise team guide");
     let b = ProjectFixture::new("Separate project");

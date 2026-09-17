@@ -8,6 +8,7 @@ mod branch;
 mod capabilities;
 mod catalog;
 mod client;
+mod compaction;
 mod context;
 mod doctor;
 mod document;
