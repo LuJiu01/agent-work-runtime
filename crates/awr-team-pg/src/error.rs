@@ -60,6 +60,12 @@ pub enum PgError {
     ClaimBlocksActivation,
     #[error("graph budget exceeded")]
     GraphBudgetExceeded,
+    #[error("execution not found")]
+    ExecutionNotFound,
+    #[error("scope exceeded")]
+    ScopeExceeded,
+    #[error("exactly-once unsupported")]
+    ExactlyOnceUnsupported,
     #[error("{0}")]
     Db(#[from] tokio_postgres::Error),
     #[error("{0}")]

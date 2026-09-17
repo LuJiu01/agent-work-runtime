@@ -2,16 +2,19 @@
 //! Personal SQLite runtime does not depend on this crate.
 mod bootstrap;
 mod error;
+mod execution;
 mod graph;
 mod lease;
 mod migrate;
 mod path;
 mod read;
+mod runner;
 mod source;
 mod tx;
 
 pub use bootstrap::Bootstrap;
 pub use error::{PgError, PgResult};
+pub use execution::{ExecutionRecord, ExecutionStore, OutboxDelivery, exactly_once_supported};
 pub use graph::{
     DependencyEdge, GraphStore, SplitProposal, paths_conflict, require_main_scope,
     validate_required_graph,
@@ -25,6 +28,7 @@ pub use read::{
     EventCursor, EventPage, EventRecord, PreparedWork, ReadStore, WorkGraph, capabilities,
     dispatch_query,
 };
+pub use runner::{CrashPoint, ReferenceRunner, RunnerOutcome};
 pub use source::{CandidateRecord, CurrentSource, IngestRequest, SourceFile, SourceStore};
 pub use tx::{CommandOutcome, CommandRequest, TeamStore};
 
@@ -45,6 +49,6 @@ mod tests {
     #[test]
     fn schema_contract_is_stable() {
         assert_eq!(SCHEMA, "awr_team");
-        assert_eq!(EXPECTED_SCHEMA_VERSION, 3);
+        assert_eq!(EXPECTED_SCHEMA_VERSION, 4);
     }
 }

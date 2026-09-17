@@ -12,6 +12,7 @@ impl Bootstrap {
                  GRANT SELECT, INSERT, UPDATE, DELETE ON ALL TABLES IN SCHEMA awr_team TO {ident};
                  REVOKE UPDATE, DELETE ON awr_team.events FROM {ident};
                  REVOKE UPDATE, DELETE ON awr_team.source_snapshots FROM {ident};
+                 REVOKE UPDATE, DELETE ON awr_team.execution_receipts FROM {ident};
                  REVOKE ALL ON awr_team.schema_state FROM {ident};"
             ))
             .await?;

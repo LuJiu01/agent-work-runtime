@@ -163,7 +163,7 @@ impl GraphStore {
         let rows = tx
             .query(
                 "SELECT resource_kind, canonical_key FROM awr_team.resource_reservations
-                 WHERE tenant_id=$1 AND project_id=$2 AND state='reserved'",
+                 WHERE tenant_id=$1 AND project_id=$2 AND state IN ('reserved', 'unknown')",
                 &[&tenant_id, &project_id],
             )
             .await?;

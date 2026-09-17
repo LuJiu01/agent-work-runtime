@@ -55,3 +55,14 @@ work. Resource reservations treat directory prefixes as overlapping path
 segments (`src/foo` vs `src/foo/bar`), not raw string prefixes (`src/a` vs
 `src/abc`). Splitting a work item does not complete the parent. Unknown
 scopes are rejected instead of falling back to `main`.
+
+
+## Execution protocol
+
+`execution.prepare` writes the execution row, effect key and outbox record in one
+transaction. Outbox delivery is claimed with `SKIP LOCKED` after the project lock
+and sent outside that transaction. The reference runner persists `execution_id`
+before side effects; a duplicate delivery returns the journaled outcome without a
+new effect key. `unknown` sets `recovery_blocked` and keeps resource reservations.
+`cancel_requested` is not `cancelled`. Callers cannot mint `trusted_executor`
+receipts. Uncontrolled third parties do not receive an exactly-once claim.
