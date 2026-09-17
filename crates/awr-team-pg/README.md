@@ -22,3 +22,6 @@ when the version is missing or unexpected.
 Source publish is `ingest` → independent `approve` → `activate`. Unsafe paths
 are rejected before any snapshot row is written. Default tests cover path
 safety without Postgres; `--features pg-tests` covers activation on PostgreSQL 17.
+
+Read APIs (`ReadStore`) use REPEATABLE READ snapshots and `(project_revision, event_index)`
+cursors. They are not linked from the personal SQLite CLI.

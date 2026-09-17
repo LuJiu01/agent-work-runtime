@@ -24,6 +24,14 @@ pub enum PgError {
     AuthorCannotApprove,
     #[error("candidate is not the active source")]
     InactiveCandidate,
+    #[error("unsupported: {0}")]
+    Unsupported(String),
+    #[error("event cursor expired")]
+    CursorExpired,
+    #[error("coordinator epoch changed")]
+    EpochChanged,
+    #[error("session not found")]
+    SessionNotFound,
     #[error("{0}")]
     Db(#[from] tokio_postgres::Error),
     #[error("{0}")]

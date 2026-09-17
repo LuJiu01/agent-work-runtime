@@ -4,6 +4,7 @@ mod bootstrap;
 mod error;
 mod migrate;
 mod path;
+mod read;
 mod source;
 mod tx;
 
@@ -12,6 +13,10 @@ pub use error::{PgError, PgResult};
 pub use migrate::{EXPECTED_SCHEMA_VERSION, check_schema, migrate};
 pub use path::{
     MAX_FILE_BYTES, MAX_PACKAGE_BYTES, MAX_SOURCE_FILES, validate_package, validate_source_path,
+};
+pub use read::{
+    EventCursor, EventPage, EventRecord, PreparedWork, ReadStore, WorkGraph, capabilities,
+    dispatch_query,
 };
 pub use source::{CandidateRecord, CurrentSource, IngestRequest, SourceFile, SourceStore};
 pub use tx::{CommandOutcome, CommandRequest, TeamStore};
