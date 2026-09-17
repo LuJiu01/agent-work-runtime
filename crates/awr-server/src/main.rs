@@ -24,6 +24,13 @@ enum Command {
         #[arg(long)]
         body: Option<String>,
     },
+    /// Team v1 command envelope. Authorization project cannot be overridden by body.
+    Command {
+        #[arg(long)]
+        op: String,
+        #[arg(long)]
+        body: Option<String>,
+    },
 }
 
 #[tokio::main]
@@ -31,6 +38,7 @@ async fn main() -> ExitCode {
     let args = Args::parse();
     match args.command {
         Command::Query { op, body } => run_query(&op, body.as_deref()).await,
+        Command::Command { op, body } => run_command(&op, body.as_deref()).await,
         Command::Migrate => schema_command(true).await,
         Command::Check => schema_command(false).await,
     }
@@ -149,5 +157,68 @@ async fn run_query(op: &str, body: Option<&str>) -> ExitCode {
         }
         Err(awr_team_pg::PgError::CursorExpired) => fail("CURSOR_EXPIRED", "event cursor expired"),
         Err(error) => fail("QueryFailed", error.to_string()),
+    }
+}
+
+async fn run_command(op: &str, body: Option<&str>) -> ExitCode {
+    let parsed: Value = match body {
+        None => json!({"protocol_version":1,"request_id":"cmd","op":op,"args":{}}),
+        Some(raw) => match serde_json::from_str(raw) {
+            Ok(value) => value,
+            Err(error) => return fail("InvalidInput", error.to_string()),
+        },
+    };
+    let mut envelope_value = parsed.clone();
+    if envelope_value.get("op").is_none() {
+        envelope_value["op"] = json!(op);
+    }
+    if envelope_value.get("protocol_version").is_none() {
+        envelope_value["protocol_version"] = json!(1);
+    }
+    if envelope_value.get("request_id").is_none() {
+        envelope_value["request_id"] = json!("awr-server");
+    }
+    let tenant = parsed
+        .get("tenant_id")
+        .and_then(Value::as_str)
+        .unwrap_or("");
+    let project = parsed
+        .get("project_id")
+        .and_then(Value::as_str)
+        .unwrap_or("");
+    let auth = awr_team::AuthContext {
+        tenant_id: tenant.into(),
+        project_id: project.into(),
+        actor_id: parsed
+            .get("actor_id")
+            .and_then(Value::as_str)
+            .unwrap_or("server")
+            .into(),
+        client_id: parsed
+            .get("client_id")
+            .and_then(Value::as_str)
+            .unwrap_or("awr-server")
+            .into(),
+    };
+    if let Err(error) = awr_team::authorize(&auth, &parsed) {
+        return fail(error.code(), error.to_string());
+    }
+    let envelope = match awr_team::parse_envelope(&envelope_value) {
+        Ok(value) => value,
+        Err(error) => return fail(error.code(), error.to_string()),
+    };
+    let remote = awr_team::RemoteProfile {
+        name: "server".into(),
+        endpoint: "http://127.0.0.1/team/v1".into(),
+        project_key: project.into(),
+        credential_env: "AWR_TEAM_TOKEN".into(),
+        protocol_version: 1,
+    };
+    match awr_team::execute("http", envelope, &auth, Some(&remote), true) {
+        Ok(value) => {
+            println!("{value}");
+            ExitCode::SUCCESS
+        }
+        Err(error) => fail(error.code(), error.to_string()),
     }
 }

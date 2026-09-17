@@ -23,12 +23,14 @@ mod onboarding;
 mod query;
 mod records;
 mod recovery;
+mod remote;
 mod resume;
 mod search;
 mod session;
 mod source;
 mod source_changes;
 mod source_relocation;
+mod team;
 mod work_action;
 mod work_create;
 mod work_edit;
@@ -193,6 +195,16 @@ enum Command {
     Doctor(doctor::DoctorArgs),
     /// Share tracked project files between machines through an object store.
     Workspace(workspace::WorkspaceArgs),
+    /// Inspect Team protocol capabilities or submit a remote Team envelope.
+    Team {
+        #[command(subcommand)]
+        command: team::TeamCommand,
+    },
+    /// Store Team remote endpoint and credential environment references.
+    Remote {
+        #[command(subcommand)]
+        command: remote::RemoteCommand,
+    },
     #[command(external_subcommand)]
     Unsupported(Vec<String>),
 }
@@ -262,6 +274,8 @@ fn run(cli: &Cli) -> Result<()> {
         Some(Command::Branch { command }) => branch::run(&cli.project, command, cli.json),
         Some(Command::Doctor(args)) => doctor::run(&cli.project, args, cli.json),
         Some(Command::Workspace(args)) => workspace::run(&cli.project, args, cli.json),
+        Some(Command::Team { command }) => team::run(&cli.project, command, cli.json),
+        Some(Command::Remote { command }) => remote::run(&cli.project, command, cli.json),
         None => {
             Cli::command().print_help()?;
             println!();

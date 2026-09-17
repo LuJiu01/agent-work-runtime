@@ -120,6 +120,7 @@ dependencies = [
  "awr-runtime",
  "awr-source",
  "awr-store",
+ "awr-team",
  "awr-workspace",
  "cap-std",
  "clap",
@@ -201,6 +202,7 @@ dependencies = [
 name = "awr-server"
 version = "0.4.0"
 dependencies = [
+ "awr-team",
  "awr-team-pg",
  "clap",
  "serde_json",
