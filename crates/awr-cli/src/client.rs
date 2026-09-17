@@ -368,6 +368,18 @@ fn native_hook(root: &Path, client: &str, work: &str) -> Result<Value> {
         c.policy.validate()?;
     }
     let _lock = lock(root, "clients", &format!("{client}:{external}"))?;
+    // Other machines publish while this one is idle, so a session that is
+    // starting is the cheapest place to notice it. This runs before the project
+    // is opened, because opening it refreshes the sources: a peer's bytes have
+    // to be in place first, both so the context describes the current tree and
+    // so a peer holding a parseable copy can heal one that was broken here. It
+    // never changes the exit code - an unreachable store is a line to read, not
+    // a session that refuses to open.
+    let exchange = if event == "SessionStart" {
+        crate::workspace::session_start(root)
+    } else {
+        None
+    };
     let mut db = QueryProject::open(root)?;
     let project = db.project.id;
     let model = if field("model").is_empty() {
@@ -433,6 +445,10 @@ fn native_hook(root: &Path, client: &str, work: &str) -> Result<Value> {
             )
         } else {
             continuity
+        };
+        let continuity = match exchange {
+            Some(notice) => format!("{continuity}\n{notice}"),
+            None => continuity,
         };
         let total_tokens = awr_context::token_count(&continuity);
         if total_tokens > 10000 {

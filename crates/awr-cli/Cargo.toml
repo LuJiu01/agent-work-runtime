@@ -16,6 +16,7 @@ awr-store.workspace = true
 awr-source.workspace = true
 awr-runtime.workspace = true
 awr-context.workspace = true
+awr-workspace.workspace = true
 toml.workspace = true
 clap.workspace = true
 serde_json.workspace = true
@@ -45,3 +46,7 @@ path = "../../tests/security/payloads/artifact_cli.rs"
 [[test]]
 name = "doctor_recovery"
 path = "../../tests/recovery/doctor/database.rs"
+
+[[test]]
+name = "workspace_exchange"
+path = "../../tests/workspace/exchange_cli.rs"

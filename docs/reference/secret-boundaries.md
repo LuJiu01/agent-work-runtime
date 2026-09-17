@@ -39,6 +39,8 @@ Bearer 的普通协议讨论（例如 `Bearer authentication`）可以保留。`
 
 FTS 重建仅更新派生索引。原有权威数据、不可变事件、SQLite 空闲页和备份不因此被擦除；这不是磁盘擦除或凭据轮换功能。
 
+[workspace 交换平面](workspace-exchange.md)传输的是被跟踪文件的原始字节，不经过本策略：它照原样送出、照原样取回。因此凭据、私有 prompt 或环境转储不能放进被跟踪的源里。工作区凭据自身走独立的边界——`awr workspace credential set` 写到 `<项目根>/.awr/workspace-credentials.json`（Unix：600，非 600 拒绝读取；Windows：temp+rename 写入，依赖 `.awr/` 目录 NTFS ACL，当前不检查 mode），`status` 只报字段存在与文件权限、从不回显值，配置文件里出现密钥字段直接报错，密钥也不能作为命令行参数传入。
+
 验证入口：
 
 ```sh

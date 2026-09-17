@@ -20,6 +20,12 @@ __pycache__/
 .env.*
 !.env.example
 
+# The per-machine workspace exchange config, its credentials and its state.
+# The committed template is examples/workspace/remote_workspace.toml.example.
+remote_workspace.toml
+.awr/workspace-credentials.json
+.awr/workspace.json
+
 # Internal development material stays local, including the project's own AWR mapping.
 /ledger/
 /contracts/

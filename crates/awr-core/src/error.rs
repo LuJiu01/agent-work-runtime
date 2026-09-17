@@ -57,6 +57,10 @@ pub enum Error {
     },
     #[error("mutation conflict: {0}")]
     MutationConflict(String),
+    #[error("workspace conflict: {0}")]
+    WorkspaceConflict(String),
+    #[error("workspace contended: {0}")]
+    WorkspaceContended(String),
     #[error(
         "checkpoint attempt {attempt_id} did not complete: {reason}; inspect session show before retrying"
     )]
@@ -163,6 +167,8 @@ impl Error {
             Self::MutationIncomplete { .. } => "MutationIncomplete",
             Self::WorkActionIncomplete { .. } => "WorkActionIncomplete",
             Self::MutationConflict(_) => "MutationConflict",
+            Self::WorkspaceConflict(_) => "WorkspaceConflict",
+            Self::WorkspaceContended(_) => "WorkspaceContended",
             Self::CheckpointIncomplete { .. } => "CheckpointIncomplete",
             Self::ContextIncomplete(_) => "ContextIncomplete",
             Self::BudgetExceeded { .. } => "BudgetExceeded",

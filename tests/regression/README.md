@@ -1,7 +1,7 @@
 # Concentrated regression
 
 `contract.json` fixes the complete local gate for the workspace. It executes all
-seven Cargo workspace members, all targets and doctests, five current specialist
+eight Cargo workspace members, all targets and doctests, five current specialist
 contracts, all eight CLI/MCP tool parity checks, YAML intake, the copied manual
 Codex lifecycle, the legacy Doctor fixture and four developer entrypoints.
 
