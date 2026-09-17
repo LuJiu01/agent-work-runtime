@@ -1,0 +1,24 @@
+use crate::error::PgResult;
+use tokio_postgres::Client;
+
+pub struct Bootstrap;
+
+impl Bootstrap {
+    pub async fn grant_app(client: &Client, app_role: &str) -> PgResult<()> {
+        let ident = quote_ident(app_role);
+        client
+            .batch_execute(&format!(
+                "GRANT USAGE ON SCHEMA awr_team TO {ident};
+                 GRANT SELECT, INSERT, UPDATE, DELETE ON ALL TABLES IN SCHEMA awr_team TO {ident};
+                 REVOKE UPDATE, DELETE ON awr_team.events FROM {ident};
+                 REVOKE UPDATE, DELETE ON awr_team.source_snapshots FROM {ident};
+                 REVOKE ALL ON awr_team.schema_state FROM {ident};"
+            ))
+            .await?;
+        Ok(())
+    }
+}
+
+fn quote_ident(name: &str) -> String {
+    format!("\"{}\"", name.replace('"', "\"\""))
+}
