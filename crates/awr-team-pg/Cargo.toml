@@ -1,0 +1,22 @@
+[package]
+name = "awr-team-pg"
+version.workspace = true
+edition.workspace = true
+rust-version.workspace = true
+license.workspace = true
+repository.workspace = true
+description = "PostgreSQL coordination store for AWR Team V1. Not used by the personal SQLite runtime."
+
+[dependencies]
+awr-team = { path = "../awr-team" }
+serde.workspace = true
+serde_json.workspace = true
+thiserror.workspace = true
+ulid.workspace = true
+tokio = { version = "1", features = ["macros", "rt-multi-thread", "time"] }
+tokio-postgres = { version = "0.7", features = ["with-serde_json-1"] }
+
+[features]
+default = []
+# Opt-in real PostgreSQL tests. Default CI must not list them as ignored tests.
+pg-tests = []

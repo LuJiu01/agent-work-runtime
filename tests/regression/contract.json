@@ -9,9 +9,11 @@
     "awr-core",
     "awr-mcp",
     "awr-runtime",
+    "awr-server",
     "awr-source",
     "awr-store",
     "awr-team",
+    "awr-team-pg",
     "awr-workspace"
   ],
   "target_gates": 17,

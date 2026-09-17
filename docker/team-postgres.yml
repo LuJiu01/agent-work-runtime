@@ -1,0 +1,10 @@
+# Local PostgreSQL 17 for Team V1 verification. Not a production topology.
+services:
+  postgres:
+    image: postgres:17-alpine
+    environment:
+      POSTGRES_USER: postgres
+      POSTGRES_PASSWORD: awr-test
+      POSTGRES_DB: awr_team_test
+    ports:
+      - "55432:5432"

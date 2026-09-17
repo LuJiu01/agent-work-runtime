@@ -16,9 +16,11 @@
     "awr-core",
     "awr-mcp",
     "awr-runtime",
+    "awr-server",
     "awr-source",
     "awr-store",
     "awr-team",
+    "awr-team-pg",
     "awr-workspace"
   ],
   "required_gates": ["environment", "build", "ignored_inventory", "workspace", "doctests", "crash_recovery", "cli_mcp_parity", "cli_lifecycle", "native_cli", "workflow_oracle", "workflow_scenarios", "format", "source_unchanged"],
