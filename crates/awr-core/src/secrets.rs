@@ -85,15 +85,41 @@ impl SensitiveCategory {
             Self::PrivatePrompt => "private_prompt",
         }
     }
+    // Placement guidance is category-specific: a real secret and a public schema
+    // need opposite repairs. Diagnostics still never echo the matched key or value.
+    pub(crate) fn repair(self) -> &'static str {
+        match self {
+            Self::Credential => {
+                "Real credentials must not be stored or managed by AWR. Keep this file outside registered sources (remove it from the source manifest) and keep real values in env/secret management; inside AWR use only explicit placeholders such as ${VAR} or [redacted]."
+            }
+            Self::LabelledValue => {
+                "If this is a real secret, it must not be stored or managed by AWR: keep the file outside registered sources and reference ${VAR} or [redacted] inside AWR. If this is a public schema, use a complete value-free interface/type declaration or a structured JSON/YAML schema; do not disable scanning."
+            }
+            Self::EnvironmentDump => {
+                "Real environment dumps must not be stored or managed by AWR. Keep environment files outside registered sources; inside AWR reference variables as ${VAR} and describe command requirements in prose."
+            }
+            Self::PrivatePrompt => {
+                "Private prompts must not be stored or managed by AWR. Keep them outside registered sources and reference their external storage location instead."
+            }
+        }
+    }
 }
 
 pub(crate) fn sensitive_rejection_details(message: &str) -> Option<Value> {
-    [SensitiveCategory::Credential, SensitiveCategory::LabelledValue,
-        SensitiveCategory::EnvironmentDump, SensitiveCategory::PrivatePrompt]
-        .into_iter().find(|category| message == category.rejection()).map(|category| {
-            serde_json::json!({"policy_version": SECRET_POLICY_VERSION, "category": category,
-                "next_action": "Inspect this source locally. Keep credentials outside AWR; use explicit redacted placeholders for values. Describe public configuration and permission outcomes as prose, not a credential field or environment dump."})
-        })
+    sensitive_category_for_message(message).map(|category| {
+        serde_json::json!({"policy_version": SECRET_POLICY_VERSION, "category": category,
+            "next_action": category.repair()})
+    })
+}
+pub(crate) fn sensitive_category_for_message(message: &str) -> Option<SensitiveCategory> {
+    [
+        SensitiveCategory::Credential,
+        SensitiveCategory::LabelledValue,
+        SensitiveCategory::EnvironmentDump,
+        SensitiveCategory::PrivatePrompt,
+    ]
+    .into_iter()
+    .find(|category| message == category.rejection())
 }
 
 // Environment dumps and explicit exports retain their boundary. An incidental

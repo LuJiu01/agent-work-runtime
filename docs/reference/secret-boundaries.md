@@ -2,7 +2,7 @@
 
 当前使用 `awr-core` 的秘密策略 5。组件合同 `tests/security/payloads/contract.json` 1.7.0 保持 32 个条件，覆盖无凭据结构定义、公开命令说明、授权叙述、Bearer 普通文字和伪装夹带检查。原始来源仍由项目维护者负责；AWR 不改写或删除包含敏感值的源文件。
 
-写入前检查原始文本和解析后的结构。覆盖来源文件及直接解析、Manifest、直接投影与来源配置、提案 patch、所有事件、checkpoint 的 digest/列表、证据元数据和产物元数据。拒绝保留 `RuleViolation`，并提供 `details.policy_version`、`details.category` 和 `details.next_action`；分类为 `credential`、`labelled_value`、`environment_dump` 或 `private_prompt`，不附带命中的值、键或片段。来源索引问题保留这些分类，CLI/MCP 使用同一合同。来源读取失败会保留旧投影并报告非新鲜状态；直接运行态写入被拒绝时不提交记录和事件。
+写入前检查原始文本和解析后的结构。覆盖来源文件及直接解析、Manifest、直接投影与来源配置、提案 patch、所有事件、checkpoint 的 digest/列表、证据元数据和产物元数据。拒绝保留 `RuleViolation`，并提供 `details.policy_version`、`details.category` 和按类别区分的 `details.next_action`/`repair`：真实凭据和环境转储明确指示“不属于 AWR 管理，保持在注册来源之外，真实值放 env/secret 管理并用 `${VAR}` 引用”；`labelled_value` 同时给出真实秘密的安置路径与公开 schema 的结构化写法。诊断不附带命中的值、键或片段。来源索引问题保留这些分类，CLI/MCP 使用同一合同。来源读取失败会保留旧投影并报告非新鲜状态；直接运行态写入被拒绝时不提交记录和事件。
 
 识别范围包括：
 

@@ -1,3 +1,4 @@
+use crate::secrets::SensitiveCategory;
 use serde::Serialize;
 use thiserror::Error;
 
@@ -185,7 +186,10 @@ impl Error {
                     let mut details = crate::secrets::sensitive_rejection_details(message).unwrap_or_default();
                     details["location"] = serde_json::json!(location);
                     details["rule"] = serde_json::json!("source.public_content");
-                    details["repair"] = serde_json::json!("Inspect the indicated source locally. Remove actual values or use explicit redacted placeholders. For public schemas use a structured type definition or a complete value-free type declaration; do not disable scanning.");
+                    details["repair"] = serde_json::json!(
+                        crate::secrets::sensitive_category_for_message(message)
+                            .map_or("Inspect the indicated source locally.", SensitiveCategory::repair)
+                    );
                     Some(details)
                 }
                 Self::InvalidSource(diagnostic) => Some(serde_json::json!({

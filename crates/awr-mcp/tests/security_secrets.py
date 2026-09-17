@@ -27,6 +27,7 @@ class SecretTransports(unittest.TestCase):
         self.assertEqual(result["code"], "RuleViolation")
         self.assertEqual(result["details"]["category"], "labelled_value")
         self.assertEqual(result["details"]["policy_version"], 5)
+        self.assertIn("outside registered sources", result["details"]["next_action"])
         public_schema = "# Deliver useful analysis\n\ninterface Login { password: string; }\n"
         (self.root / "goal.md").write_text(public_schema)
         self.cli_ok("status")
@@ -42,6 +43,7 @@ class SecretTransports(unittest.TestCase):
         self.assertEqual(diagnostic["details"]["location"]["line"], 5)
         self.assertTrue(diagnostic["details"]["location"]["locator"].endswith("goal.md"))
         self.assertEqual(diagnostic["details"]["rule"], "source.public_content")
+        self.assertIn("outside registered sources", diagnostic["details"]["repair"])
         self.assertEqual(self.snapshot(), before)
         response = self.client.rpc("tools/call", {"name": "awr_source_reindex", "arguments": {
             "expected_revision": self.revision()}})
