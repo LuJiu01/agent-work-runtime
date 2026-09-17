@@ -11,6 +11,7 @@
     "awr-runtime",
     "awr-source",
     "awr-store",
+    "awr-team",
     "awr-workspace"
   ],
   "target_gates": 17,
