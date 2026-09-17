@@ -20,6 +20,14 @@ awr-mcp --version
 | Linux arm64 GNU | glibc 2.39+; `manylinux_2_39_aarch64` wheel |
 | Windows x64 | `win_amd64` wheel; native checks run on Windows Server 2025 |
 
+Both Linux targets need glibc 2.39 or newer, the Ubuntu 24.04 baseline. Pip rejects the
+`manylinux_2_39_x86_64` and `manylinux_2_39_aarch64` wheels on older systems, and the npm
+launcher checks the runtime glibc before resolving the native package, failing with
+`this Linux distribution requires glibc 2.39 or newer (Ubuntu 24.04 baseline).` Debian 12
+and the Raspberry Pi OS releases based on it (glibc 2.36) are out of scope. Check a target
+machine with `ldd --version | head -n 1` or
+`node -p "process.report.getReport().header.glibcVersionRuntime"`.
+
 Python launchers require Python 3.9+, npm launchers Node 22.14+. Distribution checks
 run Python 3.12 and Node 24. Other architectures and older operating systems need
 separate verification. Git-bound operations require Git; SQLite is bundled.
