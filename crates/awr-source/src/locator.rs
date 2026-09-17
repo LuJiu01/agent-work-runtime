@@ -54,7 +54,7 @@ impl SourceSnapshot {
     }
 
     pub fn text(&self) -> Result<&str> {
-        awr_core::ensure_public_bytes(&self.bytes)?;
+        awr_core::ensure_public_source(&self.bytes, &self.locator)?;
         std::str::from_utf8(&self.bytes)
             .map_err(|e| Error::InvalidInput(format!("source must be UTF-8: {e}")))
     }
@@ -81,16 +81,16 @@ impl SourceSnapshot {
 pub fn read_capped(path: &Path, cap: u64) -> Result<Vec<u8>> {
     let file = File::open(path)
         .map_err(|e| Error::SourceUnavailable(format!("{}: {e}", path.display())))?;
-    read_file_capped(file, cap)
+    read_file_capped(file, path, cap)
 }
 
 /// Read a canonical source path whose authority was checked by Locator/Manifest.
 /// Unlike caller-supplied input files, it must not be redirected by a replacement link.
 pub fn read_source_capped(path: &Path, cap: u64) -> Result<Vec<u8>> {
-    read_file_capped(crate::open_file_exact(path)?, cap)
+    read_file_capped(crate::open_file_exact(path)?, path, cap)
 }
 
-fn read_file_capped(file: File, cap: u64) -> Result<Vec<u8>> {
+fn read_file_capped(file: File, path: &Path, cap: u64) -> Result<Vec<u8>> {
     if cap == 0 {
         return Err(Error::InvalidInput("read cap must be positive".into()));
     }
@@ -115,7 +115,7 @@ fn read_file_capped(file: File, cap: u64) -> Result<Vec<u8>> {
             "source exceeds {cap} byte read cap"
         )));
     }
-    awr_core::ensure_public_bytes(&bytes)?;
+    awr_core::ensure_public_source(&bytes, &path.to_string_lossy())?;
     Ok(bytes)
 }
 pub fn fingerprint(bytes: &[u8]) -> String {
@@ -292,8 +292,8 @@ impl Locator {
                 if bytes.len() as u64 > cap {
                     return Err(Error::InvalidInput("Git blob exceeds read cap".into()));
                 }
-                awr_core::ensure_public_bytes(&bytes)?;
                 let locator = format!("git://{commit}:{relative_path}");
+                awr_core::ensure_public_source(&bytes, &locator)?;
                 let mut digest = Sha256::new();
                 digest.update(locator.as_bytes());
                 digest.update([0]);

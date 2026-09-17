@@ -10,7 +10,7 @@ CLI 示例统一以 `awr --project /absolute/project --json` 为前缀。表中�
 
 | MCP 工具 | CLI 对应动作 | 参数对应与返回值 |
 | --- | --- | --- |
-| `awr_project_status` | `status [--branch NAME_OR_ID]` | `branch` 对应 `--branch`；项目、分支、状态数量、当前/建议任务和下一步 |
+| `awr_project_status` | `status [--branch NAME_OR_ID] [--view action/full/summary]` | 默认 action：当前续接、可领取、等待、实际阻塞及历史汇总；旧完整结构显式传 full；[详细语义与兼容说明](daily-work.md) |
 | `awr_work_ready` | `ready [--limit N] [--branch NAME_OR_ID]` | `limit` 默认 10，范围 1..100；就绪项、诊断、认领与截断提示 |
 | `awr_work_get` | `work show WORK [--branch NAME_OR_ID] [--source-sha SHA]` | `work`、`branch`、`source_sha`；任务、验收、依赖、决策、证据及来源 |
 | `awr_context_compile`，无 `branch` | `context compile --work WORK [--session SESSION] [--detached]` | L1、完整性、缺口、来源、预算和 Context hash |

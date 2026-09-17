@@ -41,7 +41,8 @@ fn compact_queries_refresh_source_state_and_explain_dependencies() {
     let f = Fixture::new();
     let status = f.ok(&["status"]);
     assert_eq!(status["total"], 4);
-    assert_eq!(status["ready_count"], 1);
+    assert_eq!(status["ready_count"], 0);
+    assert_eq!(f.ok(&["status", "--view", "full"])["ready_count"], 1);
     // Scheduler readiness alone does not establish a goal or business execution readiness.
     assert!(status["suggested_work"].is_null());
     assert_eq!(status["organization"]["state"], "needs_organization");

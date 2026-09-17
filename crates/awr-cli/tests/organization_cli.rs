@@ -167,7 +167,7 @@ fn empty_cancelled_and_source_completed_are_distinct() {
         (
             WORK.replace("status: ready", "status: completed"),
             "awaiting_verification",
-            Some("completion_unverified"),
+            Some("completion_not_checked"),
         ),
     ] {
         let f = Fixture::new();
@@ -436,7 +436,7 @@ fn finished_goal_with_open_work_and_completed_intake_cannot_imply_project_comple
     f.inspect();
     register_report(&f, true);
     let report = f.ok(&["status", "--source-sha", SHA]);
-    assert_eq!(report["organization"]["verified_completed"], 1);
+    assert_eq!(report["history"]["verified_completed"], 1);
     assert_eq!(report["organization"]["state"], "needs_organization");
     assert!(gap(&report["organization"], "business_work_missing"));
 }

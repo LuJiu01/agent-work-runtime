@@ -204,7 +204,7 @@ fn archive_restore_preserves_identity_status_and_does_not_count_as_completion() 
         assert_eq!(archived["work"]["archived"], true);
         let ready = h.ok(&["ready"]).to_string();
         assert!(!ready.contains(w["work"]["id"].as_str().unwrap()));
-        let status = h.ok(&["status"]);
+        let status = h.ok(&["status", "--view", "full"]);
         assert_eq!(status["organization"]["source_archived"], 1);
         assert_eq!(status["organization"]["source_completed"], 0);
         h.request(

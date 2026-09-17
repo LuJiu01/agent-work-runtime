@@ -18,10 +18,10 @@ impl StatusScope {
         self.work.is_empty() && self.goal.is_none() && self.milestone.is_none()
     }
 }
-fn short(s: &str) -> String {
+pub(crate) fn short(s: &str) -> String {
     public_summary(s, 240).unwrap_or_else(|_| SENSITIVE_CONTENT_WITHHELD.into())
 }
-fn brief(w: &Projected<WorkItem>) -> Value {
+pub(crate) fn brief(w: &Projected<WorkItem>) -> Value {
     json!({"key":w.item.meta.external_key,"title":short(&w.item.title),"status":w.item.status,
         "raw_status":short(&w.item.raw_status),"owner":w.item.owner,"next_action":short(&w.item.next_action),
         "blocker":w.item.blocker.as_deref().map(short),"source_revision":w.item.meta.source_ref.source_revision,
@@ -36,6 +36,24 @@ pub fn summarize_status(
     readiness: &ReadyReport,
     organization: &OrganizationReport,
 ) -> Result<Value> {
+    let selected = select_work(store, project, scope, works)?;
+    summarize_selection(
+        store,
+        project,
+        scope,
+        works,
+        readiness,
+        organization,
+        selected,
+    )
+}
+
+pub(crate) fn select_work<'a>(
+    store: &Store,
+    project: &Project,
+    scope: &StatusScope,
+    works: &'a [Projected<WorkItem>],
+) -> Result<Vec<&'a Projected<WorkItem>>> {
     if scope.work.len() > 100 {
         return Err(Error::InvalidInput(
             "summary accepts at most 100 work keys".into(),
@@ -82,6 +100,18 @@ pub fn summarize_status(
         })
         .collect::<Vec<_>>();
     selected.sort_by_key(|w| (&w.item.priority, &w.item.meta.external_key));
+    Ok(selected)
+}
+
+fn summarize_selection(
+    store: &Store,
+    project: &Project,
+    scope: &StatusScope,
+    works: &[Projected<WorkItem>],
+    readiness: &ReadyReport,
+    organization: &OrganizationReport,
+    selected: Vec<&Projected<WorkItem>>,
+) -> Result<Value> {
     let keys = selected
         .iter()
         .map(|w| w.item.meta.external_key.as_str())

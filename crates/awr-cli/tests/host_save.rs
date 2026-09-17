@@ -97,6 +97,114 @@ impl Host {
 }
 
 #[test]
+fn work_edit_previews_small_changes_and_keeps_retries_and_source_conflicts_safe() {
+    let h = Host::new();
+    let args = [
+        "work",
+        "edit",
+        "W",
+        "--request-key",
+        "daily-edit",
+        "--actor",
+        "writer",
+        "--reason",
+        "Clarify the next action",
+        "--next-action",
+        "Review: 中文草稿\nThen deliver",
+    ];
+    let before = h.text("work.yaml");
+    let preview = h.ok(&args);
+    assert_eq!(preview["view"], "work_edit");
+    assert_eq!(h.text("work.yaml"), before);
+    assert!(preview.get("preview").is_none());
+    assert!(!preview.to_string().contains("keep-me"));
+    let fingerprint = preview["change"]["source_fingerprint"].as_str().unwrap();
+    let revision = preview["project_revision"].to_string();
+    let reviewed = preview["preview_fingerprint"].as_str().unwrap();
+    let mut apply = args.to_vec();
+    apply.extend([
+        "--accept",
+        "--expected-revision",
+        &revision,
+        "--expected-preview",
+        reviewed,
+        "--source-fingerprint",
+        fingerprint,
+    ]);
+    let saved = h.ok(&apply);
+    assert_eq!(saved["write_outcome"], "applied");
+    let after = h.text("work.yaml");
+    assert!(after.contains("# keep this comment") && after.contains("unknown: keep-me"));
+    let source: Value = serde_yaml_ng::from_str(&after).unwrap();
+    assert_eq!(source["work_items"][0]["status"], "planned");
+    assert_eq!(
+        source["work_items"][0]["next_action"],
+        "Review: 中文草稿\nThen deliver"
+    );
+    assert_eq!(
+        source["work_items"][0]["acceptance"],
+        json!(["A useful note is available"])
+    );
+    let again = h.ok(&apply);
+    assert_eq!(again["already_recorded"], true);
+    assert_eq!(h.text("work.yaml"), after);
+    assert_eq!(
+        h.ok(&["host", "status", "--key", "daily-edit"])["found"],
+        true
+    );
+
+    let new_args = [
+        "work",
+        "edit",
+        "W",
+        "--request-key",
+        "conflicting-edit",
+        "--actor",
+        "writer",
+        "--reason",
+        "Shorten title",
+        "--title",
+        "Reading notes",
+    ];
+    let p = h.ok(&new_args);
+    let rev = p["project_revision"].to_string();
+    let mut accept = new_args.to_vec();
+    accept.extend([
+        "--accept",
+        "--expected-revision",
+        &rev,
+        "--expected-preview",
+        p["preview_fingerprint"].as_str().unwrap(),
+        "--source-fingerprint",
+        p["change"]["source_fingerprint"].as_str().unwrap(),
+    ]);
+    h.write("work.yaml", &format!("{after}# independent edit\n"));
+    h.error(&accept, "SourceConflict");
+    assert!(h.text("work.yaml").ends_with("# independent edit\n"));
+    assert!(
+        !h.run(&[
+            "work",
+            "edit",
+            "W",
+            "--request-key",
+            "bad",
+            "--actor",
+            "writer",
+            "--reason",
+            "Unsafe lifecycle edit",
+            "--status",
+            "completed"
+        ])
+        .status
+        .success()
+    );
+    h.write("work.yaml", "goals: []\nwork_items: []\n");
+    h.ok(&["source", "reindex"]);
+    assert_eq!(h.ok(&apply)["already_recorded"], true);
+    assert_eq!(h.text("work.yaml"), "goals: []\nwork_items: []\n");
+}
+
+#[test]
 fn delegated_edits_keep_the_actual_agent_origin_and_require_exact_review() {
     let h = Host::new();
     h.fields(

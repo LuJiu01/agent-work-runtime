@@ -154,17 +154,18 @@ fn workflow_tools() -> Vec<Tool> {
 }
 
 fn change_tools() -> Vec<Tool> {
-    let fields = json!({"type":"object","description":"Explicit source fields; identity, lifecycle and verification fields are guarded by the domain writer."});
+    let fields = json!({"type":"object","description":"No identity/lifecycle/evidence writes."});
     let change = json!({"oneOf":[
+        object(json!({"kind":{"const":"work_edit"},"work":text(),"fields":object(json!({"title":text(),"summary":text(),"priority":text(),"next_action":text()}),&[]),"source_fingerprint":optional(text())}), &["kind","work","fields"]),
         object(json!({"kind":{"const":"create"},"title":text(),"source_id":optional(text()),"fields":fields}), &["kind","title"]),
-        object(json!({"kind":{"const":"batch"},"change":{"type":"object","description":"Existing BatchChange: kind=ledger with source_id, source_fingerprint and operations (fields/import/archive); or kind=related with changes (document/adopt/ledger). See source-changes reference for exact variants."}}), &["kind","change"]),
+        object(json!({"kind":{"const":"batch"},"change":{"type":"object","description":"BatchChange: ledger(source_id,source_fingerprint,operations:fields/import/archive) or related(changes:document/adopt/ledger)."}}), &["kind","change"]),
         object(json!({"kind":{"const":"edit"},"change":{"oneOf":[
             object(json!({"operation":{"const":"fields"},"kind":{"const":"work_item"},"target":text(),"source_fingerprint":text(),"fields":fields}), &["operation","kind","target","source_fingerprint","fields"]),
             object(json!({"operation":{"const":"activate_draft"},"work":text(),"source_fingerprint":text()}), &["operation","work","source_fingerprint"])
         ]}}), &["kind","change"])
     ]});
     let key = json!({"type":"string","minLength":1,"maxLength":256});
-    let kind = json!({"type":"string","enum":["create","batch","edit"]});
+    let kind = json!({"type":"string","enum":["create","batch","edit","work_edit"]});
     vec![
         tool(
             "awr_work_graph",
@@ -178,7 +179,7 @@ fn change_tools() -> Vec<Tool> {
         ),
         tool(
             "awr_change_preview",
-            "Preview source create/batch/edit without writing. Keep request_id across apply/status/recover; review this exact preview before apply.",
+            "Preview source change without writing. work_edit shows only changed fields. Keep request_id; review before apply/status/recover.",
             object(
                 json!({"request_id":key,"reason":text(),"change":change}),
                 &["request_id", "reason", "change"],
@@ -244,7 +245,7 @@ fn optional(mut schema: Value) -> Value {
     schema
 }
 fn branch() -> Value {
-    json!({"type":["string","null"],"description":"Branch name/ID; main=baseline; omitted=current."})
+    json!({"type":["string","null"],"description":"Name/ID; main=baseline; default=current."})
 }
 fn revision() -> Value {
     json!({"type":"integer","minimum":0,"maximum":i64::MAX})
@@ -288,9 +289,9 @@ pub fn tools() -> Vec<Tool> {
     let mut catalog = vec![
         tool(
             TOOL_NAMES[0],
-            "Read project progress, organization gaps, ordered repair actions and business readiness. Optional source_sha verifies completion reports. Never refresh persistent state; after source edits run awr source reindex before rechecking.",
+            "Daily action queue: continue, claimable, waiting, blocked; history is aggregated. Use view=full for earlier diagnostics. Explicit source_sha verifies reports. Reindex changed sources first; this query never writes.",
             object(
-                json!({"branch":branch(),"source_sha":optional(text()),"view":{"type":"string","enum":["full","summary"],"default":"full"},"work":strings(),"goal":optional(text()),"milestone":optional(text())}),
+                json!({"branch":branch(),"source_sha":optional(text()),"view":{"type":"string","enum":["action","full","summary"],"default":"action"},"work":strings(),"goal":optional(text()),"milestone":optional(text())}),
                 &[],
             ),
             true,
@@ -298,7 +299,7 @@ pub fn tools() -> Vec<Tool> {
         ),
         tool(
             TOOL_NAMES[1],
-            "Read dependency-ready work and bounded exclusion diagnostics, including active runtime claims.",
+            "Read work eligible for a new claim. Active/in-progress work is excluded; blocked_total means not selectable. Use awr_project_status for continuation and waiting.",
             object(json!({"branch":branch(),"limit":limit()}), &[]),
             true,
             false,
@@ -407,7 +408,7 @@ pub fn tools() -> Vec<Tool> {
             } else {
                 json!(["full", "summary"])
             };
-            schema["properties"].as_object_mut().unwrap().insert("response_view".into(),json!({"type":"string","enum":views,"default":"full","description":"Action: one conditional instruction; required context stays. Summary writes need request_id. Views do not change identity."}));
+            schema["properties"].as_object_mut().unwrap().insert("response_view".into(),json!({"type":"string","enum":views,"default":"full","description":"Views preserve identity and required context. Summary writes require request_id."}));
         }
         if entry
             .annotations
@@ -417,7 +418,7 @@ pub fn tools() -> Vec<Tool> {
             && !crate::changes::NAMES.contains(&entry.name.as_ref())
         {
             let schema = std::sync::Arc::make_mut(&mut entry.input_schema);
-            schema["properties"].as_object_mut().unwrap().insert("request_id".into(),json!({"type":"string","minLength":1,"maxLength":256,"description":"Stable ID; required on HTTP. Inspect loss; reuse exact arguments."}));
+            schema["properties"].as_object_mut().unwrap().insert("request_id".into(),json!({"type":"string","minLength":1,"maxLength":256,"description":"Stable HTTP ID; query loss before exact retry."}));
         }
         if matches!(
             entry.name.as_ref(),
@@ -455,7 +456,7 @@ fn lifecycle_tools() -> Vec<Tool> {
     vec![
         tool(
             "awr_session_start",
-            "Start and optionally claim work, atomically binding this client's stable host conversation. Existing identical bindings are returned without creating another session; inspect claims and current status.",
+            "Atomically bind this client's conversation to work; optionally claim. Identical bindings reuse the session. Inspect current claims/status.",
             object(
                 json!({"work":text(),"conversation":text(),"agent":text(),"provider":text(),"model":text(),"expected_revision":revision(),"claim":{"type":"boolean","default":false},"ttl_ms":ttl,"branch":branch()}),
                 &[
@@ -472,7 +473,7 @@ fn lifecycle_tools() -> Vec<Tool> {
         ),
         tool(
             "awr_session_get",
-            "Read the selected session, conversation binding, claims, checkpoints, interrupted saves and successor. Runtime-only read works even when sources are stale.",
+            "Read session, binding, claims, checkpoints, interrupted saves and successor. Runtime-only; available with stale sources.",
             selector(json!({}), &[]),
             true,
             false,
@@ -509,7 +510,7 @@ fn lifecycle_tools() -> Vec<Tool> {
         ),
         tool(
             "awr_session_resume",
-            "Explicitly resume one predecessor in a new session and bind the target conversation. Refresh and compile current context, inherit the checkpoint and transfer/acquire claims through the existing resume domain.",
+            "Resume a predecessor into a bound conversation: refresh context, inherit checkpoint and transfer/acquire claims through resume gates.",
             object(
                 json!({"session":text(),"conversation":text(),"agent":text(),"provider":text(),"model":text(),"expected_revision":revision(),"claim":{"type":"string","enum":["inherit","acquire","none"],"default":"inherit"},"ttl_ms":ttl,"budget":{"type":["integer","null"],"minimum":1,"maximum":100000},"paths":optional(strings()),"tags":optional(strings()),"goals":strings(),"source_sha":optional(text())}),
                 &[

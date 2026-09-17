@@ -31,6 +31,7 @@ mod source_changes;
 mod source_relocation;
 mod work_action;
 mod work_create;
+mod work_edit;
 mod work_prepare;
 
 #[derive(Debug, Parser)]
@@ -106,11 +107,11 @@ enum Command {
     },
     /// Refresh source projections and summarize current project work.
     Status {
-        /// Select the compatible full view or the versioned compact summary.
-        #[arg(long, default_value="full", value_parser=["full","summary"])]
+        /// Action is the daily queue; full/summary retain the earlier diagnostic views.
+        #[arg(long, default_value="action", value_parser=["action","full","summary"])]
         view: String,
-        /// Exact work keys in the summary scope; repeat to select several.
-        #[arg(long, requires = "view")]
+        /// Exact work keys in the action/summary scope; repeat to select several.
+        #[arg(long)]
         work: Vec<String>,
         #[arg(long)]
         goal: Option<String>,
@@ -227,7 +228,7 @@ fn run(cli: &Cli) -> Result<()> {
             };
             if view == "full" && !scope.is_empty() {
                 return Err(awr_core::Error::InvalidInput(
-                    "scope selectors require --view summary".into(),
+                    "scope selectors require --view action or summary".into(),
                 ));
             }
             query::status_with_scope(
@@ -236,7 +237,8 @@ fn run(cli: &Cli) -> Result<()> {
                 source_sha.as_deref(),
                 cli.json,
                 *cached,
-                (view == "summary").then_some(&scope),
+                (view != "full").then_some(&scope),
+                view == "action",
             )
         }
         Some(Command::Ready {

@@ -210,6 +210,8 @@ class Parity(unittest.TestCase):
         self.session()
         for cli, tool, args in [
             (["status"], "awr_project_status", {}),
+            (["status", "--view", "full"], "awr_project_status", {"view": "full"}),
+            (["status", "--work", "W"], "awr_project_status", {"view": "action", "work": ["W"]}),
             (["status", "--view", "summary"], "awr_project_status", {"view": "summary"}),
             (["status", "--view", "summary", "--work", "W"], "awr_project_status", {"view": "summary", "work": ["W"]}),
             (["ready", "--limit", "1"], "awr_work_ready", {"limit": 1}),

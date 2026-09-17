@@ -45,6 +45,40 @@ impl Drop for Fixture {
 }
 
 #[test]
+fn init_accepts_type_declarations_and_locates_rejected_values_without_echo() {
+    let f = Fixture::new();
+    f.write(
+        "README.md",
+        "# Login\n```ts\ninterface Login { password: string; }\n```\n",
+    );
+    f.ok(&["init"]);
+    assert!(!f.0.join(".awr").exists());
+    f.write(
+        "README.md",
+        "# Login\n\npassword: synthetic-private-value\n",
+    );
+    let output = f.run(&["init"]);
+    assert!(!output.status.success());
+    let raw = format!(
+        "{}{}",
+        String::from_utf8_lossy(&output.stdout),
+        String::from_utf8_lossy(&output.stderr)
+    );
+    assert!(!raw.contains("synthetic-private-value"));
+    let report: Value = serde_json::from_slice(&output.stderr).unwrap();
+    assert_eq!(report["code"], "RuleViolation");
+    assert_eq!(report["details"]["location"]["line"], 3);
+    assert!(
+        report["details"]["location"]["locator"]
+            .as_str()
+            .unwrap()
+            .ends_with("README.md")
+    );
+    assert_eq!(report["details"]["rule"], "source.public_content");
+    assert!(!f.0.join(".awr").exists());
+}
+
+#[test]
 fn existing_chinese_ledger_adr_and_public_schema_import_without_source_edits() {
     let f = Fixture::new();
     let ledger = "# 项目权威台账\n\n| ID | 工作项 | 状态 | Owner 角色 | 完成硬门槛 | 当前证据 / 下一动作 |\n|---|---|---|---|---|---|\n| W | 交付报表 | pending | Delivery | 用户收到报表 | 整理数据 |\n| D | 既有功能 | complete | Delivery | 历史报告符合要求 | 保留待验证证据 |\n";

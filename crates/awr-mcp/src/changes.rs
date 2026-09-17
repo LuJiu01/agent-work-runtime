@@ -22,6 +22,11 @@ pub(crate) const NAMES: [&str; 4] = [
 #[derive(Deserialize)]
 #[serde(tag = "kind", rename_all = "snake_case", deny_unknown_fields)]
 enum Change {
+    WorkEdit {
+        work: String,
+        fields: Value,
+        source_fingerprint: Option<String>,
+    },
     Create {
         title: String,
         #[serde(default)]
@@ -39,6 +44,7 @@ enum Change {
 impl Change {
     fn kind(&self) -> &'static str {
         match self {
+            Self::WorkEdit { .. } => "work_edit",
             Self::Create { .. } => "create",
             Self::Batch { .. } => "batch",
             Self::Edit { .. } => "edit",
@@ -76,13 +82,13 @@ struct Recover {
 }
 
 fn key(client: &str, kind: &str, request: &str) -> Result<String> {
-    if !["create", "batch", "edit"].contains(&kind)
+    if !["create", "batch", "edit", "work_edit"].contains(&kind)
         || request.trim().is_empty()
         || request.len() > 256
         || request.chars().any(char::is_control)
     {
         return Err(Error::InvalidInput(
-            "source changes require kind create/batch/edit and a stable request_id of 1..256 bytes"
+            "source changes require kind create/batch/edit/work_edit and a stable request_id of 1..256 bytes"
                 .into(),
         ));
     }
@@ -127,6 +133,40 @@ fn apply_change(
         ));
     }
     let (mut value, failure) = match request.change {
+        Change::WorkEdit {
+            work,
+            fields,
+            source_fingerprint,
+        } => {
+            let mut report = edit_work(
+                store,
+                root,
+                HostSaveRequest {
+                    version: 1,
+                    request_key,
+                    actor: actor(client),
+                    reason: request.reason,
+                    change: HostChange::Fields {
+                        kind: EntityKind::WorkItem,
+                        target: work.clone(),
+                        fields: fields.clone(),
+                        source_fingerprint: source_fingerprint.unwrap_or_default(),
+                    },
+                },
+                accept,
+            )?;
+            if report.value["status"] == "preview" {
+                let fingerprint = report.value["change"]["source_fingerprint"].clone();
+                report.value["change"] = json!({"kind":"work_edit","work":work,"fields":fields,"source_fingerprint":fingerprint});
+                report.value["guidance"]["next_action"] = json!(
+                    "Call awr_change_apply with this change, the same request_id/reason, project_revision as expected_revision and preview_fingerprint as expected_preview"
+                );
+            }
+            report.value["guidance"]["recheck"] = json!(
+                "Changed source or uncertain outcome: query awr_change_status with kind work_edit before retrying"
+            );
+            (report.value, report.failure)
+        }
         Change::Create {
             title,
             source_id,

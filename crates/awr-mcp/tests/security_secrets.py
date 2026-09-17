@@ -26,7 +26,30 @@ class SecretTransports(unittest.TestCase):
             "event_type": "work.observed", "summary": "password: " + SENTINEL})
         self.assertEqual(result["code"], "RuleViolation")
         self.assertEqual(result["details"]["category"], "labelled_value")
-        self.assertEqual(result["details"]["policy_version"], 4)
+        self.assertEqual(result["details"]["policy_version"], 5)
+        self.assertIn("outside registered sources", result["details"]["next_action"])
+        public_schema = "# Deliver useful analysis\n\ninterface Login { password: string; }\n"
+        (self.root / "goal.md").write_text(public_schema)
+        self.cli_ok("status")
+        (self.root / "goal.md").write_text(public_schema + "\npassword: " + SENTINEL + "\n")
+        cli = self.cli("status")
+        self.assertNotEqual(cli.returncode, 0)
+        self.no_leak(cli.stdout + cli.stderr)
+        diagnostic = json.loads(cli.stdout)["source_issues"][0]
+        before = self.snapshot()
+        response = self.client.rpc("tools/call", {"name": "awr_project_status", "arguments": {}})
+        self.no_leak(json.dumps(response))
+        self.assertEqual(response["result"]["structuredContent"]["error"]["code"], "SourceStale")
+        self.assertEqual(diagnostic["details"]["location"]["line"], 5)
+        self.assertTrue(diagnostic["details"]["location"]["locator"].endswith("goal.md"))
+        self.assertEqual(diagnostic["details"]["rule"], "source.public_content")
+        self.assertIn("outside registered sources", diagnostic["details"]["repair"])
+        self.assertEqual(self.snapshot(), before)
+        response = self.client.rpc("tools/call", {"name": "awr_source_reindex", "arguments": {
+            "expected_revision": self.revision()}})
+        self.no_leak(json.dumps(response))
+        self.assertTrue(response["result"]["isError"])
+        self.assertEqual(response["result"]["structuredContent"]["issues"][0], diagnostic)
 
     def setUp(self):
         self.temp = tempfile.TemporaryDirectory(prefix="awr-secret-transport-")
