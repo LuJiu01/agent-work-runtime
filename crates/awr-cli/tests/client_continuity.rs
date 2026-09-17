@@ -350,3 +350,23 @@ fn generated_shell_hook_runs_with_documented_native_output() {
         !p.ok(&["client", "show", "--external-session", "native-command"])["binding"].is_null()
     );
 }
+
+#[test]
+fn l2_install_rejects_generic_host_identity() {
+    let p = Project::new();
+    let failed = p.run(
+        &[
+            "client",
+            "install",
+            "--client",
+            "generic",
+            "--work",
+            "INTAKE-001",
+        ],
+        None,
+    );
+    assert!(!failed.status.success());
+    let error: Value = serde_json::from_slice(&failed.stderr).unwrap();
+    assert_eq!(error["code"], "Unsupported");
+    assert!(error["message"].as_str().unwrap().contains("Codex only"));
+}
