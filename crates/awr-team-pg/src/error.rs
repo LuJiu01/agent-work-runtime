@@ -78,6 +78,14 @@ pub enum PgError {
     PolicyDowngrade,
     #[error("context incomplete")]
     ContextIncomplete,
+    #[error("source divergence")]
+    SourceDivergence,
+    #[error("restore incomplete")]
+    RestoreIncomplete,
+    #[error("outbox replay forbidden")]
+    OutboxReplayForbidden,
+    #[error("rollback forbidden")]
+    RollbackForbidden,
     #[error("{0}")]
     Db(#[from] tokio_postgres::Error),
     #[error("{0}")]

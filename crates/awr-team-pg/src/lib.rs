@@ -4,6 +4,7 @@ mod bootstrap;
 mod error;
 mod execution;
 mod graph;
+mod import;
 mod lease;
 mod migrate;
 mod path;
@@ -20,6 +21,7 @@ pub use graph::{
     DependencyEdge, GraphStore, SplitProposal, paths_conflict, require_main_scope,
     validate_required_graph,
 };
+pub use import::{BackupRecord, ImportJob, ImportStore, InspectReport, RestoreRun};
 pub use lease::{ClaimRecord, LeaseStore, SessionRecord};
 pub use migrate::{EXPECTED_SCHEMA_VERSION, check_schema, migrate};
 pub use path::{
@@ -51,6 +53,6 @@ mod tests {
     #[test]
     fn schema_contract_is_stable() {
         assert_eq!(SCHEMA, "awr_team");
-        assert_eq!(EXPECTED_SCHEMA_VERSION, 5);
+        assert_eq!(EXPECTED_SCHEMA_VERSION, 6);
     }
 }
