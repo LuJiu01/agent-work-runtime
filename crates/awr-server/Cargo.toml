@@ -9,6 +9,7 @@ description = "Minimal AWR Team server skeleton: migrate and refuse work on inco
 
 [dependencies]
 awr-team-pg = { path = "../awr-team-pg" }
+awr-team = { path = "../awr-team" }
 clap = { workspace = true }
 serde_json.workspace = true
 tokio = { version = "1", features = ["macros", "rt-multi-thread"] }

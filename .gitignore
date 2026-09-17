@@ -25,6 +25,7 @@ __pycache__/
 remote_workspace.toml
 .awr/workspace-credentials.json
 .awr/workspace.json
+.awr/team-remotes/
 
 # Internal development material stays local, including the project's own AWR mapping.
 /ledger/
