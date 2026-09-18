@@ -55,7 +55,7 @@ node server.js --project /你的/项目路径
 | 概览 | 现在该干什么 | `awr status`（+ `awr ready`）|
 | 工作项 | 这件活要做成什么样、卡在哪 | `awr work show` |
 | 上下文 | 给 agent 的那包东西里装了什么 | `awr context compile` |
-| 索引源 | 控制台看到的还算数吗 | `awr intake inspect`（读 `organization.sources`）|
+| 索引源 | 看到的东西还算数吗 | `awr intake inspect`（读 `organization.sources`）|
 
 **先看哪里：** 概览页的「被阻塞」和「等待中」两个队列，进度停下来的地方都在那儿。
 

@@ -1,7 +1,7 @@
 /**
  * 演示数据
  *
- * 桥接连不上、或者项目还没初始化时，控制台用这份数据。
+ * 桥接连不上、或者项目还没初始化时，用这份数据。
  *
  * 它的结构照着仓库源码里真实的 JSON 形状写：
  *   status  → crates/awr-runtime/src/status_action.rs（四个顶层队列数组 + omissions）

@@ -571,7 +571,7 @@
 
     setText('navWorkCount', String(s.works.length || ''));
     setText('mcpCmd', `awr-mcp --project ${state.project}`);
-    setText('mcpSub', state.mode === 'live' ? '控制台走 CLI，agent 走 MCP' : '演示模式');
+    setText('mcpSub', state.mode === 'live' ? '本工具走 CLI，agent 走 MCP' : '演示模式');
   }
 
   function renderContextChart(s) {
@@ -1061,7 +1061,9 @@
     }
 
     renderCompile();
-    setText('compileHint', ctx.revision != null ? `revision ${ctx.revision} · 编译只读不写` : '编译只读不写');
+    setText('compileHint', ctx.revision != null
+      ? `revision ${ctx.revision} · 不写权威源，可能刷新投影`
+      : '不写权威源，可能刷新投影');
   }
 
   function renderCompile() {
@@ -1236,7 +1238,7 @@
         td.appendChild(el('div', null, `规则：${r.rule || '—'}`));
         td.appendChild(el('div', null, `位置：${loc}`));
         td.appendChild(el('div', null, `怎么修：${r.repair || '—'}`));
-        const note = el('p', 'figure-note', 'AWR 不会回显匹配到的原值和上下文，控制台也不会自己去读源文件补出来。');
+        const note = el('p', 'figure-note', 'AWR 不会回显匹配到的原值和上下文，本工具也不会自己去读源文件补出来。');
         td.appendChild(note);
         exp.appendChild(td);
         tbody.appendChild(exp);
@@ -1293,7 +1295,7 @@
     const health = await callApi('/api/health');
     if (health.ok) {
       state.mode = health.data.mode;
-      // 演示模式下显示样本项目名，而不是控制台自己所在的那个目录——
+      // 演示模式下显示样本项目名，而不是本工具自己所在的那个目录——
       // 那个路径会让人以为它真的在读这个目录。
       state.project = state.mode === 'demo' ? '.local/demo' : (health.data.project || '.');
       state.reason = health.data.reason;
@@ -1402,10 +1404,10 @@
 
   const TOUR = [
     {
-      title: '这个控制台是干什么的',
+      title: '这个工具是干什么的',
       html: [
         '<p>你的 coding agent 每开一个新会话，都得先搞清楚「这个项目在干嘛、我该接着做什么」。AWR 就是替它记住这些事的那一层。</p>',
-        '<p>这个控制台是给<b>人</b>看的那一面：agent 看到的状态，你也能看到同一份。</p>',
+        '<p>AWR Inspector 是给<b>人</b>看的那一面：agent 看到的状态，你也能看到同一份。</p>',
         '<div class="tour-art"><div class="row"><span>源文件</span><span class="bar on"></span></div><div class="row"><span>AWR 索引</span><span class="bar on"></span></div><div class="row"><span>上下文包</span><span class="bar on bar-short"></span></div></div>',
       ].join(''),
     },
@@ -1427,13 +1429,13 @@
       title: '第三站：上下文',
       html: [
         '<p>这里能亲手编译一个上下文包，看清楚 token 花在了哪几段，以及有没有东西因为预算被省略掉。</p>',
-        '<p>编译是<b>只读</b>的，不会改动项目状态，随便试。</p>',
+        '<p>编译不写权威源、也不推进工作状态；但它可能刷新本地投影（<code>source_refresh_performed</code>）。</p>',
       ].join(''),
     },
     {
       title: '最后：每条命令都能自己跑',
       html: [
-        '<p>界面上每个 <code>$</code> 开头的框，都是控制台后台真正执行的那条命令。复制到终端跑，结果一模一样。</p>',
+        '<p>界面上每个 <code>$</code> 开头的框，都是它后台真正执行的那条命令。复制到终端跑，结果一模一样。</p>',
         '<p>看不懂某个词？点右上角的<b>「术语」</b>。每个面板标题旁边的 <b>?</b> 会用大白话解释这一块在说什么。</p>',
       ].join(''),
     },
