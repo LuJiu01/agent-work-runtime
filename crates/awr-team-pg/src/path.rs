@@ -47,6 +47,13 @@ pub fn validate_package(files: &[(String, Vec<u8>)]) -> PgResult<()> {
     let mut seen = std::collections::BTreeSet::new();
     for (path, bytes) in files {
         validate_source_path(path)?;
+        // Text-only input contract: snapshots persist file content as text
+        // and bind it to the sha256 of the original bytes. Lossy conversion
+        // would break that binding, so invalid UTF-8 is rejected before
+        // anything is persisted (CR #37 P2-3).
+        if std::str::from_utf8(bytes).is_err() {
+            return Err(PgError::InvalidUtf8(path.clone()));
+        }
         if bytes.len() > MAX_FILE_BYTES {
             return Err(PgError::UnsafeSourcePath(format!(
                 "{path} exceeds {MAX_FILE_BYTES} bytes"
