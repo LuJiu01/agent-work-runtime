@@ -120,21 +120,29 @@ Use `session resume` only for a real session handoff.
 
 ## Bind a native conversation
 
+Prefix the host's conversation ID with the host name, so the durable identity
+stays distinct per host without a new client enum or schema change:
+
+```sh
+AWR_EXTERNAL="cursor:${HOST_CONVERSATION_ID}"
+```
+
 Attach to an **active** AWR session:
 
 ```sh
-awrj client bind --client generic --external-session HOST_CONVERSATION_ID \
+awrj client bind --client generic --external-session "$AWR_EXTERNAL" \
   --work "$AWR_WORK" --session "$AWR_SESSION"
 ```
 
 Continue from a **predecessor** (creates a successor session, then binds):
 
 ```sh
-awrj client bind --client generic --external-session HOST_CONVERSATION_ID \
+awrj client bind --client generic --external-session "$AWR_EXTERNAL" \
   --work "$AWR_WORK" --from-session "$AWR_PREDECESSOR"
 ```
 
-Do not pass both flags. `--client generic` is the L0 identity. `awr client
+Do not pass both flags. `--client generic` is the L0 identity; use the same
+namespaced external ID on `client progress` and `client show`. `awr client
 install` is L2 and currently exists only for Codex; other values return
 `Unsupported`. That error is not a missing binary or a failed MCP connection.
 

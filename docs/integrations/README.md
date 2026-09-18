@@ -42,6 +42,13 @@ conversation to the successor.
 are not the centre of the product. Unknown `--client` values are rejected;
 do not add a new enum for every editor.
 
+Host names travel inside the external session ID, not the client enum:
+`--client generic --external-session cursor:8f3a…`. The `<host>:` prefix keeps
+identities distinct per host without a schema change. Binding records are
+append-only and reject unknown fields, so a new `host` column would make new
+events unreadable by older binaries; the namespaced ID avoids that. Use
+`--provider` and `--model` on session start/resume for display labels.
+
 `awr client install` is L2. Unsupported hosts are expected to stay on L0.
 
 ## Current host notes

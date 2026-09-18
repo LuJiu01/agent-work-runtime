@@ -370,3 +370,100 @@ fn l2_install_rejects_generic_host_identity() {
     assert_eq!(error["code"], "Unsupported");
     assert!(error["message"].as_str().unwrap().contains("Codex only"));
 }
+
+#[test]
+fn l0_generic_host_completes_the_same_lifecycle() {
+    let p = Project::new();
+    let event = |session: &str, name: &str, turn: Option<&str>| {
+        let mut e =
+            json!({"session_id":session,"hook_event_name":name,"cwd":p.0,"model":"client-test"});
+        if let Some(t) = turn {
+            e["turn_id"] = json!(t);
+        }
+        decode(p.run(
+            &[
+                "client",
+                "hook",
+                "--client",
+                "generic",
+                "--work",
+                "INTAKE-001",
+            ],
+            Some(&e),
+        ))
+    };
+    let started = event("cursor:conversation-a", "SessionStart", None);
+    assert!(
+        started["hookSpecificOutput"]["additionalContext"]
+            .as_str()
+            .unwrap()
+            .contains("INTAKE-001")
+    );
+    p.ok(&[
+        "client",
+        "progress",
+        "--client",
+        "generic",
+        "--external-session",
+        "cursor:conversation-a",
+        "--next-action",
+        "Finish the reviewed search handler",
+        "--open-loop",
+        "Independent review is pending",
+    ]);
+    let saved = event("cursor:conversation-a", "Stop", Some("turn-one"));
+    assert_eq!(saved["awr"]["checkpoint_saved"], true);
+    let shown = p.ok(&[
+        "client",
+        "show",
+        "--client",
+        "generic",
+        "--external-session",
+        "cursor:conversation-a",
+    ]);
+    assert_eq!(shown["binding"]["client"], "generic");
+    assert_eq!(
+        shown["binding"]["external_session"],
+        "cursor:conversation-a"
+    );
+    // A namespaced host id keeps identities separate without a new client enum.
+    let other = p.ok(&[
+        "client",
+        "show",
+        "--client",
+        "generic",
+        "--external-session",
+        "conversation-a",
+    ]);
+    assert!(other["binding"].is_null());
+}
+
+#[test]
+fn omitted_client_flag_keeps_the_codex_identity() {
+    let p = Project::new();
+    let started = decode(p.run(
+        &["client", "hook", "--work", "INTAKE-001"],
+        Some(&json!({"session_id":"conversation-default","hook_event_name":"SessionStart","cwd":p.0,"model":"client-test"})),
+    ));
+    assert!(
+        started["hookSpecificOutput"]["additionalContext"]
+            .as_str()
+            .unwrap()
+            .contains("INTAKE-001")
+    );
+    p.ok(&[
+        "client",
+        "progress",
+        "--external-session",
+        "conversation-default",
+        "--next-action",
+        "Keep the default identity stable",
+    ]);
+    let shown = p.ok(&[
+        "client",
+        "show",
+        "--external-session",
+        "conversation-default",
+    ]);
+    assert_eq!(shown["binding"]["client"], "codex");
+}
