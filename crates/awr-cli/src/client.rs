@@ -14,7 +14,7 @@ use std::{
 
 #[derive(Debug, Args)]
 pub struct Identity {
-    /// Host dialect. Required everywhere: `generic` for L0 hosts; `codex` and `kimi` are documented native dialects. No default, so no dialect is implied as the product centre.
+    /// Host dialect. Required everywhere: `generic` for any host without a documented dialect; prefix its conversation ID, e.g. `--client generic --external-session cursor:<native-id>`. `codex` and `kimi` are documented native dialects. No default, so no dialect is implied as the product centre.
     #[arg(long)]
     client: String,
     #[arg(long)]
@@ -78,7 +78,7 @@ fn validate_identity(client: &str, external: &str) -> Result<()> {
         || external.len() > 512
     {
         return Err(Error::InvalidInput(
-            "client must be generic, or a documented native dialect (codex or kimi), with a bounded conversation ID".into(),
+            "client must be generic, or a documented native dialect (codex or kimi). Other hosts: use --client generic and prefix the conversation ID, e.g. --external-session cursor:<native-id>".into(),
         ));
     }
     Ok(())
@@ -539,7 +539,7 @@ fn shell_quote(s: &str) -> String {
 }
 fn install(root: &Path, client: &str, work: &str, accept: bool) -> Result<Value> {
     if client != "codex" {
-        return Err(Error::Unsupported("automatic L2 installation currently supports Codex only; other hosts use --client generic and the lifecycle receiver, with manual checkpoints".into()));
+        return Err(Error::Unsupported("automatic L2 installation currently supports Codex only; other hosts use --client generic with a host-prefixed conversation ID and the lifecycle receiver, with manual checkpoints".into()));
     }
     let db = QueryProject::open(root)?;
     db.finish()?;
