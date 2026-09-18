@@ -143,7 +143,7 @@ is accepted as a valid identity and would merge unrelated host conversations
 into one binding:
 
 ```sh
-: "${HOST_CONVERSATION_ID:?set the host's native conversation ID first}"
+: "${HOST_CONVERSATION_ID:?set the native host conversation ID first}"
 AWR_EXTERNAL="cursor:${HOST_CONVERSATION_ID}"
 ```
 
