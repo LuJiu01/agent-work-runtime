@@ -11,13 +11,13 @@
 
 use awr_team_pg::{Bootstrap, CommandRequest, PgError, TeamStore, check_schema, migrate};
 use serde_json::json;
-use std::sync::{Mutex, MutexGuard, OnceLock};
+use std::sync::{Mutex, MutexGuard};
 use std::time::{SystemTime, UNIX_EPOCH};
 use tokio_postgres::config::{Config, Host};
 use tokio_postgres::{Client, NoTls};
 
 static DB: Mutex<()> = Mutex::new(());
-static GATE_DB: OnceLock<String> = OnceLock::new();
+static GATE_DB: tokio::sync::OnceCell<String> = tokio::sync::OnceCell::const_new();
 
 const TENANT: &str = "tenant-g";
 const PROJECT: &str = "project-g";
@@ -43,7 +43,9 @@ fn check_loopback(config: &Config) -> Result<(), String> {
                 return Err(format!("non-loopback host {name}"));
             }
         }
-        // Unix-domain sockets are local by construction.
+        // Unix-domain sockets are local by construction. The variant only
+        // exists on unix targets (CR #52 round 4).
+        #[cfg(unix)]
         Host::Unix(_) => {}
     }
     // hostaddr overrides the host name for dialing; it must be loopback too.
@@ -119,13 +121,11 @@ async fn create_gate_db() -> String {
     panic!("could not allocate a fresh gate database name");
 }
 
+/// Atomic one-time initialization: concurrent first callers wait for the
+/// in-flight creation and all receive the same registered name
+/// (CR #52 round 4).
 async fn gate_db_name() -> String {
-    if let Some(name) = GATE_DB.get() {
-        return name.clone();
-    }
-    let name = create_gate_db().await;
-    let _ = GATE_DB.set(name.clone());
-    name
+    GATE_DB.get_or_init(create_gate_db).await.clone()
 }
 
 async fn setup() -> (MutexGuard<'static, ()>, Client) {
@@ -161,20 +161,11 @@ async fn setup() -> (MutexGuard<'static, ()>, Client) {
 async fn app_client(db: &str) -> Client {
     connect_config(&with_app_role(&test_config(), db)).await
 }
-async fn app_store(db: &str) -> TeamStore {
-    let mut config = with_app_role(&test_config(), db);
-    let mut url = format!(
-        "postgres://{}:{}@",
-        config.get_user().unwrap_or("awr_app"),
-        "app-test"
-    );
-    match &config.get_hosts()[0] {
-        Host::Tcp(h) => url.push_str(h),
-        Host::Unix(p) => url.push_str(&p.display().to_string()),
-    }
-    let port = config.get_ports().first().copied().unwrap_or(5432);
-    url.push_str(&format!(":{port}/{db}"));
-    TeamStore::new(url)
+/// The store path keeps the validated Config untouched: no URL
+/// re-serialization, so IPv6 brackets, hostaddr overrides and Unix sockets
+/// keep their meaning (CR #52 round 4).
+fn app_store(db: &str) -> TeamStore {
+    TeamStore::from_config(with_app_role(&test_config(), db))
 }
 fn touch(request_id: &str) -> CommandRequest {
     CommandRequest {
@@ -254,6 +245,38 @@ async fn preexisting_same_prefix_databases_are_never_adopted() {
     panic!("could not drop the sentinel database created by this test");
 }
 
+// CR #52 round 4: concurrent first callers share one registered identity.
+#[tokio::test]
+async fn concurrent_first_callers_share_one_registered_database() {
+    use std::sync::Arc;
+    use std::sync::atomic::{AtomicUsize, Ordering};
+    let created = Arc::new(AtomicUsize::new(0));
+    let counter = created.clone();
+    let cell = tokio::sync::OnceCell::new();
+    let make_init = |created: Arc<AtomicUsize>| {
+        move || {
+            let created = created.clone();
+            async move {
+                created.fetch_add(1, Ordering::SeqCst);
+                // Give a racing caller time to enter before registration completes.
+                tokio::time::sleep(std::time::Duration::from_millis(50)).await;
+                "db-unique".to_string()
+            }
+        }
+    };
+    let (a, b) = tokio::join!(
+        cell.get_or_init(make_init(created.clone())),
+        cell.get_or_init(make_init(created))
+    );
+    assert_eq!(
+        counter.load(Ordering::SeqCst),
+        1,
+        "more than one database created"
+    );
+    assert_eq!(a, b, "callers observe different registrations");
+    assert_eq!(a, "db-unique");
+}
+
 // CR #36 P2-1: the app role can read the version but can never modify it.
 #[tokio::test]
 async fn app_role_checks_version_but_cannot_modify_it() {
@@ -295,7 +318,7 @@ async fn upgrade_regrants_existing_database_without_data_loss() {
         .batch_execute("REVOKE ALL ON awr_team.schema_state FROM awr_app")
         .await
         .unwrap();
-    let store = app_store(&db).await;
+    let store = app_store(&db);
     let err = store.execute(touch("gate-pre-upgrade")).await.unwrap_err();
     assert!(
         matches!(err, PgError::Db(_)),
@@ -327,7 +350,7 @@ async fn upgrade_regrants_existing_database_without_data_loss() {
 async fn incompatible_version_blocks_command_without_side_effects() {
     let (_lock, admin) = setup().await;
     let db = GATE_DB.get().unwrap().clone();
-    let store = app_store(&db).await;
+    let store = app_store(&db);
     let first = store.execute(touch("gate-1")).await.unwrap();
     assert_eq!(first.committed_project_revision, "1");
     admin
@@ -380,7 +403,7 @@ async fn missing_version_record_blocks_command() {
         )
         .await
         .unwrap();
-    let store = app_store(&db).await;
+    let store = app_store(&db);
     let err = store.execute(touch("gate-3")).await.unwrap_err();
     assert!(matches!(err, PgError::SchemaIncompatible(_)));
 }
@@ -400,7 +423,7 @@ async fn receipt_revision_is_decimal_string_end_to_end() {
         )
         .await
         .unwrap();
-    let store = app_store(&db).await;
+    let store = app_store(&db);
     let outcome = store.execute(touch("gate-4")).await.unwrap();
     let expected = "9007199254740993";
     assert_eq!(outcome.committed_project_revision, expected);
@@ -450,7 +473,7 @@ async fn failed_receipt_write_rolls_back_the_real_command() {
         )
         .await
         .unwrap();
-    let store = app_store(&db).await;
+    let store = app_store(&db);
     let err = store.execute(touch("gate-5")).await.unwrap_err();
     assert!(matches!(err, PgError::Db(_)));
     admin
@@ -506,7 +529,7 @@ async fn failed_receipt_write_rolls_back_the_real_command() {
 async fn concurrent_retry_commits_once() {
     let (_lock, admin) = setup().await;
     let db = GATE_DB.get().unwrap().clone();
-    let store = app_store(&db).await;
+    let store = app_store(&db);
     let (a, b) = tokio::join!(
         store.execute(touch("gate-6")),
         store.execute(touch("gate-6"))

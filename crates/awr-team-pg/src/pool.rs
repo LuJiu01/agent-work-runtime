@@ -28,14 +28,31 @@ pub type PgClient = deadpool_postgres::Object;
 /// Construction is infallible so `Store::new(url)` keeps its signature;
 /// URL or TLS configuration errors surface on the first `get()`.
 pub struct PgPool {
-    url: String,
+    source: PoolSource,
     inner: OnceCell<Pool>,
+}
+
+enum PoolSource {
+    Url(String),
+    /// A caller-parsed, already validated configuration. Used when the
+    /// caller must not lose connection semantics (IPv6, hostaddr, Unix
+    /// sockets) through URL re-serialization (CR #52 round 4).
+    Config(tokio_postgres::Config),
 }
 
 impl PgPool {
     pub fn new(url: impl Into<String>) -> Self {
         Self {
-            url: url.into(),
+            source: PoolSource::Url(url.into()),
+            inner: OnceCell::new(),
+        }
+    }
+
+    /// Build from a validated `tokio_postgres::Config` without
+    /// re-serializing it.
+    pub fn from_config(config: tokio_postgres::Config) -> Self {
+        Self {
+            source: PoolSource::Config(config),
             inner: OnceCell::new(),
         }
     }
@@ -43,7 +60,13 @@ impl PgPool {
     pub async fn get(&self) -> PgResult<PgClient> {
         let pool = self
             .inner
-            .get_or_try_init(|| async { build_pool(&self.url) })
+            .get_or_try_init(|| async {
+                let config = match &self.source {
+                    PoolSource::Url(url) => parse_config(url)?,
+                    PoolSource::Config(config) => config.clone(),
+                };
+                build_pool(config)
+            })
             .await?;
         Ok(pool.get().await?)
     }
@@ -99,8 +122,7 @@ fn manager_config() -> ManagerConfig {
     }
 }
 
-fn build_pool(url: &str) -> PgResult<Pool> {
-    let config = parse_config(url)?;
+fn build_pool(config: tokio_postgres::Config) -> PgResult<Pool> {
     let manager = if tls_required(&config) {
         #[cfg(feature = "tls")]
         {
