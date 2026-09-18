@@ -59,6 +59,28 @@ node server.js --project /你的/项目路径
 
 **先看哪里：** 概览页的「被阻塞」和「等待中」两个队列，进度停下来的地方都在那儿。
 
+### 每页看得到什么
+
+| 位置 | 观察字段 |
+| --- | --- |
+| 概览 · 状态条 | 四个队列计数、结构缺口数、组织状态、project revision |
+| 概览 · 结构缺口 | `organization.gaps` 的 code / target / 说明 |
+| 概览 · 待查的运行时操作 | `pending_operations`——被中断、结果未知的操作（字段缺失时整块隐藏）|
+| 工作项 · 表格 | 队列、源状态、负责人、认领状态、诊断码、source revision |
+| 工作项 · 详情 | 目标、验收标准、阻塞/等待、依赖与未决依赖、依赖成环、**谁占着这件活**（agent / session / 到期）、**证据与决策**、诊断码 |
+| 上下文 · 完整性 | `completeness.status`、**六个维度**（规则 / 目标上下文 / 工作状态 / 验收标准 / 依赖 / 源新鲜度）、**证据缺口**、未决依赖、issues、被省略的块及原因 |
+| 索引源 | 每个源的 domain / role / 新鲜度 / revision，与 project revision 并列 |
+
+### 拿不到的两项
+
+`awr session list` 和 `awr event history` 在**发布版 0.4.0 和当前源码树里都返回
+`Unsupported`**（`operation is not implemented`），所以：
+
+- 最近 checkpoint / open loop 列表
+- 事件时间线
+
+这两样做不了。等 CLI 实现了这两条命令，加上去很容易——概览页已经有对应的列表组件。
+
 ---
 
 ## 它到底改不改东西

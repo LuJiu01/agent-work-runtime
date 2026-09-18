@@ -35,7 +35,11 @@
     item({
       key: 'EXAMPLE-001', title: '确定性的上下文编译', status: 'in_progress', owner: 'lin',
       next_action: '把渲染器第三遍过完，然后催一下 OL-14 的 review',
-      extra: { ownership_required: true, codes: [], claims: [{ session: 'sess_8f21', agent: 'claude-code' }] },
+      extra: {
+        ownership_required: true,
+        codes: [],
+        claims: [{ id: 'clm_01', session_id: 'sess_8f21', agent_id: 'coding-agent', expires_at: iso(-45) }],
+      },
     }),
   ];
 
@@ -149,6 +153,23 @@
     },
   };
 
+  // 证据与决策：只有少数工作项有，正好演示「有」和「没有」两种样子。
+  const DETAIL_EXTRA = {
+    'EXAMPLE-001': {
+      evidence: [
+        { external_key: 'bench-p95-0917', evidence_type: 'benchmark', level: 'locally_verified' },
+      ],
+      decisions: [{ external_key: 'dec-0003', title: '渲染器按段落切块，不按文件切' }],
+    },
+    'EXAMPLE-004': {
+      evidence: [
+        { external_key: 'dry-run-0915', evidence_type: 'command', level: 'locally_verified' },
+        { external_key: 'inspect-report-02', evidence_type: 'report', level: 'locally_verified' },
+      ],
+      decisions: [],
+    },
+  };
+
   const ALL = CURRENT.concat(READY, WAITING, BLOCKED);
 
   window.AWR_DEMO = {
@@ -175,6 +196,14 @@
       guidance: {
         when: 'Current work can be continued',
         next_action: 'Prepare the selected work; continue only with its owned session or explicitly resume it',
+      },
+      pending_operations: {
+        basis: 'project-wide registered runtime findings',
+        total: 2,
+        items: [
+          { code: 'execution_outcome_unknown', kind: 'execution', id: 'exe_4411' },
+          { code: 'mutation_proposal_pending', kind: 'proposal', id: 'prp_9002' },
+        ],
       },
       organization: {
         state: 'partially_structured',
@@ -205,7 +234,14 @@
         project_revision: 128,
         freshness_basis: 'source_refresh',
         read_only: false,
-        work: Object.assign({}, brief, { ready: brief.status === 'planned', diagnostics: [], active_claims: [] }),
+        work: Object.assign({}, brief, {
+          ready: brief.status === 'planned',
+          diagnostics: brief.codes || [],
+          active_claims: brief.claims || [],
+        }),
+        evidence: DETAIL_EXTRA[brief.key] ? DETAIL_EXTRA[brief.key].evidence : [],
+        decisions: DETAIL_EXTRA[brief.key] ? DETAIL_EXTRA[brief.key].decisions : [],
+        dependency_cycles: [],
       }, extra);
     },
 
@@ -254,7 +290,7 @@
       const selected = tight ? chunks.filter((c) => c.required || c.section === 'loops') : chunks;
       const omitted = chunks
         .filter((c) => selected.indexOf(c) < 0)
-        .map((c) => ({ key: c.key, section: c.section, reason: 'token_budget_exhausted' }));
+        .map((c) => ({ key: c.key, section: c.section, reason: 'insufficient_budget_for_whole_chunk' }));
 
       const lines = [
         '# work: ' + brief.key,
@@ -291,7 +327,24 @@
         ok: omitted.length === 0,
         level: 'L1',
         project_revision: 128,
-        completeness: { complete: omitted.length === 0, project_revision: 128 },
+        completeness: {
+          complete: omitted.length === 0,
+          status: omitted.length === 0 ? 'CONTEXT COMPLETE' : 'CONTEXT INCOMPLETE',
+          project_revision: 128,
+          rules_complete: true,
+          goal_context_complete: true,
+          work_state_complete: true,
+          acceptance_complete: true,
+          dependencies_complete: (extra.required_dependencies || []).length === 0,
+          source_fresh: !tight,
+          issues: [],
+          evidence_gaps: (DETAIL_EXTRA[brief.key] && DETAIL_EXTRA[brief.key].evidence.length)
+            ? []
+            : [{ code: 'no_evidence', reason: 'no evidence is associated with this work', reference: brief.key }],
+          unresolved_required_dependencies: (extra.required_dependencies || [])
+            .filter((d) => d.status !== 'done')
+            .map((d) => ({ external_key: d.external_key })),
+        },
         omitted_refs: [],
         work_context: {
           rendered_context: lines.join('\n'),

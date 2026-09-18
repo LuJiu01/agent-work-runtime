@@ -30,6 +30,8 @@
       selected:     ['total'],
       projectTotal: ['project_work_total'],
       gaps:         ['organization.gaps'],
+      pendingOps:   ['pending_operations.items'],
+      pendingTotal: ['pending_operations.total'],
       gapTotal:     ['organization.gap_total', 'organization.project_gap_total'],
       orgState:     ['organization.state'],
       freshness:    ['freshness_basis'],
@@ -66,6 +68,11 @@
       acceptance: ['acceptance', 'acceptance_criteria', 'criteria'],
       dependsOn:  ['required_dependencies', 'depends_on', 'dependencies'],
       missingDeps:['missing_dependencies'],
+      claims:     ['active_claims'],
+      diagnostics:['diagnostics'],
+      evidence:   ['evidence'],
+      decisions:  ['decisions'],
+      cycles:     ['dependency_cycles'],
     },
     context: {
       rendered:   ['work_context.rendered_context', 'rendered_context', 'diagnostic_text'],
@@ -76,8 +83,14 @@
       hash:       ['work_context.context_hash', 'context_hash'],
       tokenizer:  ['work_context.tokenizer', 'tokenizer'],
       complete:   ['completeness.complete', 'ok'],
+      statusText: ['completeness.status'],
       revision:   ['completeness.project_revision', 'project_revision'],
       omissions:  ['work_context.omitted_chunks', 'omitted_refs', 'omitted_chunks'],
+      // 完整性是分维度给的，不是一个布尔。缺哪一维直接决定 agent 会不会瞎干。
+      dimensions: ['completeness'],
+      evidenceGaps: ['completeness.evidence_gaps'],
+      unresolvedDeps: ['completeness.unresolved_required_dependencies'],
+      issues:     ['completeness.issues'],
     },
     // `awr intake inspect` 返回的是组织报告，不是文件表。
     // 真正的源清单在 organization.sources[]：{domain, freshness, locator, revision, role}
@@ -132,6 +145,19 @@
     if (h < 24) return `${h} 小时前`;
     const d = Math.round(h / 24);
     return `${d} 天前`;
+  }
+
+  /** 面向未来的时间：claim 到期这种。过去了就说「已过期」。 */
+  function until(value) {
+    if (!value) return '';
+    const t = typeof value === 'number' ? value : Date.parse(value);
+    if (isNaN(t)) return String(value);
+    const min = Math.round((t - Date.now()) / 60000);
+    if (min <= 0) return '已过期';
+    if (min < 60) return `${min} 分钟后到期`;
+    const h = Math.round(min / 60);
+    if (h < 24) return `${h} 小时后到期`;
+    return `${Math.round(h / 24)} 天后到期`;
   }
 
   function setText(id, text) {
@@ -235,6 +261,17 @@
       acceptance,
       dependsOn: deps,
       missingDeps: pick(raw, M.missingDeps, []) || [],
+      cycles: pick(raw, M.cycles, []) || [],
+      // 谁正在占着这件活。claim 是 AWR 的所有权凭证，没有它 agent 不能动手。
+      claims: (pick(item, M.claims, []) || []).map((c) => ({
+        id: c.id,
+        session: c.session_id || c.session,
+        agent: c.agent_id || c.agent,
+        expiresAt: c.expires_at || null,
+      })),
+      diagnostics: pick(item, M.diagnostics, []) || [],
+      evidence: pick(raw, M.evidence, []) || [],
+      decisions: pick(raw, M.decisions, []) || [],
     });
   }
 
@@ -305,6 +342,9 @@
       works,
       gaps: pick(raw, M.gaps, []) || [],
       gapTotal: pick(raw, M.gapTotal, null),
+      // 被中断、结果未知的运行时操作。有这个就得先去查，别急着重跑。
+      pendingOps: pick(raw, M.pendingOps, []) || [],
+      pendingTotal: pick(raw, M.pendingTotal, null),
       orgState: pick(raw, M.orgState, null),
       freshness: pick(raw, M.freshness, null),
       guidance: pick(raw, M.guidance, null),
@@ -371,10 +411,29 @@
         : { detail: [o.key, o.section].filter((x) => x != null).join(' · ') || JSON.stringify(o), reason: o.reason }
     );
 
+    // 完整性的各个维度。AWR 给的是一组布尔，缺哪一维要能一眼看到。
+    const DIMS = [
+      ['rules_complete', '规则'],
+      ['goal_context_complete', '目标上下文'],
+      ['work_state_complete', '工作状态'],
+      ['acceptance_complete', '验收标准'],
+      ['dependencies_complete', '依赖'],
+      ['source_fresh', '源新鲜度'],
+    ];
+    const c = pick(raw, M.dimensions, {}) || {};
+    const dimensions = DIMS
+      .filter(([k]) => c[k] !== undefined)
+      .map(([k, label]) => ({ key: k, label, ok: Boolean(c[k]) }));
+
     return {
       rendered: pick(raw, M.rendered, ''),
       sections,
       chunkTotal: chunks.length,
+      dimensions,
+      statusText: pick(raw, M.statusText, null),
+      evidenceGaps: pick(raw, M.evidenceGaps, []) || [],
+      unresolvedDeps: pick(raw, M.unresolvedDeps, []) || [],
+      issues: pick(raw, M.issues, []) || [],
       total: pick(raw, M.total, null),
       requiredTokens: pick(raw, M.required, null),
       budget: pick(raw, M.budget, null),
@@ -413,6 +472,7 @@
       DemoMode: '当前是演示模式，下面显示的是内置样本数据。',
       BridgeUnreachable: '连不上本地桥接进程。确认 node server.js 还在跑。',
       NotJson: 'awr 返回的内容不是 JSON。展开下方「原始 JSON」看它到底输出了什么。',
+      BudgetExceeded: '必需内容本身就超过了预算，AWR 拒绝给出残缺的上下文。把 budget 调大到必需量之上再编译。',
       OutcomeUnknown: '这条命令没有被终止，可能已经生效。先在终端里查一下当前状态，确认之后再决定要不要重跑——不要直接点重试。',
       BridgeTimeout: '只读命令超时已终止，重试是安全的。',
       ReindexNotAllowed: '重新索引默认关闭。用 --allow-reindex 重启桥接进程才能从界面触发。',
@@ -507,6 +567,7 @@
     renderQueueTabs();
     renderQueueList();
     renderGaps(s);
+    renderPending(s);
 
     setText('navWorkCount', String(s.works.length || ''));
     setText('mcpCmd', `awr-mcp --project ${state.project}`);
@@ -668,6 +729,33 @@
     }
   }
 
+  /**
+   * 待查的运行时操作。只有 status 真的报了才显示——发布版 0.4.0 不带这个字段，
+   * 那就整块藏起来，不摆一个永远空的面板。
+   */
+  function renderPending(s) {
+    const panel = $('pendingPanel');
+    if (!s.pendingOps.length && !s.pendingTotal) {
+      panel.hidden = true;
+      return;
+    }
+    panel.hidden = false;
+    setText('pendingSub', s.pendingTotal != null && s.pendingTotal > s.pendingOps.length
+      ? `显示 ${s.pendingOps.length} / ${s.pendingTotal}`
+      : `共 ${s.pendingOps.length}`);
+
+    const list = $('pendingList');
+    clear(list);
+    for (const op of s.pendingOps.slice(0, 5)) {
+      const li = el('li');
+      li.appendChild(el('span', 'dot warn'));
+      li.appendChild(el('span', 'what', op.code || '（无代码）'));
+      li.appendChild(el('span', 'meta', [op.kind, op.id].filter(Boolean).join(' · ')));
+      li.appendChild(el('span', 'age', ''));
+      list.appendChild(li);
+    }
+  }
+
   // ───────────────────────── 工作项 ─────────────────────────
 
   function renderWork() {
@@ -728,6 +816,8 @@
 
       tr.appendChild(el('td', null, w.rawStatus || w.status || '—'));
       tr.appendChild(el('td', null, w.owner || '—'));
+      const claimed = w.raw && Array.isArray(w.raw.claims) && w.raw.claims.length;
+      tr.appendChild(el('td', null, claimed ? '已认领' : (w.raw && w.raw.ownership_required ? '需认领' : '—')));
       tr.appendChild(el('td', null, w.codes.length ? w.codes.join(', ') : '—'));
       tr.appendChild(el('td', 'num', w.revision != null ? String(w.revision) : '—'));
 
@@ -819,6 +909,63 @@
       if (parts.length) sec.appendChild(el('p', 'quote', parts.join('、')));
       if (detail.missingDeps.length) {
         sec.appendChild(el('p', 'quote', '源文件里找不到：' + detail.missingDeps.join('、')));
+      }
+      box.appendChild(sec);
+    }
+
+    if (detail.claims.length) {
+      const sec = el('div');
+      sec.appendChild(el('h4', null, '谁占着这件活'));
+      const ul = el('ul', 'crit-list');
+      for (const c of detail.claims) {
+        const li = el('li');
+        li.appendChild(el('span', 'box done', '●'));
+        const txt = el('span');
+        txt.textContent = [c.agent && `agent ${c.agent}`, c.session && `session ${c.session}`]
+          .filter(Boolean).join(' · ') || '（无标识）';
+        if (c.expiresAt) {
+          txt.appendChild(document.createTextNode(' '));
+          txt.appendChild(el('span', 'id', until(c.expiresAt)));
+        }
+        li.appendChild(txt);
+        ul.appendChild(li);
+      }
+      sec.appendChild(ul);
+      sec.appendChild(el('p', 'figure-note',
+        'claim 是 AWR 的所有权凭证。别的 session 要动这件活，得先等它释放或显式接手。'));
+      box.appendChild(sec);
+    }
+
+    if (detail.evidence.length || detail.decisions.length) {
+      const sec = el('div');
+      sec.appendChild(el('h4', null, `证据与决策（${detail.evidence.length} 份证据 · ${detail.decisions.length} 条决策）`));
+      const ul = el('ul', 'crit-list');
+      for (const e of detail.evidence.slice(0, 8)) {
+        const li = el('li');
+        li.appendChild(el('span', 'box done', '✓'));
+        li.appendChild(el('span', null,
+          [e.external_key || e.key, e.evidence_type || e.kind, e.level].filter(Boolean).join(' · ')));
+        ul.appendChild(li);
+      }
+      for (const d of detail.decisions.slice(0, 8)) {
+        const li = el('li');
+        li.appendChild(el('span', 'box', '§'));
+        li.appendChild(el('span', null, d.title || d.external_key || JSON.stringify(d).slice(0, 80)));
+        ul.appendChild(li);
+      }
+      sec.appendChild(ul);
+      box.appendChild(sec);
+    }
+
+    if (detail.diagnostics.length || detail.cycles.length) {
+      const sec = el('div');
+      sec.appendChild(el('h4', null, '诊断'));
+      const codes = detail.diagnostics
+        .map((d) => (typeof d === 'string' ? d : d.code))
+        .filter(Boolean);
+      if (codes.length) sec.appendChild(el('p', 'quote', codes.join('、')));
+      if (detail.cycles.length) {
+        sec.appendChild(el('p', 'quote', '依赖成环：' + detail.cycles.join(' → ')));
       }
       box.appendChild(sec);
     }
@@ -959,10 +1106,62 @@
     const head = el('div', 'loops');
     const li = el('li');
     li.appendChild(el('span', 'dot ' + (ok ? 'ok' : 'warn')));
-    li.appendChild(el('span', 'what', ok ? '必需事实全部保留' : '有内容因预算被省略'));
+    li.appendChild(el('span', 'what', ctx.statusText || (ok ? '上下文完整' : '上下文不完整')));
     li.appendChild(el('span', 'meta', ctx.requiredTokens != null ? `必需内容 ${group(ctx.requiredTokens)} tokens` : ''));
     head.appendChild(li);
     cb.appendChild(head);
+
+    // 分维度：AWR 是逐项判定的，缺哪一维要能一眼看到。
+    if (ctx.dimensions.length) {
+      const chips = el('div', 'chips');
+      chips.style.marginTop = '14px';
+      for (const d of ctx.dimensions) {
+        const chip = el('span', 'tag flat ' + (d.ok ? 'ok' : 'crit'), d.label);
+        chips.appendChild(chip);
+      }
+      cb.appendChild(chips);
+    }
+
+    // 证据缺口：哪条验收标准还没有证据兜底。
+    if (ctx.evidenceGaps.length) {
+      const h = el('p', 'figure-note');
+      h.style.marginBottom = '6px';
+      h.textContent = `证据缺口 ${ctx.evidenceGaps.length} 项——完成这件活之前每条验收标准都要对上证据：`;
+      cb.appendChild(h);
+      const ul = el('ul', 'crit-list');
+      for (const g of ctx.evidenceGaps.slice(0, 6)) {
+        const item = el('li');
+        item.appendChild(el('span', 'box', '!'));
+        item.appendChild(el('span', null,
+          typeof g === 'string' ? g : [g.reference, g.reason || g.code].filter(Boolean).join('：')));
+        ul.appendChild(item);
+      }
+      cb.appendChild(ul);
+    }
+
+    if (ctx.unresolvedDeps.length) {
+      const ul = el('ul', 'crit-list');
+      ul.style.marginTop = '10px';
+      for (const d of ctx.unresolvedDeps.slice(0, 6)) {
+        const item = el('li');
+        item.appendChild(el('span', 'box', '⛔'));
+        item.appendChild(el('span', null, '未决依赖：' + (typeof d === 'string' ? d : (d.external_key || JSON.stringify(d)))));
+        ul.appendChild(item);
+      }
+      cb.appendChild(ul);
+    }
+
+    if (ctx.issues.length) {
+      const ul = el('ul', 'crit-list');
+      ul.style.marginTop = '10px';
+      for (const i of ctx.issues.slice(0, 6)) {
+        const item = el('li');
+        item.appendChild(el('span', 'box', '!'));
+        item.appendChild(el('span', null, typeof i === 'string' ? i : (i.detail || i.code || JSON.stringify(i))));
+        ul.appendChild(item);
+      }
+      cb.appendChild(ul);
+    }
 
     if (ctx.omissions.length) {
       const ul = el('ul', 'crit-list');

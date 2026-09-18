@@ -145,6 +145,19 @@
           </div>
         </div>
 
+        <div class="panel" id="pendingPanel" hidden>
+          <header>
+            <h2>待查的运行时操作</h2>
+            <button class="why" data-why="pending" aria-label="这是什么">?</button>
+            <span class="sub" id="pendingSub"></span>
+          </header>
+          <p class="why-note" data-note="pending" hidden>
+            这些操作被中断过，结果未知——可能已经生效，也可能没有。
+            AWR 不替你猜，也不自动重试。先用 <code>awr recovery inspect</code> 查清楚再决定下一步。
+          </p>
+          <ul class="loops" id="pendingList"></ul>
+        </div>
+
         <div class="panel">
           <header>
             <h2>连接方式</h2>
@@ -207,7 +220,7 @@
               <thead>
                 <tr>
                   <th>Work</th><th>标题</th><th>队列</th><th>源状态</th>
-                  <th>负责人</th><th>诊断码</th><th class="num">Revision</th>
+                  <th>负责人</th><th>认领</th><th>诊断码</th><th class="num">Revision</th>
                 </tr>
               </thead>
               <tbody id="workRows"></tbody>
