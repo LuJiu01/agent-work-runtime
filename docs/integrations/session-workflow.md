@@ -45,9 +45,25 @@ Any MCP client can launch a project-bound stdio server:
 }
 ```
 
-Reload the client and call `awr_project_status` before work. Check the project
-identity. The server does not need a model API key. Shared HTTP uses a URL and
-a bearer token; every tool then requires an explicit `project` key. See
+Reload the client and confirm the project identity before work. The default
+tool exposure is **grouped**: `tools/list` returns eight domain tools
+(`awr_query`, `awr_context`, `awr_work`, `awr_evidence`, `awr_session`,
+`awr_continuity`, `awr_change`, `awr_compaction`), not the flat names. Call a
+domain with no arguments to discover its children, then invoke through it:
+
+```json
+{"child_tool": "awr_project_status", "arguments": {}}
+```
+
+So the status probe is an `awr_query` call with the payload above. Flat names
+such as `awr_project_status` remain directly callable for already-integrated
+hosts, but they are not in the default catalog; a host that builds its tool
+list from `tools/list` must use the domain call. Set
+`AWR_MCP_TOOL_EXPOSURE_MODE=flat` on the server only when the host cannot route
+through domain tools.
+
+The server does not need a model API key. Shared HTTP uses a URL and a bearer
+token; every tool then requires an explicit `project` key. See
 [MCP tools](../../crates/awr-mcp/README.md).
 
 Stdio cannot run on a laptop filesystem from a remote/cloud agent. Those hosts
@@ -121,11 +137,19 @@ Use `session resume` only for a real session handoff.
 ## Bind a native conversation
 
 Prefix the host's conversation ID with the host name, so the durable identity
-stays distinct per host without a new client enum or schema change:
+stays distinct per host without a new client enum or schema change. Fail fast
+if the native ID is missing: an empty suffix yields the literal `cursor:`, which
+is accepted as a valid identity and would merge unrelated host conversations
+into one binding:
 
 ```sh
+: "${HOST_CONVERSATION_ID:?set the host's native conversation ID first}"
 AWR_EXTERNAL="cursor:${HOST_CONVERSATION_ID}"
 ```
+
+Get the native ID from the host itself (its session/conversation metadata, not
+an invented value), and keep it stable for the life of that conversation. A new
+chat means a new ID.
 
 Attach to an **active** AWR session:
 
@@ -134,12 +158,25 @@ awrj client bind --client generic --external-session "$AWR_EXTERNAL" \
   --work "$AWR_WORK" --session "$AWR_SESSION"
 ```
 
-Continue from a **predecessor** (creates a successor session, then binds):
+For a handoff, prefer the two-step path: run `session resume` from the
+[Start or resume](#start-or-resume) section first (it handles the successor
+session, context and claim transfer), then bind the host conversation with
+`--session "$AWR_SESSION"` as above.
+
+A one-step alternative binds while resuming. It creates a **successor** session,
+so the receipt's session ID must replace the variable — the predecessor is no
+longer active and later commands against it return `NotFound`:
 
 ```sh
 awrj client bind --client generic --external-session "$AWR_EXTERNAL" \
-  --work "$AWR_WORK" --from-session "$AWR_PREDECESSOR"
+  --work "$AWR_WORK" --from-session "$AWR_PREDECESSOR" \
+  > "$AWR_NOTES/bind.json"
+AWR_SESSION=$(jq -er '.binding.session_id' "$AWR_NOTES/bind.json")
 ```
+
+Unlike `session resume`, this path does **not** transfer or acquire the work
+claim (`claim: None` on the successor). Acquire a claim explicitly before any
+mutation.
 
 Do not pass both flags. `--client generic` is the L0 identity; use the same
 namespaced external ID on `client progress` and `client show`. `awr client
