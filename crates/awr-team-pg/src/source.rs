@@ -50,6 +50,13 @@ impl SourceStore {
         }
     }
 
+    /// Build from a validated `tokio_postgres::Config` (see PgPool::from_config).
+    pub fn from_config(config: tokio_postgres::Config) -> Self {
+        Self {
+            pool: crate::PgPool::from_config(config),
+        }
+    }
+
     async fn connect(&self) -> PgResult<crate::PgClient> {
         self.pool.get().await
     }
@@ -194,6 +201,7 @@ impl SourceStore {
         if author == reviewer_actor_id {
             return Err(PgError::AuthorCannotApprove);
         }
+        validate_reviewer(&tx, tenant_id, project_id, reviewer_actor_id).await?;
         if digest != candidate_digest {
             return Err(PgError::StaleApproval);
         }
@@ -301,10 +309,18 @@ impl SourceStore {
             .await?
             .ok_or_else(|| PgError::Protocol("proposal not found".into()))?;
         let state: String = row.get(0);
+        let base_epoch: i64 = row.get(1);
         let snapshot_id: String = row.get(2);
         let digest: String = row.get(3);
         let parser_version: String = row.get(4);
         let source_ref: Value = row.get(5);
+        // The candidate must have been generated from the CURRENT baseline.
+        // A caller refreshing expected_authority_epoch after another
+        // activation must not push a stale-base candidate over it (CR #37
+        // P2-2). Deliberate rollback needs its own explicit operation.
+        if base_epoch != epoch {
+            return Err(PgError::EpochMismatch);
+        }
         if state != "approved" {
             return Err(PgError::CandidateNotApproved);
         }
@@ -316,7 +332,7 @@ impl SourceStore {
         }
         let approval = tx
             .query_opt(
-                "SELECT candidate_digest FROM awr_team.source_approvals
+                "SELECT candidate_digest, reviewer_actor_id FROM awr_team.source_approvals
                  WHERE tenant_id=$1 AND project_id=$2 AND proposal_id=$3
                    AND decision='approve'
                  ORDER BY decided_at DESC LIMIT 1",
@@ -325,9 +341,14 @@ impl SourceStore {
             .await?
             .ok_or(PgError::CandidateNotApproved)?;
         let approved_digest: String = approval.get(0);
+        let approval_reviewer: String = approval.get(1);
         if approved_digest != digest {
             return Err(PgError::StaleApproval);
         }
+        // Approvals written before reviewer validation existed (or by any
+        // legacy path) must not activate: the consumed approval is checked
+        // with the SAME rules as a fresh one (CR #54 P2).
+        validate_reviewer(&tx, tenant_id, project_id, &approval_reviewer).await?;
 
         let files = files_from_ref(&source_ref)?;
         let contract = parse_contract(&files)?;
@@ -562,6 +583,42 @@ fn parse_contract(files: &[(String, Vec<u8>)]) -> PgResult<WorkContract> {
     Ok(contract)
 }
 
+/// The reviewer must be a real, active account with an approval-capable
+/// membership in THIS project. A string that merely differs from the author
+/// proves nothing (CR #37 P2-1). Shared by approve() (new approvals) and
+/// activate_inner() (consuming existing approvals, including ones written
+/// before the identity check existed — CR #54 P2).
+async fn validate_reviewer(
+    tx: &tokio_postgres::Transaction<'_>,
+    tenant_id: &str,
+    project_id: &str,
+    reviewer_actor_id: &str,
+) -> PgResult<()> {
+    let reviewer = tx
+        .query_opt(
+            "SELECT a.status, m.role
+             FROM awr_team.actors a
+             LEFT JOIN awr_team.project_memberships m
+               ON m.tenant_id=a.tenant_id AND m.actor_id=a.id
+              AND m.project_id=$2
+             WHERE a.tenant_id=$1 AND a.id=$3",
+            &[&tenant_id, &project_id, &reviewer_actor_id],
+        )
+        .await?;
+    let Some((status, role)) =
+        reviewer.map(|r| (r.get::<_, String>(0), r.get::<_, Option<String>>(1)))
+    else {
+        return Err(PgError::Forbidden);
+    };
+    if status != "active" {
+        return Err(PgError::Forbidden);
+    }
+    match role.as_deref() {
+        Some("admin") | Some("reviewer") => Ok(()),
+        _ => Err(PgError::Forbidden),
+    }
+}
+
 fn files_from_ref(source_ref: &Value) -> PgResult<Vec<(String, Vec<u8>)>> {
     let files = source_ref
         .get("files")
@@ -579,7 +636,22 @@ fn files_from_ref(source_ref: &Value) -> PgResult<Vec<(String, Vec<u8>)>> {
                 .get("text")
                 .and_then(Value::as_str)
                 .ok_or_else(|| PgError::Protocol("file text missing".into()))?;
-            Ok((path, text.as_bytes().to_vec()))
+            let bytes = text.as_bytes().to_vec();
+            // Fail closed on drift: the recorded digest/length describe the
+            // ORIGINAL bytes, so restored content must match them exactly
+            // (CR #37 P2-3).
+            let expected_sha = file
+                .get("sha256")
+                .and_then(Value::as_str)
+                .ok_or_else(|| PgError::Protocol("file sha256 missing".into()))?;
+            let expected_len = file
+                .get("bytes")
+                .and_then(Value::as_u64)
+                .ok_or_else(|| PgError::Protocol("file byte length missing".into()))?;
+            if sha256_hex(&bytes) != expected_sha || bytes.len() as u64 != expected_len {
+                return Err(PgError::SnapshotDrift(path));
+            }
+            Ok((path, bytes))
         })
         .collect()
 }
