@@ -14,7 +14,11 @@ pub enum WorkDefinitionState {
 
 /// Semantic work definition used for Team contract hashing.
 /// Progress notes and next_action are intentionally excluded.
+/// The V1 contract is closed: unknown fields are rejected instead of being
+/// silently dropped before hashing (CR #34 P2-2). Extension requires an
+/// explicit codec/version bump.
 #[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
+#[serde(deny_unknown_fields)]
 pub struct WorkContract {
     pub codec: String,
     pub work_id: WorkId,

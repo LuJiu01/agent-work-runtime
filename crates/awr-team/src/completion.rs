@@ -13,6 +13,12 @@ pub enum EvidenceGrade {
 pub struct EvidenceBundle {
     pub grade: EvidenceGrade,
     pub contract_hash: String,
+    /// Digest of the artifact this evidence covers. Carried for caller-side
+    /// binding and audit. `current_completion` does not re-check it: callers
+    /// MUST ensure `accessible` and the review approval were established by a
+    /// trusted upper layer against THIS artifact (digest and bytes), not an
+    /// earlier one. "Accessible" plus "once approved" is not sufficient by
+    /// itself (CR #34 boundary note).
     pub artifact_digest: Option<String>,
     pub accessible: bool,
 }
@@ -37,6 +43,10 @@ pub enum CompletionView {
     NeedsRevalidation,
 }
 
+/// Pure completion classification. Precondition: the caller has already
+/// bound `bundle.accessible` and `review.approved` to the artifact identified
+/// by `bundle.artifact_digest`; this function does not and cannot verify that
+/// binding (see the `artifact_digest` contract).
 pub fn current_completion(
     source_declared_completed: bool,
     historical_receipt: bool,
