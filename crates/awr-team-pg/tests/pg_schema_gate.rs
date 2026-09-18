@@ -1,45 +1,83 @@
 #![cfg(feature = "pg-tests")]
 //! Regression tests for the retrospective CR of PR #36 (TEAM-P2).
 //!
-//! Isolation contract (CR #52 P2-2): this suite never uses the runtime
-//! `AWR_TEAM_DATABASE_URL` and never drops the shared schema. It runs in a
-//! dedicated database `awr_team_gate_test` on a loopback server, created by
-//! the suite itself. The URL guard refuses non-loopback targets BEFORE any
-//! DROP runs.
+//! Isolation contract (CR #52 P2-2, round 3):
+//! - The connection target is validated AFTER parsing with
+//!   `tokio_postgres::Config`; decoy strings in the user, password,
+//!   database name or query parameters cannot smuggle a non-loopback host.
+//! - The suite creates its own uniquely named database per process and
+//!   refuses to adopt a pre-existing one. Only that registered identity is
+//!   ever cleaned. The runtime `AWR_TEAM_DATABASE_URL` is never read.
 
 use awr_team_pg::{Bootstrap, CommandRequest, PgError, TeamStore, check_schema, migrate};
 use serde_json::json;
-use std::sync::{Mutex, MutexGuard};
+use std::sync::{Mutex, MutexGuard, OnceLock};
+use std::time::{SystemTime, UNIX_EPOCH};
+use tokio_postgres::config::{Config, Host};
 use tokio_postgres::{Client, NoTls};
 
 static DB: Mutex<()> = Mutex::new(());
+static GATE_DB: OnceLock<String> = OnceLock::new();
 
-const GATE_DB: &str = "awr_team_gate_test";
 const TENANT: &str = "tenant-g";
 const PROJECT: &str = "project-g";
 const ACTOR: &str = "agent-g";
 
-fn maintenance_url() -> String {
-    let url = std::env::var("AWR_TEAM_TEST_DATABASE_URL")
+/// The only hosts this suite may talk to.
+fn check_loopback(config: &Config) -> Result<(), String> {
+    let hosts = config.get_hosts();
+    if hosts.len() != 1 {
+        return Err(format!(
+            "multi-host configurations are not supported ({})",
+            hosts.len()
+        ));
+    }
+    match &hosts[0] {
+        Host::Tcp(name) => {
+            let loopback = name == "localhost"
+                || name
+                    .parse::<std::net::IpAddr>()
+                    .map(|ip| ip.is_loopback())
+                    .unwrap_or(false);
+            if !loopback {
+                return Err(format!("non-loopback host {name}"));
+            }
+        }
+        // Unix-domain sockets are local by construction.
+        Host::Unix(_) => {}
+    }
+    // hostaddr overrides the host name for dialing; it must be loopback too.
+    for addr in config.get_hostaddrs() {
+        if !addr.is_loopback() {
+            return Err(format!("non-loopback hostaddr {addr}"));
+        }
+    }
+    Ok(())
+}
+
+fn test_config() -> Config {
+    let raw = std::env::var("AWR_TEAM_TEST_DATABASE_URL")
         .unwrap_or_else(|_| "postgres://postgres:awr-test@127.0.0.1:55432/postgres".into());
-    assert!(
-        url.contains("127.0.0.1") || url.contains("localhost"),
-        "pg_schema_gate refuses non-loopback targets; set AWR_TEAM_TEST_DATABASE_URL to a disposable loopback server"
-    );
-    url
+    let config: Config = raw.parse().expect("invalid AWR_TEAM_TEST_DATABASE_URL");
+    check_loopback(&config).expect("pg_schema_gate target must be loopback");
+    config
 }
-fn url_for(db: &str, user: &str, password: &str) -> String {
-    let base = maintenance_url();
-    let scheme_split = base.split("://").collect::<Vec<_>>();
-    let after_creds = scheme_split[1].split('@').collect::<Vec<_>>();
-    let host = after_creds[after_creds.len() - 1]
-        .split('/')
-        .next()
-        .unwrap_or("127.0.0.1:55432");
-    format!("postgres://{user}:{password}@{host}/{db}")
+
+fn with_db(config: &Config, db: &str) -> Config {
+    let mut c = config.clone();
+    c.dbname(db);
+    c
 }
-async fn connect(url: &str) -> Client {
-    let (client, connection) = tokio_postgres::connect(url, NoTls)
+fn with_app_role(config: &Config, db: &str) -> Config {
+    let mut c = with_db(config, db);
+    c.user("awr_app");
+    c.password("app-test");
+    c
+}
+
+async fn connect_config(config: &Config) -> Client {
+    let (client, connection) = config
+        .connect(NoTls)
         .await
         .expect("loopback postgres 17 must be running for schema gate tests");
     tokio::spawn(async move {
@@ -47,36 +85,55 @@ async fn connect(url: &str) -> Client {
     });
     client
 }
-fn admin_url() -> String {
-    url_for(GATE_DB, "postgres", "awr-test")
-}
-fn app_url() -> String {
-    url_for(GATE_DB, "awr_app", "app-test")
+
+fn nonce(attempt: u32) -> String {
+    let nanos = SystemTime::now()
+        .duration_since(UNIX_EPOCH)
+        .map(|d| d.subsec_nanos())
+        .unwrap_or(0);
+    format!("{:x}_{}_{}", std::process::id(), nanos, attempt)
 }
 
-async fn ensure_dedicated_db() {
-    let maintenance = connect(&url_for("postgres", "postgres", "awr-test")).await;
-    let exists: bool = maintenance
-        .query_one(
-            "SELECT EXISTS(SELECT 1 FROM pg_database WHERE datname=$1)",
-            &[&GATE_DB],
-        )
-        .await
-        .unwrap()
-        .get(0);
-    if !exists {
-        maintenance
-            .batch_execute(&format!("CREATE DATABASE \"{GATE_DB}\""))
+/// Create THIS run's database. A name collision is retried with a fresh
+/// name; an existing database is never adopted (CR #52 round 3).
+async fn create_gate_db() -> String {
+    let maintenance = connect_config(&with_db(&test_config(), "postgres")).await;
+    for attempt in 0..8 {
+        let name = format!("awr_team_gate_{}", nonce(attempt));
+        match maintenance
+            .batch_execute(&format!("CREATE DATABASE \"{name}\""))
             .await
-            .unwrap();
+        {
+            Ok(()) => return name,
+            Err(error) => {
+                let duplicate = error
+                    .as_db_error()
+                    .map(|db| *db.code() == tokio_postgres::error::SqlState::DUPLICATE_DATABASE)
+                    .unwrap_or(false);
+                if !duplicate {
+                    panic!("failed to create the gate database: {error}");
+                }
+            }
+        }
     }
+    panic!("could not allocate a fresh gate database name");
+}
+
+async fn gate_db_name() -> String {
+    if let Some(name) = GATE_DB.get() {
+        return name.clone();
+    }
+    let name = create_gate_db().await;
+    let _ = GATE_DB.set(name.clone());
+    name
 }
 
 async fn setup() -> (MutexGuard<'static, ()>, Client) {
     let guard = DB.lock().expect("db fixture lock");
-    ensure_dedicated_db().await;
-    let admin = connect(&admin_url()).await;
-    // Safe: GATE_DB is created by this suite and holds nothing else.
+    let name = gate_db_name().await;
+    let admin = connect_config(&with_db(&test_config(), &name)).await;
+    // Safe: `name` was created by this process in create_gate_db(); a
+    // pre-existing database is never adopted.
     admin
         .batch_execute("DROP SCHEMA IF EXISTS awr_team CASCADE")
         .await
@@ -101,6 +158,24 @@ async fn setup() -> (MutexGuard<'static, ()>, Client) {
         .unwrap();
     (guard, admin)
 }
+async fn app_client(db: &str) -> Client {
+    connect_config(&with_app_role(&test_config(), db)).await
+}
+async fn app_store(db: &str) -> TeamStore {
+    let mut config = with_app_role(&test_config(), db);
+    let mut url = format!(
+        "postgres://{}:{}@",
+        config.get_user().unwrap_or("awr_app"),
+        "app-test"
+    );
+    match &config.get_hosts()[0] {
+        Host::Tcp(h) => url.push_str(h),
+        Host::Unix(p) => url.push_str(&p.display().to_string()),
+    }
+    let port = config.get_ports().first().copied().unwrap_or(5432);
+    url.push_str(&format!(":{port}/{db}"));
+    TeamStore::new(url)
+}
 fn touch(request_id: &str) -> CommandRequest {
     CommandRequest {
         tenant_id: TENANT.into(),
@@ -113,11 +188,77 @@ fn touch(request_id: &str) -> CommandRequest {
     }
 }
 
+// CR #52 round 3: the guard judges the parsed host, not decoy substrings.
+#[test]
+fn loopback_guard_uses_parsed_host_not_decoy_fields() {
+    let decoys = [
+        "postgres://localhost:awr-test@192.0.2.10:55432/db",
+        "postgres://postgres:127.0.0.1@192.0.2.10:55432/db",
+        "postgres://postgres:awr-test@192.0.2.10:55432/localhost_backup",
+        "postgres://postgres:awr-test@192.0.2.10:55432/db?application_name=localhost",
+        "postgres://postgres:awr-test@localhost:55432/db?hostaddr=192.0.2.10",
+        "postgres://postgres:awr-test@127.0.0.1,192.0.2.10/db",
+    ];
+    for decoy in decoys {
+        let config: Config = decoy.parse().unwrap();
+        assert!(check_loopback(&config).is_err(), "decoy passed: {decoy}");
+    }
+    let good = [
+        "postgres://postgres:awr-test@127.0.0.1:55432/postgres",
+        "postgres://postgres:awr-test@localhost/postgres",
+        "postgres://postgres:awr-test@[::1]:55432/postgres",
+    ];
+    for ok in good {
+        let config: Config = ok.parse().unwrap();
+        assert!(check_loopback(&config).is_ok(), "loopback rejected: {ok}");
+    }
+}
+
+// CR #52 round 3: a pre-existing database with sentinel data is never adopted.
+#[tokio::test]
+async fn preexisting_same_prefix_databases_are_never_adopted() {
+    let maintenance = connect_config(&with_db(&test_config(), "postgres")).await;
+    let sentinel_db = format!("awr_team_gate_sentinel_{}", nonce(99));
+    maintenance
+        .batch_execute(&format!("CREATE DATABASE \"{sentinel_db}\""))
+        .await
+        .unwrap();
+    let sentinel = connect_config(&with_db(&test_config(), &sentinel_db)).await;
+    sentinel
+        .batch_execute("CREATE TABLE keepme(id int primary key); INSERT INTO keepme VALUES (1)")
+        .await
+        .unwrap();
+    // This suite's own database exists only after create_gate_db ran; it is a
+    // different, freshly created identity. Do NOT touch its schema here —
+    // other tests hold the fixture lock for that (the earlier revision of
+    // this test dropped it unlocked and raced real setups).
+    let ours = gate_db_name().await;
+    assert_ne!(ours, sentinel_db);
+    let kept: i64 = sentinel
+        .query_one("SELECT count(*) FROM keepme", &[])
+        .await
+        .unwrap()
+        .get(0);
+    assert_eq!(kept, 1, "sentinel database was modified");
+    drop(sentinel);
+    // The sentinel connection needs a moment to close before DROP DATABASE.
+    for _ in 0..10 {
+        let result = maintenance
+            .batch_execute(&format!("DROP DATABASE \"{sentinel_db}\""))
+            .await;
+        if result.is_ok() {
+            return;
+        }
+        tokio::time::sleep(std::time::Duration::from_millis(200)).await;
+    }
+    panic!("could not drop the sentinel database created by this test");
+}
+
 // CR #36 P2-1: the app role can read the version but can never modify it.
 #[tokio::test]
 async fn app_role_checks_version_but_cannot_modify_it() {
     let (_lock, _admin) = setup().await;
-    let app = connect(&app_url()).await;
+    let app = app_client(GATE_DB.get().unwrap()).await;
     check_schema(&app)
         .await
         .expect("app role must read a compatible schema version");
@@ -149,13 +290,12 @@ async fn app_role_checks_version_but_cannot_modify_it() {
 #[tokio::test]
 async fn upgrade_regrants_existing_database_without_data_loss() {
     let (_lock, admin) = setup().await;
-    // Simulate the pre-fix grant set: the app role lost every privilege on
-    // schema_state. Existing business data must survive the upgrade.
+    let db = GATE_DB.get().unwrap().clone();
     admin
         .batch_execute("REVOKE ALL ON awr_team.schema_state FROM awr_app")
         .await
         .unwrap();
-    let store = TeamStore::new(app_url());
+    let store = app_store(&db).await;
     let err = store.execute(touch("gate-pre-upgrade")).await.unwrap_err();
     assert!(
         matches!(err, PgError::Db(_)),
@@ -164,7 +304,7 @@ async fn upgrade_regrants_existing_database_without_data_loss() {
     // The owner-side, repeatable upgrade step (`awr-server migrate
     // --app-role awr_app` calls the same entry). No schema rebuild.
     Bootstrap::grant_app(&admin, "awr_app").await.unwrap();
-    let app = connect(&app_url()).await;
+    let app = app_client(&db).await;
     check_schema(&app)
         .await
         .expect("upgraded app role reads version");
@@ -186,7 +326,8 @@ async fn upgrade_regrants_existing_database_without_data_loss() {
 #[tokio::test]
 async fn incompatible_version_blocks_command_without_side_effects() {
     let (_lock, admin) = setup().await;
-    let store = TeamStore::new(app_url());
+    let db = GATE_DB.get().unwrap().clone();
+    let store = app_store(&db).await;
     let first = store.execute(touch("gate-1")).await.unwrap();
     assert_eq!(first.committed_project_revision, "1");
     admin
@@ -231,6 +372,7 @@ async fn incompatible_version_blocks_command_without_side_effects() {
 #[tokio::test]
 async fn missing_version_record_blocks_command() {
     let (_lock, admin) = setup().await;
+    let db = GATE_DB.get().unwrap().clone();
     admin
         .execute(
             "DELETE FROM awr_team.schema_state WHERE component='awr_team'",
@@ -238,7 +380,7 @@ async fn missing_version_record_blocks_command() {
         )
         .await
         .unwrap();
-    let store = TeamStore::new(app_url());
+    let store = app_store(&db).await;
     let err = store.execute(touch("gate-3")).await.unwrap_err();
     assert!(matches!(err, PgError::SchemaIncompatible(_)));
 }
@@ -249,6 +391,7 @@ async fn missing_version_record_blocks_command() {
 #[tokio::test]
 async fn receipt_revision_is_decimal_string_end_to_end() {
     let (_lock, admin) = setup().await;
+    let db = GATE_DB.get().unwrap().clone();
     let big: i64 = 9_007_199_254_740_992; // 2^53, beyond JS safe integers
     admin
         .execute(
@@ -257,7 +400,7 @@ async fn receipt_revision_is_decimal_string_end_to_end() {
         )
         .await
         .unwrap();
-    let store = TeamStore::new(app_url());
+    let store = app_store(&db).await;
     let outcome = store.execute(touch("gate-4")).await.unwrap();
     let expected = "9007199254740993";
     assert_eq!(outcome.committed_project_revision, expected);
@@ -297,6 +440,7 @@ async fn receipt_revision_is_decimal_string_end_to_end() {
 #[tokio::test]
 async fn failed_receipt_write_rolls_back_the_real_command() {
     let (_lock, admin) = setup().await;
+    let db = GATE_DB.get().unwrap().clone();
     admin
         .batch_execute(
             "CREATE OR REPLACE FUNCTION awr_team.fail_receipt_insert() RETURNS trigger
@@ -306,7 +450,7 @@ async fn failed_receipt_write_rolls_back_the_real_command() {
         )
         .await
         .unwrap();
-    let store = TeamStore::new(app_url());
+    let store = app_store(&db).await;
     let err = store.execute(touch("gate-5")).await.unwrap_err();
     assert!(matches!(err, PgError::Db(_)));
     admin
@@ -361,7 +505,8 @@ async fn failed_receipt_write_rolls_back_the_real_command() {
 #[tokio::test]
 async fn concurrent_retry_commits_once() {
     let (_lock, admin) = setup().await;
-    let store = TeamStore::new(app_url());
+    let db = GATE_DB.get().unwrap().clone();
+    let store = app_store(&db).await;
     let (a, b) = tokio::join!(
         store.execute(touch("gate-6")),
         store.execute(touch("gate-6"))
