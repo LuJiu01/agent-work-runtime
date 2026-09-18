@@ -96,14 +96,26 @@ pub struct PreparedWork {
     pub coordinator_epoch: String,
     pub authority_epoch: String,
     pub authority_snapshot_id: String,
+    /// V1 serves only the main scope; the identity is explicit so contract,
+    /// runtime version and response cannot silently mix scopes (CR #38 P2-1).
+    pub scope_id: String,
     pub work_id: String,
     pub work_version: String,
     pub contract_hash: String,
+    pub goals: Vec<String>,
+    pub scope_paths: Vec<String>,
+    pub acceptance: Vec<String>,
+    pub required_dependencies: Vec<String>,
+    pub completion_policy: String,
+    pub verification_requirements: Vec<String>,
     pub hard_rules: Vec<String>,
     pub completeness: String,
     pub completeness_reasons: Vec<String>,
     pub context_hash: String,
     pub snapshot_cursor: String,
+    /// All required contract content, flattened for prompt assembly.
+    /// Completeness is computed over THIS set, not hard_rules alone
+    /// (CR #38 P2-2).
     pub required_context: Vec<String>,
 }
 
@@ -115,7 +127,9 @@ pub struct WorkGraph {
 
 #[derive(Clone, Debug, Serialize)]
 pub struct EventRecord {
-    pub project_revision: i64,
+    /// Decimal string at the response boundary; a JSON number would lose
+    /// precision past 2^53 for JavaScript consumers (CR #38 P2-3).
+    pub project_revision: String,
     pub event_index: i32,
     pub event_type: String,
     pub id: String,
@@ -141,6 +155,13 @@ impl ReadStore {
         }
     }
 
+    /// Build from a validated `tokio_postgres::Config` (see PgPool::from_config).
+    pub fn from_config(config: tokio_postgres::Config) -> Self {
+        Self {
+            pool: crate::PgPool::from_config(config),
+        }
+    }
+
     async fn connect(&self) -> PgResult<crate::PgClient> {
         self.pool.get().await
     }
@@ -152,6 +173,43 @@ impl ReadStore {
         work_id: &str,
         max_context_bytes: Option<usize>,
     ) -> PgResult<PreparedWork> {
+        self.prepare_inner(tenant_id, project_id, work_id, max_context_bytes, None)
+            .await
+    }
+
+    /// Test-only probe (pg-tests): pauses at a deterministic point between
+    /// the contract read and the runtime/event reads, letting a concurrent
+    /// writer commit in between (CR #38 P3).
+    #[cfg(feature = "pg-tests")]
+    #[doc(hidden)]
+    pub async fn prepare_with_sync_point(
+        &self,
+        tenant_id: &str,
+        project_id: &str,
+        work_id: &str,
+        max_context_bytes: Option<usize>,
+        sync: &tokio::sync::Barrier,
+    ) -> PgResult<PreparedWork> {
+        self.prepare_inner(
+            tenant_id,
+            project_id,
+            work_id,
+            max_context_bytes,
+            Some(sync),
+        )
+        .await
+    }
+
+    async fn prepare_inner(
+        &self,
+        tenant_id: &str,
+        project_id: &str,
+        work_id: &str,
+        max_context_bytes: Option<usize>,
+        sync: Option<&tokio::sync::Barrier>,
+    ) -> PgResult<PreparedWork> {
+        // V1 serves only the main scope; bind every read to it explicitly.
+        const SCOPE: &str = "main";
         let mut client = self.connect().await?;
         let tx = client
             .build_transaction()
@@ -176,27 +234,46 @@ impl ReadStore {
         let contract = tx
             .query_opt(
                 "SELECT contract_hash, contract_json FROM awr_team.work_contracts
-                 WHERE tenant_id=$1 AND project_id=$2 AND snapshot_id=$3 AND work_id=$4",
+                 WHERE tenant_id=$1 AND project_id=$2 AND snapshot_id=$3 AND work_id=$4
+                   AND scope_id='main'",
                 &[&tenant_id, &project_id, &snapshot_id, &work_id],
             )
             .await?
             .ok_or(PgError::InactiveCandidate)?;
         let contract_hash: String = contract.get(0);
         let contract_json: Value = contract.get(1);
-        let hard_rules = contract_json
-            .get("hard_rules")
-            .and_then(Value::as_array)
-            .map(|rows| {
-                rows.iter()
-                    .filter_map(|v| v.as_str().map(str::to_owned))
-                    .collect::<Vec<_>>()
-            })
-            .unwrap_or_default();
+        let text_list = |key: &str| {
+            contract_json
+                .get(key)
+                .and_then(Value::as_array)
+                .map(|rows| {
+                    rows.iter()
+                        .filter_map(|v| v.as_str().map(str::to_owned))
+                        .collect::<Vec<_>>()
+                })
+                .unwrap_or_default()
+        };
+        let hard_rules = text_list("hard_rules");
+        let goals = text_list("goals");
+        let scope_paths = text_list("scope_paths");
+        let acceptance = text_list("acceptance");
+        let required_dependencies = text_list("required_dependencies");
+        let verification_requirements = text_list("verification_requirements");
+        let completion_policy = contract_json
+            .get("completion_policy")
+            .and_then(Value::as_str)
+            .unwrap_or_default()
+            .to_string();
+        // Deterministic probe point (tests only): a concurrent writer may
+        // commit between the contract read and the runtime/event reads.
+        if let Some(barrier) = sync {
+            barrier.wait().await;
+            barrier.wait().await;
+        }
         let work_version = tx
             .query_opt(
                 "SELECT work_version FROM awr_team.work_runtime
-                 WHERE tenant_id=$1 AND project_id=$2 AND work_id=$3
-                 ORDER BY work_version DESC LIMIT 1",
+                 WHERE tenant_id=$1 AND project_id=$2 AND work_id=$3 AND scope_id='main'",
                 &[&tenant_id, &project_id, &work_id],
             )
             .await?
@@ -225,11 +302,38 @@ impl ReadStore {
         tx.commit().await?;
         drop(client);
 
+        let mut required_context = Vec::new();
+        required_context.extend(goals.iter().map(|s| format!("goal: {s}")));
+        required_context.extend(scope_paths.iter().map(|s| format!("scope: {s}")));
+        required_context.extend(acceptance.iter().map(|s| format!("acceptance: {s}")));
+        required_context.extend(
+            required_dependencies
+                .iter()
+                .map(|s| format!("dependency: {s}")),
+        );
+        if !completion_policy.is_empty() {
+            required_context.push(format!("completion_policy: {completion_policy}"));
+        }
+        required_context.extend(
+            verification_requirements
+                .iter()
+                .map(|s| format!("verification: {s}")),
+        );
+        required_context.extend(hard_rules.iter().map(|s| format!("rule: {s}")));
         let mut reasons = Vec::new();
         if hard_rules.is_empty() {
             reasons.push("missing_hard_rules".into());
         }
-        let required_bytes = hard_rules.iter().map(|r| r.len()).sum::<usize>();
+        if goals.is_empty() {
+            reasons.push("missing_goals".into());
+        }
+        if acceptance.is_empty() {
+            reasons.push("missing_acceptance".into());
+        }
+        if completion_policy.is_empty() {
+            reasons.push("missing_completion_policy".into());
+        }
+        let required_bytes = required_context.iter().map(|r| r.len()).sum::<usize>();
         if let Some(max) = max_context_bytes {
             if required_bytes > max {
                 reasons.push("required_content_exceeds_budget".into());
@@ -244,11 +348,13 @@ impl ReadStore {
             "coordinator_epoch": coordinator_epoch,
             "authority_epoch": authority_epoch.to_string(),
             "authority_snapshot_id": snapshot_id,
+            "scope_id": SCOPE,
             "work_id": work_id,
             "work_version": work_version,
             "contract_hash": contract_hash,
+            "required_context": required_context,
             "hard_rules": hard_rules,
-            "event_boundary": {"project_revision": boundary_revision, "event_index": boundary_index},
+            "event_boundary": {"project_revision": boundary_revision.to_string(), "event_index": boundary_index},
         });
         let context_hash =
             awr_team::request_hash(&snapshot).map_err(|e| PgError::Protocol(e.to_string()))?;
@@ -266,10 +372,17 @@ impl ReadStore {
             coordinator_epoch,
             authority_epoch: authority_epoch.to_string(),
             authority_snapshot_id: snapshot_id,
+            scope_id: SCOPE.into(),
             work_id: work_id.into(),
             work_version,
             contract_hash,
-            required_context: hard_rules.clone(),
+            goals,
+            scope_paths,
+            acceptance,
+            required_dependencies,
+            completion_policy,
+            verification_requirements,
+            required_context,
             hard_rules,
             completeness: completeness.into(),
             completeness_reasons: reasons,
@@ -415,7 +528,7 @@ impl ReadStore {
                 .encode();
                 EventRecord {
                     id: row.get(0),
-                    project_revision: revision,
+                    project_revision: revision.to_string(),
                     event_index: index,
                     event_type: row.get(3),
                     payload: row.get(4),
