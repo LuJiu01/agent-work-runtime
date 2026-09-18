@@ -1,1086 +1,1129 @@
 {
-  "schema_version": 1,
-  "title": "AWR Team V1 evidence matrix",
-  "notice": "Automated protocol coverage is not a production SLA. One live dual-client run used Kimi Code CLI 2.0.0 and ZCode CLI 0.16.5 on a dedicated Team project. real_agent_accepted counts that live flow, not 69 agent-replayed TCs. Do not tag a release from this matrix.",
-  "release_candidate": false,
-  "tag_pushed": false,
-  "counts": {
-    "required": 69,
-    "protocol_implemented": 69,
-    "real_agent_accepted": 1
+ "schema_version": 1,
+ "title": "AWR Team V1 evidence matrix",
+ "notice": "Automated protocol coverage is not a production SLA. real_agent_accepted counts per-case live replays by Kimi Code CLI 2.0.0 and ZCode CLI 0.16.5 (GLM) with independent oracle checks. The remaining protocol_covered_not_agent_accepted cases are fault-injection, timing and DB-internal invariants kept under automated probe coverage; agent replay is not claimed for them. Do not tag a release from this matrix.",
+ "release_candidate": false,
+ "tag_pushed": false,
+ "counts": {
+  "required": 69,
+  "protocol_implemented": 69,
+  "real_agent_accepted": 42,
+  "probe_only_not_agent_replayable": 27
+ },
+ "cases": [
+  {
+   "id": "TC-001",
+   "title": "源声明 completed 不能直接完成团队任务",
+   "phase": "P8",
+   "required": true,
+   "protocol_implemented": true,
+   "automated_tests": [
+    "crates/awr-team-pg/tests/pg_review.rs"
+   ],
+   "real_postgresql": true,
+   "two_process_or_fault": false,
+   "real_agent_clients": true,
+   "status": "real_agent_accepted",
+   "blocker": null,
+   "agent_evidence": "ledger/evidence/TEAM-P13/TC-001.json"
   },
-  "cases": [
-    {
-      "id": "TC-001",
-      "title": "源声明 completed 不能直接完成团队任务",
-      "phase": "P8",
-      "required": true,
-      "protocol_implemented": true,
-      "automated_tests": [
-        "crates/awr-team-pg/tests/pg_review.rs"
-      ],
-      "real_postgresql": true,
-      "two_process_or_fault": false,
-      "real_agent_clients": false,
-      "status": "protocol_covered_not_agent_accepted",
-      "blocker": null
-    },
-    {
-      "id": "TC-002",
-      "title": "Agent 自报不能升级为可信验证",
-      "phase": "P8",
-      "required": true,
-      "protocol_implemented": true,
-      "automated_tests": [
-        "crates/awr-team-pg/tests/pg_review.rs"
-      ],
-      "real_postgresql": true,
-      "two_process_or_fault": false,
-      "real_agent_clients": false,
-      "status": "protocol_covered_not_agent_accepted",
-      "blocker": null
-    },
-    {
-      "id": "TC-003",
-      "title": "同任务跨进程竞争",
-      "phase": "P5",
-      "required": true,
-      "protocol_implemented": true,
-      "automated_tests": [
-        "crates/awr-team-pg/tests/pg_lease.rs"
-      ],
-      "real_postgresql": true,
-      "two_process_or_fault": false,
-      "real_agent_clients": false,
-      "status": "protocol_covered_not_agent_accepted",
-      "blocker": null
-    },
-    {
-      "id": "TC-004",
-      "title": "不同任务不因全局客户端 CAS 相互失败",
-      "phase": "P5",
-      "required": true,
-      "protocol_implemented": true,
-      "automated_tests": [
-        "crates/awr-team-pg/tests/pg_lease.rs"
-      ],
-      "real_postgresql": true,
-      "two_process_or_fault": false,
-      "real_agent_clients": false,
-      "status": "protocol_covered_not_agent_accepted",
-      "blocker": null
-    },
-    {
-      "id": "TC-005",
-      "title": "过期租约不得由晚到续租复活",
-      "phase": "P5",
-      "required": true,
-      "protocol_implemented": true,
-      "automated_tests": [
-        "crates/awr-team-pg/tests/pg_lease.rs"
-      ],
-      "real_postgresql": true,
-      "two_process_or_fault": false,
-      "real_agent_clients": false,
-      "status": "protocol_covered_not_agent_accepted",
-      "blocker": null
-    },
-    {
-      "id": "TC-006",
-      "title": "旧 fence 不能推进当前工作",
-      "phase": "P5",
-      "required": true,
-      "protocol_implemented": true,
-      "automated_tests": [
-        "crates/awr-team-pg/tests/pg_lease.rs"
-      ],
-      "real_postgresql": true,
-      "two_process_or_fault": false,
-      "real_agent_clients": false,
-      "status": "protocol_covered_not_agent_accepted",
-      "blocker": null
-    },
-    {
-      "id": "TC-007",
-      "title": "续租幂等重放不能再次延长期限",
-      "phase": "P5",
-      "required": true,
-      "protocol_implemented": true,
-      "automated_tests": [
-        "crates/awr-team-pg/tests/pg_lease.rs"
-      ],
-      "real_postgresql": true,
-      "two_process_or_fault": false,
-      "real_agent_clients": false,
-      "status": "protocol_covered_not_agent_accepted",
-      "blocker": null
-    },
-    {
-      "id": "TC-008",
-      "title": "受影响任务占用时拒绝合同激活",
-      "phase": "P6",
-      "required": true,
-      "protocol_implemented": true,
-      "automated_tests": [
-        "crates/awr-team-pg/tests/pg_graph.rs"
-      ],
-      "real_postgresql": true,
-      "two_process_or_fault": false,
-      "real_agent_clients": false,
-      "status": "protocol_covered_not_agent_accepted",
-      "blocker": null
-    },
-    {
-      "id": "TC-009",
-      "title": "旧合同证据不能完成新合同",
-      "phase": "P8",
-      "required": true,
-      "protocol_implemented": true,
-      "automated_tests": [
-        "crates/awr-team-pg/tests/pg_review.rs"
-      ],
-      "real_postgresql": true,
-      "two_process_or_fault": false,
-      "real_agent_clients": false,
-      "status": "protocol_covered_not_agent_accepted",
-      "blocker": null
-    },
-    {
-      "id": "TC-010",
-      "title": "候选依赖图完整验证",
-      "phase": "P6",
-      "required": true,
-      "protocol_implemented": true,
-      "automated_tests": [
-        "crates/awr-team-pg/tests/pg_graph.rs"
-      ],
-      "real_postgresql": true,
-      "two_process_or_fault": false,
-      "real_agent_clients": false,
-      "status": "protocol_covered_not_agent_accepted",
-      "blocker": null
-    },
-    {
-      "id": "TC-011",
-      "title": "conversation 不能跨参与者劫持",
-      "phase": "P5",
-      "required": true,
-      "protocol_implemented": true,
-      "automated_tests": [
-        "crates/awr-team-pg/tests/pg_lease.rs"
-      ],
-      "real_postgresql": true,
-      "two_process_or_fault": false,
-      "real_agent_clients": false,
-      "status": "protocol_covered_not_agent_accepted",
-      "blocker": null
-    },
-    {
-      "id": "TC-012",
-      "title": "等待、回复和重启连续性",
-      "phase": "P5",
-      "required": true,
-      "protocol_implemented": true,
-      "automated_tests": [
-        "crates/awr-team-pg/tests/pg_lease.rs"
-      ],
-      "real_postgresql": true,
-      "two_process_or_fault": false,
-      "real_agent_clients": false,
-      "status": "protocol_covered_not_agent_accepted",
-      "blocker": null
-    },
-    {
-      "id": "TC-013",
-      "title": "交接原子化与旧权限失效",
-      "phase": "P5",
-      "required": true,
-      "protocol_implemented": true,
-      "automated_tests": [
-        "crates/awr-team-pg/tests/pg_lease.rs"
-      ],
-      "real_postgresql": true,
-      "two_process_or_fault": false,
-      "real_agent_clients": false,
-      "status": "protocol_covered_not_agent_accepted",
-      "blocker": null
-    },
-    {
-      "id": "TC-014",
-      "title": "未知执行阻止不安全再派发",
-      "phase": "P7",
-      "required": true,
-      "protocol_implemented": true,
-      "automated_tests": [
-        "crates/awr-team-pg/tests/pg_execution.rs"
-      ],
-      "real_postgresql": true,
-      "two_process_or_fault": false,
-      "real_agent_clients": false,
-      "status": "protocol_covered_not_agent_accepted",
-      "blocker": null
-    },
-    {
-      "id": "TC-015",
-      "title": "领域事务中途失败无部分修改",
-      "phase": "P2",
-      "required": true,
-      "protocol_implemented": true,
-      "automated_tests": [
-        "crates/awr-team-pg/tests/pg_skeleton.rs"
-      ],
-      "real_postgresql": true,
-      "two_process_or_fault": false,
-      "real_agent_clients": false,
-      "status": "protocol_covered_not_agent_accepted",
-      "blocker": null
-    },
-    {
-      "id": "TC-016",
-      "title": "同请求多次提交只执行一次领域动作",
-      "phase": "P2",
-      "required": true,
-      "protocol_implemented": true,
-      "automated_tests": [
-        "crates/awr-team-pg/tests/pg_skeleton.rs"
-      ],
-      "real_postgresql": true,
-      "two_process_or_fault": false,
-      "real_agent_clients": false,
-      "status": "protocol_covered_not_agent_accepted",
-      "blocker": null
-    },
-    {
-      "id": "TC-017",
-      "title": "同请求身份更换参数拒绝",
-      "phase": "P2",
-      "required": true,
-      "protocol_implemented": true,
-      "automated_tests": [
-        "crates/awr-team-pg/tests/pg_skeleton.rs"
-      ],
-      "real_postgresql": true,
-      "two_process_or_fault": false,
-      "real_agent_clients": false,
-      "status": "protocol_covered_not_agent_accepted",
-      "blocker": null
-    },
-    {
-      "id": "TC-018",
-      "title": "提交成功但响应丢失",
-      "phase": "P7",
-      "required": true,
-      "protocol_implemented": true,
-      "automated_tests": [
-        "crates/awr-team-pg/tests/pg_execution.rs"
-      ],
-      "real_postgresql": true,
-      "two_process_or_fault": false,
-      "real_agent_clients": false,
-      "status": "protocol_covered_not_agent_accepted",
-      "blocker": null
-    },
-    {
-      "id": "TC-019",
-      "title": "外部动作成功但执行回执丢失",
-      "phase": "P7",
-      "required": true,
-      "protocol_implemented": true,
-      "automated_tests": [
-        "crates/awr-team-pg/tests/pg_execution.rs"
-      ],
-      "real_postgresql": true,
-      "two_process_or_fault": false,
-      "real_agent_clients": false,
-      "status": "protocol_covered_not_agent_accepted",
-      "blocker": null
-    },
-    {
-      "id": "TC-020",
-      "title": "必需报告字节变化",
-      "phase": "P8",
-      "required": true,
-      "protocol_implemented": true,
-      "automated_tests": [
-        "crates/awr-team-pg/tests/pg_review.rs"
-      ],
-      "real_postgresql": true,
-      "two_process_or_fault": false,
-      "real_agent_clients": false,
-      "status": "protocol_covered_not_agent_accepted",
-      "blocker": null
-    },
-    {
-      "id": "TC-021",
-      "title": "作者与独立评审职责分离",
-      "phase": "P8",
-      "required": true,
-      "protocol_implemented": true,
-      "automated_tests": [
-        "crates/awr-team-pg/tests/pg_review.rs"
-      ],
-      "real_postgresql": true,
-      "two_process_or_fault": false,
-      "real_agent_clients": false,
-      "status": "protocol_covered_not_agent_accepted",
-      "blocker": null
-    },
-    {
-      "id": "TC-022",
-      "title": "重复导入幂等",
-      "phase": "P9",
-      "required": true,
-      "protocol_implemented": true,
-      "automated_tests": [
-        "crates/awr-team-pg/tests/pg_import.rs"
-      ],
-      "real_postgresql": true,
-      "two_process_or_fault": false,
-      "real_agent_clients": false,
-      "status": "protocol_covered_not_agent_accepted",
-      "blocker": null
-    },
-    {
-      "id": "TC-023",
-      "title": "多个本地源分歧不得自动最后写入胜出",
-      "phase": "P9",
-      "required": true,
-      "protocol_implemented": true,
-      "automated_tests": [
-        "crates/awr-team-pg/tests/pg_import.rs"
-      ],
-      "real_postgresql": true,
-      "two_process_or_fault": false,
-      "real_agent_clients": false,
-      "status": "protocol_covered_not_agent_accepted",
-      "blocker": null
-    },
-    {
-      "id": "TC-024",
-      "title": "源对象与 PG 激活之间的崩溃",
-      "phase": "P3",
-      "required": true,
-      "protocol_implemented": true,
-      "automated_tests": [
-        "crates/awr-team-pg/tests/pg_source.rs"
-      ],
-      "real_postgresql": true,
-      "two_process_or_fault": false,
-      "real_agent_clients": false,
-      "status": "protocol_covered_not_agent_accepted",
-      "blocker": null
-    },
-    {
-      "id": "TC-025",
-      "title": "事件提交游标的逆序事务反例",
-      "phase": "P4",
-      "required": true,
-      "protocol_implemented": true,
-      "automated_tests": [
-        "crates/awr-team-pg/tests/pg_read.rs"
-      ],
-      "real_postgresql": true,
-      "two_process_or_fault": false,
-      "real_agent_clients": false,
-      "status": "protocol_covered_not_agent_accepted",
-      "blocker": null
-    },
-    {
-      "id": "TC-026",
-      "title": "同 revision 多事件分页",
-      "phase": "P4",
-      "required": true,
-      "protocol_implemented": true,
-      "automated_tests": [
-        "crates/awr-team-pg/tests/pg_read.rs"
-      ],
-      "real_postgresql": true,
-      "two_process_or_fault": false,
-      "real_agent_clients": false,
-      "status": "protocol_covered_not_agent_accepted",
-      "blocker": null
-    },
-    {
-      "id": "TC-027",
-      "title": "跨项目读取隔离",
-      "phase": "P2",
-      "required": true,
-      "protocol_implemented": true,
-      "automated_tests": [
-        "crates/awr-team-pg/tests/pg_skeleton.rs"
-      ],
-      "real_postgresql": true,
-      "two_process_or_fault": false,
-      "real_agent_clients": false,
-      "status": "protocol_covered_not_agent_accepted",
-      "blocker": null
-    },
-    {
-      "id": "TC-028",
-      "title": "跨项目关联写入隔离",
-      "phase": "P2",
-      "required": true,
-      "protocol_implemented": true,
-      "automated_tests": [
-        "crates/awr-team-pg/tests/pg_skeleton.rs"
-      ],
-      "real_postgresql": true,
-      "two_process_or_fault": false,
-      "real_agent_clients": false,
-      "status": "protocol_covered_not_agent_accepted",
-      "blocker": null
-    },
-    {
-      "id": "TC-029",
-      "title": "连接池事务上下文不残留",
-      "phase": "P2",
-      "required": true,
-      "protocol_implemented": true,
-      "automated_tests": [
-        "crates/awr-team-pg/tests/pg_skeleton.rs"
-      ],
-      "real_postgresql": true,
-      "two_process_or_fault": false,
-      "real_agent_clients": false,
-      "status": "protocol_covered_not_agent_accepted",
-      "blocker": null
-    },
-    {
-      "id": "TC-030",
-      "title": "上下文缺必需事实不能标完整",
-      "phase": "P8",
-      "required": true,
-      "protocol_implemented": true,
-      "automated_tests": [
-        "crates/awr-team-pg/tests/pg_review.rs"
-      ],
-      "real_postgresql": true,
-      "two_process_or_fault": false,
-      "real_agent_clients": false,
-      "status": "protocol_covered_not_agent_accepted",
-      "blocker": null
-    },
-    {
-      "id": "TC-031",
-      "title": "旧客户端不静默进入 Team 语义",
-      "phase": "P10",
-      "required": true,
-      "protocol_implemented": true,
-      "automated_tests": [
-        "crates/awr-team/tests/access.rs",
-        "crates/awr-cli/tests/team_cli.rs"
-      ],
-      "real_postgresql": false,
-      "two_process_or_fault": false,
-      "real_agent_clients": false,
-      "status": "protocol_covered_not_agent_accepted",
-      "blocker": null
-    },
-    {
-      "id": "TC-032",
-      "title": "锁等待后的租约时间检查",
-      "phase": "P5",
-      "required": true,
-      "protocol_implemented": true,
-      "automated_tests": [
-        "crates/awr-team-pg/tests/pg_lease.rs"
-      ],
-      "real_postgresql": true,
-      "two_process_or_fault": false,
-      "real_agent_clients": false,
-      "status": "protocol_covered_not_agent_accepted",
-      "blocker": null
-    },
-    {
-      "id": "TC-033",
-      "title": "无权释放他人租约",
-      "phase": "P5",
-      "required": true,
-      "protocol_implemented": true,
-      "automated_tests": [
-        "crates/awr-team-pg/tests/pg_lease.rs"
-      ],
-      "real_postgresql": true,
-      "two_process_or_fault": false,
-      "real_agent_clients": false,
-      "status": "protocol_covered_not_agent_accepted",
-      "blocker": null
-    },
-    {
-      "id": "TC-034",
-      "title": "过期认领保留历史与危险资源",
-      "phase": "P5",
-      "required": true,
-      "protocol_implemented": true,
-      "automated_tests": [
-        "crates/awr-team-pg/tests/pg_lease.rs"
-      ],
-      "real_postgresql": true,
-      "two_process_or_fault": false,
-      "real_agent_clients": false,
-      "status": "protocol_covered_not_agent_accepted",
-      "blocker": null
-    },
-    {
-      "id": "TC-035",
-      "title": "应用角色不能绕过 RLS 或改历史",
-      "phase": "P2",
-      "required": true,
-      "protocol_implemented": true,
-      "automated_tests": [
-        "crates/awr-team-pg/tests/pg_skeleton.rs"
-      ],
-      "real_postgresql": true,
-      "two_process_or_fault": false,
-      "real_agent_clients": false,
-      "status": "protocol_covered_not_agent_accepted",
-      "blocker": null
-    },
-    {
-      "id": "TC-036",
-      "title": "源上传路径与包安全",
-      "phase": "P3",
-      "required": true,
-      "protocol_implemented": true,
-      "automated_tests": [
-        "crates/awr-team-pg/tests/pg_source.rs"
-      ],
-      "real_postgresql": true,
-      "two_process_or_fault": false,
-      "real_agent_clients": false,
-      "status": "protocol_covered_not_agent_accepted",
-      "blocker": null
-    },
-    {
-      "id": "TC-037",
-      "title": "outbox 重复投递",
-      "phase": "P7",
-      "required": true,
-      "protocol_implemented": true,
-      "automated_tests": [
-        "crates/awr-team-pg/tests/pg_execution.rs"
-      ],
-      "real_postgresql": true,
-      "two_process_or_fault": false,
-      "real_agent_clients": false,
-      "status": "protocol_covered_not_agent_accepted",
-      "blocker": null
-    },
-    {
-      "id": "TC-038",
-      "title": "runner 启动边界崩溃",
-      "phase": "P7",
-      "required": true,
-      "protocol_implemented": true,
-      "automated_tests": [
-        "crates/awr-team-pg/tests/pg_execution.rs"
-      ],
-      "real_postgresql": true,
-      "two_process_or_fault": false,
-      "real_agent_clients": false,
-      "status": "protocol_covered_not_agent_accepted",
-      "blocker": null
-    },
-    {
-      "id": "TC-039",
-      "title": "远端断线不能本地接管团队权威",
-      "phase": "P10",
-      "required": true,
-      "protocol_implemented": true,
-      "automated_tests": [
-        "crates/awr-team/tests/access.rs",
-        "crates/awr-cli/tests/team_cli.rs"
-      ],
-      "real_postgresql": false,
-      "two_process_or_fault": false,
-      "real_agent_clients": false,
-      "status": "protocol_covered_not_agent_accepted",
-      "blocker": null
-    },
-    {
-      "id": "TC-040",
-      "title": "恢复后旧 coordinator epoch 被隔离",
-      "phase": "P9",
-      "required": true,
-      "protocol_implemented": true,
-      "automated_tests": [
-        "crates/awr-team-pg/tests/pg_import.rs"
-      ],
-      "real_postgresql": true,
-      "two_process_or_fault": false,
-      "real_agent_clients": false,
-      "status": "protocol_covered_not_agent_accepted",
-      "blocker": null
-    },
-    {
-      "id": "TC-041",
-      "title": "个人模式回归",
-      "phase": "P10",
-      "required": true,
-      "protocol_implemented": true,
-      "automated_tests": [
-        "crates/awr-team/tests/access.rs",
-        "crates/awr-cli/tests/team_cli.rs"
-      ],
-      "real_postgresql": false,
-      "two_process_or_fault": false,
-      "real_agent_clients": false,
-      "status": "protocol_covered_not_agent_accepted",
-      "blocker": null
-    },
-    {
-      "id": "TC-042",
-      "title": "canonical 编码与版本转换",
-      "phase": "P1",
-      "required": true,
-      "protocol_implemented": true,
-      "automated_tests": [
-        "crates/awr-team/tests/contract_rules.rs",
-        "crates/awr-team/tests/access.rs"
-      ],
-      "real_postgresql": false,
-      "two_process_or_fault": false,
-      "real_agent_clients": false,
-      "status": "protocol_covered_not_agent_accepted",
-      "blocker": null
-    },
-    {
-      "id": "TC-043",
-      "title": "显式远端项目选择",
-      "phase": "P10",
-      "required": true,
-      "protocol_implemented": true,
-      "automated_tests": [
-        "crates/awr-team/tests/access.rs",
-        "crates/awr-cli/tests/team_cli.rs"
-      ],
-      "real_postgresql": false,
-      "two_process_or_fault": false,
-      "real_agent_clients": false,
-      "status": "protocol_covered_not_agent_accepted",
-      "blocker": null
-    },
-    {
-      "id": "TC-044",
-      "title": "目录前缀资源冲突",
-      "phase": "P6",
-      "required": true,
-      "protocol_implemented": true,
-      "automated_tests": [
-        "crates/awr-team-pg/tests/pg_graph.rs"
-      ],
-      "real_postgresql": true,
-      "two_process_or_fault": false,
-      "real_agent_clients": false,
-      "status": "protocol_covered_not_agent_accepted",
-      "blocker": null
-    },
-    {
-      "id": "TC-045",
-      "title": "不支持的工作范围明确拒绝",
-      "phase": "P6",
-      "required": true,
-      "protocol_implemented": true,
-      "automated_tests": [
-        "crates/awr-team-pg/tests/pg_graph.rs"
-      ],
-      "real_postgresql": true,
-      "two_process_or_fault": false,
-      "real_agent_clients": false,
-      "status": "protocol_covered_not_agent_accepted",
-      "blocker": null
-    },
-    {
-      "id": "TC-046",
-      "title": "批量源发布没有半套生效投影",
-      "phase": "P6",
-      "required": true,
-      "protocol_implemented": true,
-      "automated_tests": [
-        "crates/awr-team-pg/tests/pg_graph.rs"
-      ],
-      "real_postgresql": true,
-      "two_process_or_fault": false,
-      "real_agent_clients": false,
-      "status": "protocol_covered_not_agent_accepted",
-      "blocker": null
-    },
-    {
-      "id": "TC-047",
-      "title": "迁移 / schema 不兼容时禁止误启动",
-      "phase": "P9",
-      "required": true,
-      "protocol_implemented": true,
-      "automated_tests": [
-        "crates/awr-team-pg/tests/pg_import.rs"
-      ],
-      "real_postgresql": true,
-      "two_process_or_fault": false,
-      "real_agent_clients": false,
-      "status": "protocol_covered_not_agent_accepted",
-      "blocker": null
-    },
-    {
-      "id": "TC-048",
-      "title": "凭证撤销与已接受请求边界",
-      "phase": "P9",
-      "required": true,
-      "protocol_implemented": true,
-      "automated_tests": [
-        "crates/awr-team-pg/tests/pg_import.rs"
-      ],
-      "real_postgresql": true,
-      "two_process_or_fault": false,
-      "real_agent_clients": false,
-      "status": "protocol_covered_not_agent_accepted",
-      "blocker": null
-    },
-    {
-      "id": "TC-049",
-      "title": "图和发布预算超限不得假装完整",
-      "phase": "P6",
-      "required": true,
-      "protocol_implemented": true,
-      "automated_tests": [
-        "crates/awr-team-pg/tests/pg_graph.rs"
-      ],
-      "real_postgresql": true,
-      "two_process_or_fault": false,
-      "real_agent_clients": false,
-      "status": "protocol_covered_not_agent_accepted",
-      "blocker": null
-    },
-    {
-      "id": "TC-050",
-      "title": "实际改动超出申报范围",
-      "phase": "P7",
-      "required": true,
-      "protocol_implemented": true,
-      "automated_tests": [
-        "crates/awr-team-pg/tests/pg_execution.rs"
-      ],
-      "real_postgresql": true,
-      "two_process_or_fault": false,
-      "real_agent_clients": false,
-      "status": "protocol_covered_not_agent_accepted",
-      "blocker": null
-    },
-    {
-      "id": "TC-051",
-      "title": "普通确认类策略不得由执行者降级",
-      "phase": "P8",
-      "required": true,
-      "protocol_implemented": true,
-      "automated_tests": [
-        "crates/awr-team-pg/tests/pg_review.rs"
-      ],
-      "real_postgresql": true,
-      "two_process_or_fault": false,
-      "real_agent_clients": false,
-      "status": "protocol_covered_not_agent_accepted",
-      "blocker": null
-    },
-    {
-      "id": "TC-052",
-      "title": "子任务结束不能替代父级集成验收",
-      "phase": "P6",
-      "required": true,
-      "protocol_implemented": true,
-      "automated_tests": [
-        "crates/awr-team-pg/tests/pg_graph.rs"
-      ],
-      "real_postgresql": true,
-      "two_process_or_fault": false,
-      "real_agent_clients": false,
-      "status": "protocol_covered_not_agent_accepted",
-      "blocker": null
-    },
-    {
-      "id": "TC-053",
-      "title": "取消晚到不能伪造已撤销结果",
-      "phase": "P7",
-      "required": true,
-      "protocol_implemented": true,
-      "automated_tests": [
-        "crates/awr-team-pg/tests/pg_execution.rs"
-      ],
-      "real_postgresql": true,
-      "two_process_or_fault": false,
-      "real_agent_clients": false,
-      "status": "protocol_covered_not_agent_accepted",
-      "blocker": null
-    },
-    {
-      "id": "TC-054",
-      "title": "外部 fencing 能力显式分级",
-      "phase": "P7",
-      "required": true,
-      "protocol_implemented": true,
-      "automated_tests": [
-        "crates/awr-team-pg/tests/pg_execution.rs"
-      ],
-      "real_postgresql": true,
-      "two_process_or_fault": false,
-      "real_agent_clients": false,
-      "status": "protocol_covered_not_agent_accepted",
-      "blocker": null
-    },
-    {
-      "id": "TC-055",
-      "title": "评审材料变化使旧批准失效",
-      "phase": "P8",
-      "required": true,
-      "protocol_implemented": true,
-      "automated_tests": [
-        "crates/awr-team-pg/tests/pg_review.rs"
-      ],
-      "real_postgresql": true,
-      "two_process_or_fault": false,
-      "real_agent_clients": false,
-      "status": "protocol_covered_not_agent_accepted",
-      "blocker": null
-    },
-    {
-      "id": "TC-056",
-      "title": "选定证据缺失不能由另一个报告替代",
-      "phase": "P8",
-      "required": true,
-      "protocol_implemented": true,
-      "automated_tests": [
-        "crates/awr-team-pg/tests/pg_review.rs"
-      ],
-      "real_postgresql": true,
-      "two_process_or_fault": false,
-      "real_agent_clients": false,
-      "status": "protocol_covered_not_agent_accepted",
-      "blocker": null
-    },
-    {
-      "id": "TC-057",
-      "title": "重启不会刷新租约期限",
-      "phase": "P5",
-      "required": true,
-      "protocol_implemented": true,
-      "automated_tests": [
-        "crates/awr-team-pg/tests/pg_lease.rs"
-      ],
-      "real_postgresql": true,
-      "two_process_or_fault": false,
-      "real_agent_clients": false,
-      "status": "protocol_covered_not_agent_accepted",
-      "blocker": null
-    },
-    {
-      "id": "TC-058",
-      "title": "交接只迁移工作资料不伪称私有会话恢复",
-      "phase": "P5",
-      "required": true,
-      "protocol_implemented": true,
-      "automated_tests": [
-        "crates/awr-team-pg/tests/pg_lease.rs"
-      ],
-      "real_postgresql": true,
-      "two_process_or_fault": false,
-      "real_agent_clients": false,
-      "status": "protocol_covered_not_agent_accepted",
-      "blocker": null
-    },
-    {
-      "id": "TC-059",
-      "title": "64位版本数字无精度损失",
-      "phase": "P10",
-      "required": true,
-      "protocol_implemented": true,
-      "automated_tests": [
-        "crates/awr-team/tests/access.rs",
-        "crates/awr-cli/tests/team_cli.rs"
-      ],
-      "real_postgresql": false,
-      "two_process_or_fault": false,
-      "real_agent_clients": false,
-      "status": "protocol_covered_not_agent_accepted",
-      "blocker": null
-    },
-    {
-      "id": "TC-060",
-      "title": "快照与增量衔接不漏事件",
-      "phase": "P10",
-      "required": true,
-      "protocol_implemented": true,
-      "automated_tests": [
-        "crates/awr-team/tests/access.rs",
-        "crates/awr-cli/tests/team_cli.rs"
-      ],
-      "real_postgresql": false,
-      "two_process_or_fault": false,
-      "real_agent_clients": false,
-      "status": "protocol_covered_not_agent_accepted",
-      "blocker": null
-    },
-    {
-      "id": "TC-061",
-      "title": "解析器升级不能静默改已生效合同",
-      "phase": "P3",
-      "required": true,
-      "protocol_implemented": true,
-      "automated_tests": [
-        "crates/awr-team-pg/tests/pg_source.rs"
-      ],
-      "real_postgresql": true,
-      "two_process_or_fault": false,
-      "real_agent_clients": false,
-      "status": "protocol_covered_not_agent_accepted",
-      "blocker": null
-    },
-    {
-      "id": "TC-062",
-      "title": "上游变更使下游旧依据失效",
-      "phase": "P6",
-      "required": true,
-      "protocol_implemented": true,
-      "automated_tests": [
-        "crates/awr-team-pg/tests/pg_graph.rs"
-      ],
-      "real_postgresql": true,
-      "two_process_or_fault": false,
-      "real_agent_clients": false,
-      "status": "protocol_covered_not_agent_accepted",
-      "blocker": null
-    },
-    {
-      "id": "TC-063",
-      "title": "dirty worktree 必须绑定实际字节",
-      "phase": "P8",
-      "required": true,
-      "protocol_implemented": true,
-      "automated_tests": [
-        "crates/awr-team-pg/tests/pg_review.rs"
-      ],
-      "real_postgresql": true,
-      "two_process_or_fault": false,
-      "real_agent_clients": false,
-      "status": "protocol_covered_not_agent_accepted",
-      "blocker": null
-    },
-    {
-      "id": "TC-064",
-      "title": "历史身份与证据导入不提升可信度",
-      "phase": "P9",
-      "required": true,
-      "protocol_implemented": true,
-      "automated_tests": [
-        "crates/awr-team-pg/tests/pg_import.rs"
-      ],
-      "real_postgresql": true,
-      "two_process_or_fault": false,
-      "real_agent_clients": false,
-      "status": "protocol_covered_not_agent_accepted",
-      "blocker": null
-    },
-    {
-      "id": "TC-065",
-      "title": "数据库存在但必要产物缺失时恢复失败关闭",
-      "phase": "P9",
-      "required": true,
-      "protocol_implemented": true,
-      "automated_tests": [
-        "crates/awr-team-pg/tests/pg_import.rs"
-      ],
-      "real_postgresql": true,
-      "two_process_or_fault": false,
-      "real_agent_clients": false,
-      "status": "protocol_covered_not_agent_accepted",
-      "blocker": null
-    },
-    {
-      "id": "TC-066",
-      "title": "恢复 outbox 不能自动重复历史副作用",
-      "phase": "P9",
-      "required": true,
-      "protocol_implemented": true,
-      "automated_tests": [
-        "crates/awr-team-pg/tests/pg_import.rs"
-      ],
-      "real_postgresql": true,
-      "two_process_or_fault": false,
-      "real_agent_clients": false,
-      "status": "protocol_covered_not_agent_accepted",
-      "blocker": null
-    },
-    {
-      "id": "TC-067",
-      "title": "团队已有新写入时禁止直接回滚旧 SQLite",
-      "phase": "P9",
-      "required": true,
-      "protocol_implemented": true,
-      "automated_tests": [
-        "crates/awr-team-pg/tests/pg_import.rs"
-      ],
-      "real_postgresql": true,
-      "two_process_or_fault": false,
-      "real_agent_clients": false,
-      "status": "protocol_covered_not_agent_accepted",
-      "blocker": null
-    },
-    {
-      "id": "TC-068",
-      "title": "旧本地客户端产生的状态不覆盖团队",
-      "phase": "P9",
-      "required": true,
-      "protocol_implemented": true,
-      "automated_tests": [
-        "crates/awr-team-pg/tests/pg_import.rs"
-      ],
-      "real_postgresql": true,
-      "two_process_or_fault": false,
-      "real_agent_clients": false,
-      "status": "protocol_covered_not_agent_accepted",
-      "blocker": null
-    },
-    {
-      "id": "TC-069",
-      "title": "HTTP MCP CLI 三入口语义一致",
-      "phase": "P10",
-      "required": true,
-      "protocol_implemented": true,
-      "automated_tests": [
-        "crates/awr-team/tests/access.rs",
-        "crates/awr-cli/tests/team_cli.rs"
-      ],
-      "real_postgresql": false,
-      "two_process_or_fault": false,
-      "real_agent_clients": false,
-      "status": "protocol_covered_not_agent_accepted",
-      "blocker": null
-    }
-  ],
-  "live_agent_run": {
-    "status": "locally_verified",
-    "git_head": "313f501b1a36086dff68d081b03f18acd6acf18e",
-    "clients": [
-      {
-        "product": "Kimi Code CLI",
-        "version": "2.0.0",
-        "actor_id": "kimi-cli"
-      },
-      {
-        "product": "ZCode CLI",
-        "version": "0.16.5",
-        "actor_id": "zcode-cli"
-      }
-    ],
-    "project_key": "p11-live",
-    "work_id": "work-p11",
-    "receipt_id": "01M2RW29SNQ0738MVTCKF0ZSX7",
-    "execution_id": "01M2RW1CPY4JYJB8E9C9A81YA3",
-    "oracle": {
-      "receipts": 1,
-      "active_holder": "zcode-cli",
-      "executions": 1,
-      "pass": true
-    },
-    "flow": "kimi claimed and fixed add(); handoff; zcode verified and extended tests; human reviewer approved; complete",
-    "evidence_path": "ledger/evidence/TEAM-P11/live-dual-cli.json",
-    "not_a_release_tag": true
+  {
+   "id": "TC-002",
+   "title": "Agent 自报不能升级为可信验证",
+   "phase": "P8",
+   "required": true,
+   "protocol_implemented": true,
+   "automated_tests": [
+    "crates/awr-team-pg/tests/pg_review.rs"
+   ],
+   "real_postgresql": true,
+   "two_process_or_fault": false,
+   "real_agent_clients": true,
+   "status": "real_agent_accepted",
+   "blocker": null,
+   "agent_evidence": "ledger/evidence/TEAM-P13/TC-002.json"
+  },
+  {
+   "id": "TC-003",
+   "title": "同任务跨进程竞争",
+   "phase": "P5",
+   "required": true,
+   "protocol_implemented": true,
+   "automated_tests": [
+    "crates/awr-team-pg/tests/pg_lease.rs"
+   ],
+   "real_postgresql": true,
+   "two_process_or_fault": false,
+   "real_agent_clients": true,
+   "status": "real_agent_accepted",
+   "blocker": null,
+   "agent_evidence": "ledger/evidence/TEAM-P13/TC-003.json"
+  },
+  {
+   "id": "TC-004",
+   "title": "不同任务不因全局客户端 CAS 相互失败",
+   "phase": "P5",
+   "required": true,
+   "protocol_implemented": true,
+   "automated_tests": [
+    "crates/awr-team-pg/tests/pg_lease.rs"
+   ],
+   "real_postgresql": true,
+   "two_process_or_fault": false,
+   "real_agent_clients": true,
+   "status": "real_agent_accepted",
+   "blocker": null,
+   "agent_evidence": "ledger/evidence/TEAM-P13/TC-004.json"
+  },
+  {
+   "id": "TC-005",
+   "title": "过期租约不得由晚到续租复活",
+   "phase": "P5",
+   "required": true,
+   "protocol_implemented": true,
+   "automated_tests": [
+    "crates/awr-team-pg/tests/pg_lease.rs"
+   ],
+   "real_postgresql": true,
+   "two_process_or_fault": false,
+   "real_agent_clients": false,
+   "status": "protocol_covered_not_agent_accepted",
+   "blocker": null
+  },
+  {
+   "id": "TC-006",
+   "title": "旧 fence 不能推进当前工作",
+   "phase": "P5",
+   "required": true,
+   "protocol_implemented": true,
+   "automated_tests": [
+    "crates/awr-team-pg/tests/pg_lease.rs"
+   ],
+   "real_postgresql": true,
+   "two_process_or_fault": false,
+   "real_agent_clients": true,
+   "status": "real_agent_accepted",
+   "blocker": null,
+   "agent_evidence": "ledger/evidence/TEAM-P13/TC-006.json"
+  },
+  {
+   "id": "TC-007",
+   "title": "续租幂等重放不能再次延长期限",
+   "phase": "P5",
+   "required": true,
+   "protocol_implemented": true,
+   "automated_tests": [
+    "crates/awr-team-pg/tests/pg_lease.rs"
+   ],
+   "real_postgresql": true,
+   "two_process_or_fault": false,
+   "real_agent_clients": false,
+   "status": "protocol_covered_not_agent_accepted",
+   "blocker": null
+  },
+  {
+   "id": "TC-008",
+   "title": "受影响任务占用时拒绝合同激活",
+   "phase": "P6",
+   "required": true,
+   "protocol_implemented": true,
+   "automated_tests": [
+    "crates/awr-team-pg/tests/pg_graph.rs"
+   ],
+   "real_postgresql": true,
+   "two_process_or_fault": false,
+   "real_agent_clients": true,
+   "status": "real_agent_accepted",
+   "blocker": null,
+   "agent_evidence": "ledger/evidence/TEAM-P13/TC-008.json"
+  },
+  {
+   "id": "TC-009",
+   "title": "旧合同证据不能完成新合同",
+   "phase": "P8",
+   "required": true,
+   "protocol_implemented": true,
+   "automated_tests": [
+    "crates/awr-team-pg/tests/pg_review.rs"
+   ],
+   "real_postgresql": true,
+   "two_process_or_fault": false,
+   "real_agent_clients": true,
+   "status": "real_agent_accepted",
+   "blocker": null,
+   "agent_evidence": "ledger/evidence/TEAM-P13/TC-009.json"
+  },
+  {
+   "id": "TC-010",
+   "title": "候选依赖图完整验证",
+   "phase": "P6",
+   "required": true,
+   "protocol_implemented": true,
+   "automated_tests": [
+    "crates/awr-team-pg/tests/pg_graph.rs"
+   ],
+   "real_postgresql": true,
+   "two_process_or_fault": false,
+   "real_agent_clients": true,
+   "status": "real_agent_accepted",
+   "blocker": null,
+   "agent_evidence": "ledger/evidence/TEAM-P13/TC-010.json"
+  },
+  {
+   "id": "TC-011",
+   "title": "conversation 不能跨参与者劫持",
+   "phase": "P5",
+   "required": true,
+   "protocol_implemented": true,
+   "automated_tests": [
+    "crates/awr-team-pg/tests/pg_lease.rs"
+   ],
+   "real_postgresql": true,
+   "two_process_or_fault": false,
+   "real_agent_clients": true,
+   "status": "real_agent_accepted",
+   "blocker": null,
+   "agent_evidence": "ledger/evidence/TEAM-P13/TC-011.json"
+  },
+  {
+   "id": "TC-012",
+   "title": "等待、回复和重启连续性",
+   "phase": "P5",
+   "required": true,
+   "protocol_implemented": true,
+   "automated_tests": [
+    "crates/awr-team-pg/tests/pg_lease.rs"
+   ],
+   "real_postgresql": true,
+   "two_process_or_fault": false,
+   "real_agent_clients": false,
+   "status": "protocol_covered_not_agent_accepted",
+   "blocker": null
+  },
+  {
+   "id": "TC-013",
+   "title": "交接原子化与旧权限失效",
+   "phase": "P5",
+   "required": true,
+   "protocol_implemented": true,
+   "automated_tests": [
+    "crates/awr-team-pg/tests/pg_lease.rs"
+   ],
+   "real_postgresql": true,
+   "two_process_or_fault": false,
+   "real_agent_clients": true,
+   "status": "real_agent_accepted",
+   "blocker": null,
+   "agent_evidence": "ledger/evidence/TEAM-P13/TC-013.json"
+  },
+  {
+   "id": "TC-014",
+   "title": "未知执行阻止不安全再派发",
+   "phase": "P7",
+   "required": true,
+   "protocol_implemented": true,
+   "automated_tests": [
+    "crates/awr-team-pg/tests/pg_execution.rs"
+   ],
+   "real_postgresql": true,
+   "two_process_or_fault": false,
+   "real_agent_clients": true,
+   "status": "real_agent_accepted",
+   "blocker": null,
+   "agent_evidence": "ledger/evidence/TEAM-P13/TC-014.json"
+  },
+  {
+   "id": "TC-015",
+   "title": "领域事务中途失败无部分修改",
+   "phase": "P2",
+   "required": true,
+   "protocol_implemented": true,
+   "automated_tests": [
+    "crates/awr-team-pg/tests/pg_skeleton.rs"
+   ],
+   "real_postgresql": true,
+   "two_process_or_fault": false,
+   "real_agent_clients": false,
+   "status": "protocol_covered_not_agent_accepted",
+   "blocker": null
+  },
+  {
+   "id": "TC-016",
+   "title": "同请求多次提交只执行一次领域动作",
+   "phase": "P2",
+   "required": true,
+   "protocol_implemented": true,
+   "automated_tests": [
+    "crates/awr-team-pg/tests/pg_skeleton.rs"
+   ],
+   "real_postgresql": true,
+   "two_process_or_fault": false,
+   "real_agent_clients": true,
+   "status": "real_agent_accepted",
+   "blocker": null,
+   "agent_evidence": "ledger/evidence/TEAM-P13/TC-016.json"
+  },
+  {
+   "id": "TC-017",
+   "title": "同请求身份更换参数拒绝",
+   "phase": "P2",
+   "required": true,
+   "protocol_implemented": true,
+   "automated_tests": [
+    "crates/awr-team-pg/tests/pg_skeleton.rs"
+   ],
+   "real_postgresql": true,
+   "two_process_or_fault": false,
+   "real_agent_clients": true,
+   "status": "real_agent_accepted",
+   "blocker": null,
+   "agent_evidence": "ledger/evidence/TEAM-P13/TC-017.json"
+  },
+  {
+   "id": "TC-018",
+   "title": "提交成功但响应丢失",
+   "phase": "P7",
+   "required": true,
+   "protocol_implemented": true,
+   "automated_tests": [
+    "crates/awr-team-pg/tests/pg_execution.rs"
+   ],
+   "real_postgresql": true,
+   "two_process_or_fault": false,
+   "real_agent_clients": false,
+   "status": "protocol_covered_not_agent_accepted",
+   "blocker": null
+  },
+  {
+   "id": "TC-019",
+   "title": "外部动作成功但执行回执丢失",
+   "phase": "P7",
+   "required": true,
+   "protocol_implemented": true,
+   "automated_tests": [
+    "crates/awr-team-pg/tests/pg_execution.rs"
+   ],
+   "real_postgresql": true,
+   "two_process_or_fault": false,
+   "real_agent_clients": false,
+   "status": "protocol_covered_not_agent_accepted",
+   "blocker": null
+  },
+  {
+   "id": "TC-020",
+   "title": "必需报告字节变化",
+   "phase": "P8",
+   "required": true,
+   "protocol_implemented": true,
+   "automated_tests": [
+    "crates/awr-team-pg/tests/pg_review.rs"
+   ],
+   "real_postgresql": true,
+   "two_process_or_fault": false,
+   "real_agent_clients": true,
+   "status": "real_agent_accepted",
+   "blocker": null,
+   "agent_evidence": "ledger/evidence/TEAM-P13/TC-020.json"
+  },
+  {
+   "id": "TC-021",
+   "title": "作者与独立评审职责分离",
+   "phase": "P8",
+   "required": true,
+   "protocol_implemented": true,
+   "automated_tests": [
+    "crates/awr-team-pg/tests/pg_review.rs"
+   ],
+   "real_postgresql": true,
+   "two_process_or_fault": false,
+   "real_agent_clients": true,
+   "status": "real_agent_accepted",
+   "blocker": null,
+   "agent_evidence": "ledger/evidence/TEAM-P13/TC-021.json"
+  },
+  {
+   "id": "TC-022",
+   "title": "重复导入幂等",
+   "phase": "P9",
+   "required": true,
+   "protocol_implemented": true,
+   "automated_tests": [
+    "crates/awr-team-pg/tests/pg_import.rs"
+   ],
+   "real_postgresql": true,
+   "two_process_or_fault": false,
+   "real_agent_clients": true,
+   "status": "real_agent_accepted",
+   "blocker": null,
+   "agent_evidence": "ledger/evidence/TEAM-P13/TC-022.json"
+  },
+  {
+   "id": "TC-023",
+   "title": "多个本地源分歧不得自动最后写入胜出",
+   "phase": "P9",
+   "required": true,
+   "protocol_implemented": true,
+   "automated_tests": [
+    "crates/awr-team-pg/tests/pg_import.rs"
+   ],
+   "real_postgresql": true,
+   "two_process_or_fault": false,
+   "real_agent_clients": true,
+   "status": "real_agent_accepted",
+   "blocker": null,
+   "agent_evidence": "ledger/evidence/TEAM-P13/TC-023.json"
+  },
+  {
+   "id": "TC-024",
+   "title": "源对象与 PG 激活之间的崩溃",
+   "phase": "P3",
+   "required": true,
+   "protocol_implemented": true,
+   "automated_tests": [
+    "crates/awr-team-pg/tests/pg_source.rs"
+   ],
+   "real_postgresql": true,
+   "two_process_or_fault": false,
+   "real_agent_clients": false,
+   "status": "protocol_covered_not_agent_accepted",
+   "blocker": null
+  },
+  {
+   "id": "TC-025",
+   "title": "事件提交游标的逆序事务反例",
+   "phase": "P4",
+   "required": true,
+   "protocol_implemented": true,
+   "automated_tests": [
+    "crates/awr-team-pg/tests/pg_read.rs"
+   ],
+   "real_postgresql": true,
+   "two_process_or_fault": false,
+   "real_agent_clients": false,
+   "status": "protocol_covered_not_agent_accepted",
+   "blocker": null
+  },
+  {
+   "id": "TC-026",
+   "title": "同 revision 多事件分页",
+   "phase": "P4",
+   "required": true,
+   "protocol_implemented": true,
+   "automated_tests": [
+    "crates/awr-team-pg/tests/pg_read.rs"
+   ],
+   "real_postgresql": true,
+   "two_process_or_fault": false,
+   "real_agent_clients": true,
+   "status": "real_agent_accepted",
+   "blocker": null,
+   "agent_evidence": "ledger/evidence/TEAM-P13/TC-026.json"
+  },
+  {
+   "id": "TC-027",
+   "title": "跨项目读取隔离",
+   "phase": "P2",
+   "required": true,
+   "protocol_implemented": true,
+   "automated_tests": [
+    "crates/awr-team-pg/tests/pg_skeleton.rs"
+   ],
+   "real_postgresql": true,
+   "two_process_or_fault": false,
+   "real_agent_clients": true,
+   "status": "real_agent_accepted",
+   "blocker": null,
+   "agent_evidence": "ledger/evidence/TEAM-P13/TC-027.json"
+  },
+  {
+   "id": "TC-028",
+   "title": "跨项目关联写入隔离",
+   "phase": "P2",
+   "required": true,
+   "protocol_implemented": true,
+   "automated_tests": [
+    "crates/awr-team-pg/tests/pg_skeleton.rs"
+   ],
+   "real_postgresql": true,
+   "two_process_or_fault": false,
+   "real_agent_clients": true,
+   "status": "real_agent_accepted",
+   "blocker": null,
+   "agent_evidence": "ledger/evidence/TEAM-P13/TC-028.json"
+  },
+  {
+   "id": "TC-029",
+   "title": "连接池事务上下文不残留",
+   "phase": "P2",
+   "required": true,
+   "protocol_implemented": true,
+   "automated_tests": [
+    "crates/awr-team-pg/tests/pg_skeleton.rs"
+   ],
+   "real_postgresql": true,
+   "two_process_or_fault": false,
+   "real_agent_clients": false,
+   "status": "protocol_covered_not_agent_accepted",
+   "blocker": null
+  },
+  {
+   "id": "TC-030",
+   "title": "上下文缺必需事实不能标完整",
+   "phase": "P8",
+   "required": true,
+   "protocol_implemented": true,
+   "automated_tests": [
+    "crates/awr-team-pg/tests/pg_review.rs"
+   ],
+   "real_postgresql": true,
+   "two_process_or_fault": false,
+   "real_agent_clients": true,
+   "status": "real_agent_accepted",
+   "blocker": null,
+   "agent_evidence": "ledger/evidence/TEAM-P13/TC-030.json"
+  },
+  {
+   "id": "TC-031",
+   "title": "旧客户端不静默进入 Team 语义",
+   "phase": "P10",
+   "required": true,
+   "protocol_implemented": true,
+   "automated_tests": [
+    "crates/awr-team/tests/access.rs",
+    "crates/awr-cli/tests/team_cli.rs"
+   ],
+   "real_postgresql": false,
+   "two_process_or_fault": false,
+   "real_agent_clients": true,
+   "status": "real_agent_accepted",
+   "blocker": null,
+   "agent_evidence": "ledger/evidence/TEAM-P13/TC-031.json"
+  },
+  {
+   "id": "TC-032",
+   "title": "锁等待后的租约时间检查",
+   "phase": "P5",
+   "required": true,
+   "protocol_implemented": true,
+   "automated_tests": [
+    "crates/awr-team-pg/tests/pg_lease.rs"
+   ],
+   "real_postgresql": true,
+   "two_process_or_fault": false,
+   "real_agent_clients": false,
+   "status": "protocol_covered_not_agent_accepted",
+   "blocker": null
+  },
+  {
+   "id": "TC-033",
+   "title": "无权释放他人租约",
+   "phase": "P5",
+   "required": true,
+   "protocol_implemented": true,
+   "automated_tests": [
+    "crates/awr-team-pg/tests/pg_lease.rs"
+   ],
+   "real_postgresql": true,
+   "two_process_or_fault": false,
+   "real_agent_clients": true,
+   "status": "real_agent_accepted",
+   "blocker": null,
+   "agent_evidence": "ledger/evidence/TEAM-P13/TC-033.json"
+  },
+  {
+   "id": "TC-034",
+   "title": "过期认领保留历史与危险资源",
+   "phase": "P5",
+   "required": true,
+   "protocol_implemented": true,
+   "automated_tests": [
+    "crates/awr-team-pg/tests/pg_lease.rs"
+   ],
+   "real_postgresql": true,
+   "two_process_or_fault": false,
+   "real_agent_clients": false,
+   "status": "protocol_covered_not_agent_accepted",
+   "blocker": null
+  },
+  {
+   "id": "TC-035",
+   "title": "应用角色不能绕过 RLS 或改历史",
+   "phase": "P2",
+   "required": true,
+   "protocol_implemented": true,
+   "automated_tests": [
+    "crates/awr-team-pg/tests/pg_skeleton.rs"
+   ],
+   "real_postgresql": true,
+   "two_process_or_fault": false,
+   "real_agent_clients": false,
+   "status": "protocol_covered_not_agent_accepted",
+   "blocker": null
+  },
+  {
+   "id": "TC-036",
+   "title": "源上传路径与包安全",
+   "phase": "P3",
+   "required": true,
+   "protocol_implemented": true,
+   "automated_tests": [
+    "crates/awr-team-pg/tests/pg_source.rs"
+   ],
+   "real_postgresql": true,
+   "two_process_or_fault": false,
+   "real_agent_clients": true,
+   "status": "real_agent_accepted",
+   "blocker": null,
+   "agent_evidence": "ledger/evidence/TEAM-P13/TC-036.json"
+  },
+  {
+   "id": "TC-037",
+   "title": "outbox 重复投递",
+   "phase": "P7",
+   "required": true,
+   "protocol_implemented": true,
+   "automated_tests": [
+    "crates/awr-team-pg/tests/pg_execution.rs"
+   ],
+   "real_postgresql": true,
+   "two_process_or_fault": false,
+   "real_agent_clients": false,
+   "status": "protocol_covered_not_agent_accepted",
+   "blocker": null
+  },
+  {
+   "id": "TC-038",
+   "title": "runner 启动边界崩溃",
+   "phase": "P7",
+   "required": true,
+   "protocol_implemented": true,
+   "automated_tests": [
+    "crates/awr-team-pg/tests/pg_execution.rs"
+   ],
+   "real_postgresql": true,
+   "two_process_or_fault": false,
+   "real_agent_clients": false,
+   "status": "protocol_covered_not_agent_accepted",
+   "blocker": null
+  },
+  {
+   "id": "TC-039",
+   "title": "远端断线不能本地接管团队权威",
+   "phase": "P10",
+   "required": true,
+   "protocol_implemented": true,
+   "automated_tests": [
+    "crates/awr-team/tests/access.rs",
+    "crates/awr-cli/tests/team_cli.rs"
+   ],
+   "real_postgresql": false,
+   "two_process_or_fault": false,
+   "real_agent_clients": true,
+   "status": "real_agent_accepted",
+   "blocker": null,
+   "agent_evidence": "ledger/evidence/TEAM-P13/TC-039.json"
+  },
+  {
+   "id": "TC-040",
+   "title": "恢复后旧 coordinator epoch 被隔离",
+   "phase": "P9",
+   "required": true,
+   "protocol_implemented": true,
+   "automated_tests": [
+    "crates/awr-team-pg/tests/pg_import.rs"
+   ],
+   "real_postgresql": true,
+   "two_process_or_fault": false,
+   "real_agent_clients": false,
+   "status": "protocol_covered_not_agent_accepted",
+   "blocker": null
+  },
+  {
+   "id": "TC-041",
+   "title": "个人模式回归",
+   "phase": "P10",
+   "required": true,
+   "protocol_implemented": true,
+   "automated_tests": [
+    "crates/awr-team/tests/access.rs",
+    "crates/awr-cli/tests/team_cli.rs"
+   ],
+   "real_postgresql": false,
+   "two_process_or_fault": false,
+   "real_agent_clients": true,
+   "status": "real_agent_accepted",
+   "blocker": null,
+   "agent_evidence": "ledger/evidence/TEAM-P13/TC-041.json"
+  },
+  {
+   "id": "TC-042",
+   "title": "canonical 编码与版本转换",
+   "phase": "P1",
+   "required": true,
+   "protocol_implemented": true,
+   "automated_tests": [
+    "crates/awr-team/tests/contract_rules.rs",
+    "crates/awr-team/tests/access.rs"
+   ],
+   "real_postgresql": false,
+   "two_process_or_fault": false,
+   "real_agent_clients": true,
+   "status": "real_agent_accepted",
+   "blocker": null,
+   "agent_evidence": "ledger/evidence/TEAM-P13/TC-042.json"
+  },
+  {
+   "id": "TC-043",
+   "title": "显式远端项目选择",
+   "phase": "P10",
+   "required": true,
+   "protocol_implemented": true,
+   "automated_tests": [
+    "crates/awr-team/tests/access.rs",
+    "crates/awr-cli/tests/team_cli.rs"
+   ],
+   "real_postgresql": false,
+   "two_process_or_fault": false,
+   "real_agent_clients": true,
+   "status": "real_agent_accepted",
+   "blocker": null,
+   "agent_evidence": "ledger/evidence/TEAM-P13/TC-043.json"
+  },
+  {
+   "id": "TC-044",
+   "title": "目录前缀资源冲突",
+   "phase": "P6",
+   "required": true,
+   "protocol_implemented": true,
+   "automated_tests": [
+    "crates/awr-team-pg/tests/pg_graph.rs"
+   ],
+   "real_postgresql": true,
+   "two_process_or_fault": false,
+   "real_agent_clients": true,
+   "status": "real_agent_accepted",
+   "blocker": null,
+   "agent_evidence": "ledger/evidence/TEAM-P13/TC-044.json"
+  },
+  {
+   "id": "TC-045",
+   "title": "不支持的工作范围明确拒绝",
+   "phase": "P6",
+   "required": true,
+   "protocol_implemented": true,
+   "automated_tests": [
+    "crates/awr-team-pg/tests/pg_graph.rs"
+   ],
+   "real_postgresql": true,
+   "two_process_or_fault": false,
+   "real_agent_clients": true,
+   "status": "real_agent_accepted",
+   "blocker": null,
+   "agent_evidence": "ledger/evidence/TEAM-P13/TC-045.json"
+  },
+  {
+   "id": "TC-046",
+   "title": "批量源发布没有半套生效投影",
+   "phase": "P6",
+   "required": true,
+   "protocol_implemented": true,
+   "automated_tests": [
+    "crates/awr-team-pg/tests/pg_graph.rs"
+   ],
+   "real_postgresql": true,
+   "two_process_or_fault": false,
+   "real_agent_clients": false,
+   "status": "protocol_covered_not_agent_accepted",
+   "blocker": null
+  },
+  {
+   "id": "TC-047",
+   "title": "迁移 / schema 不兼容时禁止误启动",
+   "phase": "P9",
+   "required": true,
+   "protocol_implemented": true,
+   "automated_tests": [
+    "crates/awr-team-pg/tests/pg_import.rs"
+   ],
+   "real_postgresql": true,
+   "two_process_or_fault": false,
+   "real_agent_clients": false,
+   "status": "protocol_covered_not_agent_accepted",
+   "blocker": null
+  },
+  {
+   "id": "TC-048",
+   "title": "凭证撤销与已接受请求边界",
+   "phase": "P9",
+   "required": true,
+   "protocol_implemented": true,
+   "automated_tests": [
+    "crates/awr-team-pg/tests/pg_import.rs"
+   ],
+   "real_postgresql": true,
+   "two_process_or_fault": false,
+   "real_agent_clients": false,
+   "status": "protocol_covered_not_agent_accepted",
+   "blocker": null
+  },
+  {
+   "id": "TC-049",
+   "title": "图和发布预算超限不得假装完整",
+   "phase": "P6",
+   "required": true,
+   "protocol_implemented": true,
+   "automated_tests": [
+    "crates/awr-team-pg/tests/pg_graph.rs"
+   ],
+   "real_postgresql": true,
+   "two_process_or_fault": false,
+   "real_agent_clients": true,
+   "status": "real_agent_accepted",
+   "blocker": null,
+   "agent_evidence": "ledger/evidence/TEAM-P13/TC-049.json"
+  },
+  {
+   "id": "TC-050",
+   "title": "实际改动超出申报范围",
+   "phase": "P7",
+   "required": true,
+   "protocol_implemented": true,
+   "automated_tests": [
+    "crates/awr-team-pg/tests/pg_execution.rs"
+   ],
+   "real_postgresql": true,
+   "two_process_or_fault": false,
+   "real_agent_clients": true,
+   "status": "real_agent_accepted",
+   "blocker": null,
+   "agent_evidence": "ledger/evidence/TEAM-P13/TC-050.json"
+  },
+  {
+   "id": "TC-051",
+   "title": "普通确认类策略不得由执行者降级",
+   "phase": "P8",
+   "required": true,
+   "protocol_implemented": true,
+   "automated_tests": [
+    "crates/awr-team-pg/tests/pg_review.rs"
+   ],
+   "real_postgresql": true,
+   "two_process_or_fault": false,
+   "real_agent_clients": true,
+   "status": "real_agent_accepted",
+   "blocker": null,
+   "agent_evidence": "ledger/evidence/TEAM-P13/TC-051.json"
+  },
+  {
+   "id": "TC-052",
+   "title": "子任务结束不能替代父级集成验收",
+   "phase": "P6",
+   "required": true,
+   "protocol_implemented": true,
+   "automated_tests": [
+    "crates/awr-team-pg/tests/pg_graph.rs"
+   ],
+   "real_postgresql": true,
+   "two_process_or_fault": false,
+   "real_agent_clients": true,
+   "status": "real_agent_accepted",
+   "blocker": null,
+   "agent_evidence": "ledger/evidence/TEAM-P13/TC-052.json"
+  },
+  {
+   "id": "TC-053",
+   "title": "取消晚到不能伪造已撤销结果",
+   "phase": "P7",
+   "required": true,
+   "protocol_implemented": true,
+   "automated_tests": [
+    "crates/awr-team-pg/tests/pg_execution.rs"
+   ],
+   "real_postgresql": true,
+   "two_process_or_fault": false,
+   "real_agent_clients": false,
+   "status": "protocol_covered_not_agent_accepted",
+   "blocker": null
+  },
+  {
+   "id": "TC-054",
+   "title": "外部 fencing 能力显式分级",
+   "phase": "P7",
+   "required": true,
+   "protocol_implemented": true,
+   "automated_tests": [
+    "crates/awr-team-pg/tests/pg_execution.rs"
+   ],
+   "real_postgresql": true,
+   "two_process_or_fault": false,
+   "real_agent_clients": false,
+   "status": "protocol_covered_not_agent_accepted",
+   "blocker": null
+  },
+  {
+   "id": "TC-055",
+   "title": "评审材料变化使旧批准失效",
+   "phase": "P8",
+   "required": true,
+   "protocol_implemented": true,
+   "automated_tests": [
+    "crates/awr-team-pg/tests/pg_review.rs"
+   ],
+   "real_postgresql": true,
+   "two_process_or_fault": false,
+   "real_agent_clients": true,
+   "status": "real_agent_accepted",
+   "blocker": null,
+   "agent_evidence": "ledger/evidence/TEAM-P13/TC-055.json"
+  },
+  {
+   "id": "TC-056",
+   "title": "选定证据缺失不能由另一个报告替代",
+   "phase": "P8",
+   "required": true,
+   "protocol_implemented": true,
+   "automated_tests": [
+    "crates/awr-team-pg/tests/pg_review.rs"
+   ],
+   "real_postgresql": true,
+   "two_process_or_fault": false,
+   "real_agent_clients": true,
+   "status": "real_agent_accepted",
+   "blocker": null,
+   "agent_evidence": "ledger/evidence/TEAM-P13/TC-056.json"
+  },
+  {
+   "id": "TC-057",
+   "title": "重启不会刷新租约期限",
+   "phase": "P5",
+   "required": true,
+   "protocol_implemented": true,
+   "automated_tests": [
+    "crates/awr-team-pg/tests/pg_lease.rs"
+   ],
+   "real_postgresql": true,
+   "two_process_or_fault": false,
+   "real_agent_clients": false,
+   "status": "protocol_covered_not_agent_accepted",
+   "blocker": null
+  },
+  {
+   "id": "TC-058",
+   "title": "交接只迁移工作资料不伪称私有会话恢复",
+   "phase": "P5",
+   "required": true,
+   "protocol_implemented": true,
+   "automated_tests": [
+    "crates/awr-team-pg/tests/pg_lease.rs"
+   ],
+   "real_postgresql": true,
+   "two_process_or_fault": false,
+   "real_agent_clients": true,
+   "status": "real_agent_accepted",
+   "blocker": null,
+   "agent_evidence": "ledger/evidence/TEAM-P13/TC-058.json"
+  },
+  {
+   "id": "TC-059",
+   "title": "64位版本数字无精度损失",
+   "phase": "P10",
+   "required": true,
+   "protocol_implemented": true,
+   "automated_tests": [
+    "crates/awr-team/tests/access.rs",
+    "crates/awr-cli/tests/team_cli.rs"
+   ],
+   "real_postgresql": false,
+   "two_process_or_fault": false,
+   "real_agent_clients": true,
+   "status": "real_agent_accepted",
+   "blocker": null,
+   "agent_evidence": "ledger/evidence/TEAM-P13/TC-059.json"
+  },
+  {
+   "id": "TC-060",
+   "title": "快照与增量衔接不漏事件",
+   "phase": "P10",
+   "required": true,
+   "protocol_implemented": true,
+   "automated_tests": [
+    "crates/awr-team/tests/access.rs",
+    "crates/awr-cli/tests/team_cli.rs"
+   ],
+   "real_postgresql": false,
+   "two_process_or_fault": false,
+   "real_agent_clients": false,
+   "status": "protocol_covered_not_agent_accepted",
+   "blocker": null
+  },
+  {
+   "id": "TC-061",
+   "title": "解析器升级不能静默改已生效合同",
+   "phase": "P3",
+   "required": true,
+   "protocol_implemented": true,
+   "automated_tests": [
+    "crates/awr-team-pg/tests/pg_source.rs"
+   ],
+   "real_postgresql": true,
+   "two_process_or_fault": false,
+   "real_agent_clients": false,
+   "status": "protocol_covered_not_agent_accepted",
+   "blocker": null
+  },
+  {
+   "id": "TC-062",
+   "title": "上游变更使下游旧依据失效",
+   "phase": "P6",
+   "required": true,
+   "protocol_implemented": true,
+   "automated_tests": [
+    "crates/awr-team-pg/tests/pg_graph.rs"
+   ],
+   "real_postgresql": true,
+   "two_process_or_fault": false,
+   "real_agent_clients": true,
+   "status": "real_agent_accepted",
+   "blocker": null,
+   "agent_evidence": "ledger/evidence/TEAM-P13/TC-062.json"
+  },
+  {
+   "id": "TC-063",
+   "title": "dirty worktree 必须绑定实际字节",
+   "phase": "P8",
+   "required": true,
+   "protocol_implemented": true,
+   "automated_tests": [
+    "crates/awr-team-pg/tests/pg_review.rs"
+   ],
+   "real_postgresql": true,
+   "two_process_or_fault": false,
+   "real_agent_clients": true,
+   "status": "real_agent_accepted",
+   "blocker": null,
+   "agent_evidence": "ledger/evidence/TEAM-P13/TC-063.json"
+  },
+  {
+   "id": "TC-064",
+   "title": "历史身份与证据导入不提升可信度",
+   "phase": "P9",
+   "required": true,
+   "protocol_implemented": true,
+   "automated_tests": [
+    "crates/awr-team-pg/tests/pg_import.rs"
+   ],
+   "real_postgresql": true,
+   "two_process_or_fault": false,
+   "real_agent_clients": true,
+   "status": "real_agent_accepted",
+   "blocker": null,
+   "agent_evidence": "ledger/evidence/TEAM-P13/TC-064.json"
+  },
+  {
+   "id": "TC-065",
+   "title": "数据库存在但必要产物缺失时恢复失败关闭",
+   "phase": "P9",
+   "required": true,
+   "protocol_implemented": true,
+   "automated_tests": [
+    "crates/awr-team-pg/tests/pg_import.rs"
+   ],
+   "real_postgresql": true,
+   "two_process_or_fault": false,
+   "real_agent_clients": false,
+   "status": "protocol_covered_not_agent_accepted",
+   "blocker": null
+  },
+  {
+   "id": "TC-066",
+   "title": "恢复 outbox 不能自动重复历史副作用",
+   "phase": "P9",
+   "required": true,
+   "protocol_implemented": true,
+   "automated_tests": [
+    "crates/awr-team-pg/tests/pg_import.rs"
+   ],
+   "real_postgresql": true,
+   "two_process_or_fault": false,
+   "real_agent_clients": false,
+   "status": "protocol_covered_not_agent_accepted",
+   "blocker": null
+  },
+  {
+   "id": "TC-067",
+   "title": "团队已有新写入时禁止直接回滚旧 SQLite",
+   "phase": "P9",
+   "required": true,
+   "protocol_implemented": true,
+   "automated_tests": [
+    "crates/awr-team-pg/tests/pg_import.rs"
+   ],
+   "real_postgresql": true,
+   "two_process_or_fault": false,
+   "real_agent_clients": false,
+   "status": "protocol_covered_not_agent_accepted",
+   "blocker": null
+  },
+  {
+   "id": "TC-068",
+   "title": "旧本地客户端产生的状态不覆盖团队",
+   "phase": "P9",
+   "required": true,
+   "protocol_implemented": true,
+   "automated_tests": [
+    "crates/awr-team-pg/tests/pg_import.rs"
+   ],
+   "real_postgresql": true,
+   "two_process_or_fault": false,
+   "real_agent_clients": false,
+   "status": "protocol_covered_not_agent_accepted",
+   "blocker": null
+  },
+  {
+   "id": "TC-069",
+   "title": "HTTP MCP CLI 三入口语义一致",
+   "phase": "P10",
+   "required": true,
+   "protocol_implemented": true,
+   "automated_tests": [
+    "crates/awr-team/tests/access.rs",
+    "crates/awr-cli/tests/team_cli.rs"
+   ],
+   "real_postgresql": false,
+   "two_process_or_fault": false,
+   "real_agent_clients": true,
+   "status": "real_agent_accepted",
+   "blocker": null,
+   "agent_evidence": "ledger/evidence/TEAM-P13/TC-069.json"
   }
+ ],
+ "live_agent_run": {
+  "status": "locally_verified",
+  "git_head": "313f501b1a36086dff68d081b03f18acd6acf18e",
+  "clients": [
+   {
+    "product": "Kimi Code CLI",
+    "version": "2.0.0",
+    "actor_id": "kimi-cli"
+   },
+   {
+    "product": "ZCode CLI",
+    "version": "0.16.5",
+    "actor_id": "zcode-cli"
+   }
+  ],
+  "project_key": "p11-live",
+  "work_id": "work-p11",
+  "receipt_id": "01M2RW29SNQ0738MVTCKF0ZSX7",
+  "execution_id": "01M2RW1CPY4JYJB8E9C9A81YA3",
+  "oracle": {
+   "receipts": 1,
+   "active_holder": "zcode-cli",
+   "executions": 1,
+   "pass": true
+  },
+  "flow": "kimi claimed and fixed add(); handoff; zcode verified and extended tests; human reviewer approved; complete",
+  "evidence_path": "ledger/evidence/TEAM-P11/live-dual-cli.json",
+  "not_a_release_tag": true
+ }
 }
