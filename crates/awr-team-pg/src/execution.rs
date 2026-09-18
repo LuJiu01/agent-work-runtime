@@ -4,7 +4,6 @@ use crate::tx::{bind_scope, new_id};
 use serde::Serialize;
 use serde_json::{Value, json};
 use sha2::{Digest, Sha256};
-use tokio_postgres::Client;
 
 #[derive(Clone, Debug, Serialize)]
 pub struct ExecutionRecord {
@@ -34,16 +33,18 @@ pub struct OutboxDelivery {
 }
 
 pub struct ExecutionStore {
-    url: String,
+    pool: crate::PgPool,
 }
 
 impl ExecutionStore {
     pub fn new(url: impl Into<String>) -> Self {
-        Self { url: url.into() }
+        Self {
+            pool: crate::PgPool::new(url),
+        }
     }
 
-    async fn connect(&self) -> PgResult<Client> {
-        crate::connect(&self.url).await
+    async fn connect(&self) -> PgResult<crate::PgClient> {
+        self.pool.get().await
     }
 
     pub async fn prepare(

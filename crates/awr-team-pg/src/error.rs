@@ -88,6 +88,8 @@ pub enum PgError {
     RollbackForbidden,
     #[error("{0}")]
     Db(#[from] tokio_postgres::Error),
+    #[error("connection pool: {0}")]
+    Pool(#[from] deadpool_postgres::PoolError),
     #[error("{0}")]
     Protocol(String),
 }

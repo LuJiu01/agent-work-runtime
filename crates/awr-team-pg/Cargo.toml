@@ -14,10 +14,16 @@ serde_json.workspace = true
 thiserror.workspace = true
 ulid.workspace = true
 sha2.workspace = true
-tokio = { version = "1", features = ["macros", "rt-multi-thread", "time"] }
+tokio = { version = "1", features = ["macros", "rt-multi-thread", "time", "sync"] }
 tokio-postgres = { version = "0.7", features = ["with-serde_json-1"] }
+deadpool-postgres.workspace = true
+tokio-postgres-rustls = { version = "0.13", optional = true }
+rustls = { version = "0.23", optional = true }
+webpki-roots = { version = "0.26", optional = true }
 
 [features]
 default = []
 # Opt-in real PostgreSQL tests. Default CI must not list them as ignored tests.
 pg-tests = []
+# Optional TLS for PostgreSQL connections (rustls). Client default builds stay TLS-free.
+tls = ["dep:tokio-postgres-rustls", "dep:rustls", "dep:webpki-roots"]

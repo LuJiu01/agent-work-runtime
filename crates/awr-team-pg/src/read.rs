@@ -2,7 +2,7 @@ use crate::error::{PgError, PgResult};
 use crate::tx::{bind_scope, new_id};
 use serde::{Deserialize, Serialize};
 use serde_json::{Value, json};
-use tokio_postgres::{Client, IsolationLevel};
+use tokio_postgres::IsolationLevel;
 
 pub const CURSOR_PROTOCOL: &str = "awr-team-cursor-v1";
 pub const CAPABILITIES_PROTOCOL: &str = "awr-team";
@@ -131,16 +131,18 @@ pub struct EventPage {
 }
 
 pub struct ReadStore {
-    url: String,
+    pool: crate::PgPool,
 }
 
 impl ReadStore {
     pub fn new(url: impl Into<String>) -> Self {
-        Self { url: url.into() }
+        Self {
+            pool: crate::PgPool::new(url),
+        }
     }
 
-    async fn connect(&self) -> PgResult<Client> {
-        crate::connect(&self.url).await
+    async fn connect(&self) -> PgResult<crate::PgClient> {
+        self.pool.get().await
     }
 
     pub async fn prepare(
@@ -445,7 +447,7 @@ impl crate::tx::TeamStore {
         if events.is_empty() {
             return Err(PgError::Protocol("at least one event required".into()));
         }
-        let mut client = crate::connect(self.url()).await?;
+        let mut client = self.connect().await?;
         let tx = client.transaction().await?;
         bind_scope(&tx, tenant_id, project_id).await?;
         let locked = tx

@@ -2,7 +2,6 @@ use crate::error::{PgError, PgResult};
 use crate::tx::{bind_scope, new_id};
 use serde::Serialize;
 use serde_json::{Value, json};
-use tokio_postgres::Client;
 use tokio_postgres::error::SqlState;
 
 #[derive(Clone, Debug, Serialize)]
@@ -29,16 +28,18 @@ pub struct ClaimRecord {
 }
 
 pub struct LeaseStore {
-    url: String,
+    pool: crate::PgPool,
 }
 
 impl LeaseStore {
     pub fn new(url: impl Into<String>) -> Self {
-        Self { url: url.into() }
+        Self {
+            pool: crate::PgPool::new(url),
+        }
     }
 
-    async fn connect(&self) -> PgResult<Client> {
-        crate::connect(&self.url).await
+    async fn connect(&self) -> PgResult<crate::PgClient> {
+        self.pool.get().await
     }
 
     pub async fn start_session(
