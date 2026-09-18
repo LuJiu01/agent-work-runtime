@@ -38,9 +38,17 @@ or configure a coding agent.
 AWR session. `--from-session` **resumes** a predecessor and binds the new
 conversation to the successor.
 
-`codex` and `kimi` are documented native dialects for hook field shapes. They
-are not the centre of the product. Unknown `--client` values are rejected;
+`--client` is **required** on every client subcommand. No dialect is a default,
+so omitting it fails loudly with a usage error instead of silently assuming
+one. `codex` and `kimi` are documented native dialects for hook field shapes.
+They are not the centre of the product. Unknown `--client` values are rejected;
 do not add a new enum for every editor.
+
+Compatibility: hook commands written by `awr client install` already pin
+`--client codex` explicitly, so installed adapters are unaffected. Operator
+scripts that omitted `--client` must now name their dialect; existing bindings,
+dedup keys and provider metadata are unchanged because explicit
+`--client codex` resolves to the same identity as before.
 
 Host names travel inside the external session ID, not the client enum:
 `--client generic --external-session cursor:8f3a…`. The `<host>:` prefix keeps

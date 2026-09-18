@@ -14,8 +14,8 @@ use std::{
 
 #[derive(Debug, Args)]
 pub struct Identity {
-    /// Host dialect. Use `generic` for L0 hosts. `codex` and `kimi` are documented native dialects. Default `codex` preserves existing hook installs.
-    #[arg(long, default_value = "codex")]
+    /// Host dialect. Required everywhere: `generic` for L0 hosts; `codex` and `kimi` are documented native dialects. No default, so no dialect is implied as the product centre.
+    #[arg(long)]
     client: String,
     #[arg(long)]
     external_session: String,
@@ -54,16 +54,16 @@ pub enum ClientCommand {
     },
     /// Receive a documented lifecycle event as JSON on stdin; no transcript bodies are read.
     Hook {
-        /// Host dialect for the event envelope. Use `generic` unless a documented native dialect applies.
-        #[arg(long, default_value = "codex")]
+        /// Host dialect for the event envelope. Required: use `generic` unless a documented native dialect applies.
+        #[arg(long)]
         client: String,
         #[arg(long)]
         work: String,
     },
     /// Preview or install an L2 project-local lifecycle adapter. Currently Codex only; other hosts stay on the L0 generic receiver.
     Install {
-        /// Host dialect. Only `codex` currently writes hook files.
-        #[arg(long, default_value = "codex")]
+        /// Host dialect. Required. Only `codex` currently writes hook files.
+        #[arg(long)]
         client: String,
         #[arg(long)]
         work: String,
