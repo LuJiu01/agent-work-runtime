@@ -56,7 +56,21 @@ async fn schema_version(client: &Client) -> PgResult<Option<i32>> {
         .await
     {
         Ok(Some(row)) => Ok(Some(row.get(0))),
-        Ok(None) | Err(_) => Ok(None),
+        Ok(None) => Ok(None),
+        // Only an absent schema/table means "not initialized". Other read
+        // errors (for example revoked SELECT) must surface as themselves,
+        // not be misreported as a missing database (CR #36 P2-1).
+        Err(error) => {
+            if error
+                .as_db_error()
+                .map(|db| *db.code() == tokio_postgres::error::SqlState::UNDEFINED_TABLE)
+                .unwrap_or(false)
+            {
+                Ok(None)
+            } else {
+                Err(PgError::Db(error))
+            }
+        }
     }
 }
 

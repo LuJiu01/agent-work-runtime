@@ -30,12 +30,24 @@ impl TeamStore {
         }
     }
 
+    /// Build from a validated `tokio_postgres::Config` (see PgPool::from_config).
+    pub fn from_config(config: tokio_postgres::Config) -> Self {
+        Self {
+            pool: crate::PgPool::from_config(config),
+        }
+    }
+
     pub(crate) async fn connect(&self) -> PgResult<crate::PgClient> {
         self.pool.get().await
     }
 
     pub async fn execute(&self, request: CommandRequest) -> PgResult<CommandOutcome> {
         let mut client = self.connect().await?;
+        // The command entry must refuse an incompatible or half-migrated
+        // database BEFORE any state change; `awr-server check` alone does not
+        // protect this path (CR #36 P2-2). Fails before the transaction opens,
+        // so business state, revisions, events and receipts stay untouched.
+        crate::migrate::check_schema(&client).await?;
         let request_hash = hash_request(&request)?;
         let tx = client.transaction().await?;
         bind_scope(&tx, &request.tenant_id, &request.project_id).await?;
@@ -205,7 +217,10 @@ async fn apply_op(
                 &[&request.tenant_id, &request.project_id, &scope_id, &work_id],
             )
             .await?;
-            Ok(json!({"op":"work.touch","work_id":work_id,"revision":revision}))
+            // Version values are decimal strings end to end; a JSON number
+            // would lose precision past 2^53 for JavaScript consumers, and
+            // this payload is persisted and replayed verbatim (CR #36 P2-4).
+            Ok(json!({"op":"work.touch","work_id":work_id,"revision":revision.to_string()}))
         }
         other => Err(PgError::Protocol(format!("unsupported op {other}"))),
     }

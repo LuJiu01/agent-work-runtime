@@ -16,7 +16,10 @@ impl Bootstrap {
                  REVOKE UPDATE, DELETE ON awr_team.evidence FROM {ident};
                  REVOKE UPDATE, DELETE ON awr_team.review_decisions FROM {ident};
                  REVOKE UPDATE, DELETE ON awr_team.completion_receipts FROM {ident};
-                 REVOKE ALL ON awr_team.schema_state FROM {ident};"
+                 REVOKE ALL ON awr_team.schema_state FROM {ident};
+                 -- The app role must read the schema version (check_schema at
+                 -- the command entry) but must never modify it (CR #36 P2-1).
+                 GRANT SELECT ON awr_team.schema_state TO {ident};"
             ))
             .await?;
         Ok(())
