@@ -171,9 +171,18 @@
 
   // ───────────────────────── API ─────────────────────────
 
+  // 桥接要求状态变更请求带这个头。第三方页面发不出自定义头（会触发 CORS 预检，
+  // 而桥接不给预检放行），所以它同时也是 CSRF 防护。
+  const GUARD_HEADER = 'X-AWR-Inspector';
+
   async function callApi(path, options) {
+    const opts = Object.assign({}, options);
+    opts.headers = Object.assign(
+      { 'content-type': 'application/json', [GUARD_HEADER]: '1' },
+      opts.headers
+    );
     try {
-      const res = await fetch(path, Object.assign({ headers: { 'content-type': 'application/json' } }, options));
+      const res = await fetch(path, opts);
       return await res.json();
     } catch (err) {
       return { ok: false, error: { code: 'BridgeUnreachable', message: String(err.message) } };
@@ -404,6 +413,14 @@
       DemoMode: '当前是演示模式，下面显示的是内置样本数据。',
       BridgeUnreachable: '连不上本地桥接进程。确认 node server.js 还在跑。',
       NotJson: 'awr 返回的内容不是 JSON。展开下方「原始 JSON」看它到底输出了什么。',
+      OutcomeUnknown: '这条命令没有被终止，可能已经生效。先在终端里查一下当前状态，确认之后再决定要不要重跑——不要直接点重试。',
+      BridgeTimeout: '只读命令超时已终止，重试是安全的。',
+      ReindexNotAllowed: '重新索引默认关闭。用 --allow-reindex 重启桥接进程才能从界面触发。',
+      OutputTooLarge: '输出太大，桥接不转发。请在终端里直接跑这条命令。',
+      BridgeBusy: '同时在跑的命令太多，稍等一下再点。',
+      ForbiddenHost: '请求的 Host 不是本机回环地址。请用 http://127.0.0.1:<端口> 打开。',
+      ForbiddenOrigin: '请求来自别的源，已拒绝。',
+      MissingGuardHeader: '状态变更请求缺少校验头，已拒绝。',
     }[code];
 
     const box = el('div', 'state err');
@@ -1033,6 +1050,14 @@
 
   async function doReindex() {
     const btn = $('reindexBtn');
+
+    // 这是界面上唯一会改动 AWR 状态的操作，明确确认一次。
+    const okToRun = window.confirm(
+      '重新索引会刷新 AWR 的源投影，并推进项目 revision。\n\n' +
+      '它不会改动你的 Markdown / YAML 源文件。\n\n要继续吗？'
+    );
+    if (!okToRun) return;
+
     btn.disabled = true;
     const old = btn.textContent;
     btn.textContent = '索引中…';
@@ -1182,7 +1207,7 @@
       html: [
         '<p>你的 coding agent 每开一个新会话，都得先搞清楚「这个项目在干嘛、我该接着做什么」。AWR 就是替它记住这些事的那一层。</p>',
         '<p>这个控制台是给<b>人</b>看的那一面：agent 看到的状态，你也能看到同一份。</p>',
-        '<div class="tour-art"><div class="row"><span>源文件</span><span class="bar on"></span></div><div class="row"><span>AWR 索引</span><span class="bar on"></span></div><div class="row"><span>上下文包</span><span class="bar on" style="max-width:28%"></span></div></div>',
+        '<div class="tour-art"><div class="row"><span>源文件</span><span class="bar on"></span></div><div class="row"><span>AWR 索引</span><span class="bar on"></span></div><div class="row"><span>上下文包</span><span class="bar on bar-short"></span></div></div>',
       ].join(''),
     },
     {

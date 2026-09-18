@@ -3,10 +3,8 @@
 <head>
 <meta charset="utf-8">
 <meta name="viewport" content="width=device-width,initial-scale=1,viewport-fit=cover">
-<title>AWR Console</title>
-<link rel="preconnect" href="https://fonts.googleapis.com">
-<link rel="preconnect" href="https://fonts.gstatic.com" crossorigin>
-<link rel="stylesheet" href="https://fonts.googleapis.com/css2?family=IBM+Plex+Mono:wght@400;500;600&family=Instrument+Sans:wght@400;500;600;700&display=swap">
+<title>AWR Inspector</title>
+<meta http-equiv="content-security-policy" content="default-src 'self'; script-src 'self'; style-src 'self'; connect-src 'self'; font-src 'self'; img-src 'self' data:; object-src 'none'; base-uri 'none'; form-action 'self'">
 <link rel="stylesheet" href="styles.css">
 <link rel="icon" href="data:image/svg+xml,<svg xmlns='http://www.w3.org/2000/svg' viewBox='0 0 24 24'><text y='20' font-size='20'>🧭</text></svg>">
 </head>
@@ -20,7 +18,7 @@
       <path class="m2" d="M8 12.5l3 3 5-6"/>
       <circle class="m3" cx="17.5" cy="6.5" r="1.6" stroke="none"/>
     </svg>
-    AWR<span class="sep">/</span>CONSOLE
+    AWR<span class="sep">/</span>INSPECTOR
   </span>
   <span class="ver" id="verTag">v0.4.0</span>
   <span class="projpick" title="当前项目目录">
@@ -86,6 +84,10 @@
             AWR 把项目里的 Markdown / YAML 索引成可查询的状态。这一页是它对
             「当前进行中、可以领、在等人、被卡住」四个队列的回答。
           </p>
+          <p class="lede lede-note">
+            这是一个观察工具：它不编辑权威源文件，不推进工作状态，不是 agent 客户端，
+            也不替代 CLI 或 MCP。
+          </p>
         </div>
         <div class="headline">
           <span class="big" id="heroBig">—</span>
@@ -125,7 +127,7 @@
               <b>waiting</b> 在等一个回答或一个前置结果、<b>blocked</b> 真的被卡住了。
               先看 blocked 和 waiting，那里才是进度停下来的地方。
             </p>
-            <div class="chips" style="padding:12px 18px 0" id="queueTabs"></div>
+            <div class="chips chips-inset" id="queueTabs"></div>
             <ul class="loops" id="queueList"></ul>
           </div>
 
@@ -154,7 +156,7 @@
             所以你在界面上看到的每条命令，复制到终端里跑，结果是一样的。
             你的 agent 则通过 MCP 拿同样的数据。
           </p>
-          <div class="body" style="display:grid;gap:14px">
+          <div class="body body-stack">
             <div class="cmd">
               <span class="prompt">$</span>
               <code id="mcpCmd">awr-mcp --project …</code>
@@ -167,7 +169,7 @@
               <span class="chip">awr_context_compile</span>
               <span class="chip">awr_search</span>
             </div>
-            <p class="figure-note" style="margin:0">
+            <p class="figure-note flush">
               这五个是 agent 侧的只读工具，跑在一次性的内存快照上，不会改动你的项目状态。
             </p>
           </div>
@@ -286,7 +288,7 @@
               <span class="hint" id="compileHint">编译只读不写，随便试。</span>
             </div>
 
-            <div style="margin-top:18px">
+            <div class="gap-above">
               <div class="cmd">
                 <span class="prompt">$</span>
                 <code id="cliMirror"></code>
@@ -326,7 +328,7 @@
           <header>
             <h2>渲染出来的包</h2>
             <span class="sub">这就是 agent 会读到的全部内容</span>
-            <button class="copy" data-copy-target="packetPreview" style="margin-left:0">复制全文</button>
+            <button class="copy copy-flush" data-copy-target="packetPreview">复制全文</button>
           </header>
           <div class="body">
             <pre class="packet" id="packetPreview"></pre>
@@ -356,7 +358,7 @@
           <header>
             <h2 id="srcTitle">文件</h2>
             <span class="sub" id="srcSub"></span>
-            <button class="btn ghost" id="reindexBtn" style="margin-left:12px">重新索引</button>
+            <button class="btn ghost push-left" id="reindexBtn">重新索引…</button>
           </header>
           <div class="scroller">
             <table>
@@ -367,7 +369,7 @@
             </table>
           </div>
           <div id="srcEmpty"></div>
-          <div class="body" style="border-top:1px solid var(--line-soft)">
+          <div class="body body-divided">
             <div class="cmd">
               <span class="prompt">$</span>
               <code id="srcCmd">awr intake inspect --json</code>
@@ -399,7 +401,7 @@
     </section>
 
     <footer class="page">
-      <span>AWR Console · 本地只读控制台</span>
+      <span>AWR Inspector · 本地观察工具</span>
       <span><a href="https://github.com/originoneai/agent-work-runtime" target="_blank" rel="noopener">github.com/originoneai/agent-work-runtime</a></span>
       <span id="footMode"></span>
     </footer>
@@ -425,7 +427,7 @@
   <div class="sheet" role="dialog" aria-modal="true" aria-labelledby="glossTitle">
     <header>
       <h3 id="glossTitle">术语表</h3>
-      <button class="icon-btn" id="glossClose" style="margin-left:auto">关闭</button>
+      <button class="icon-btn push-end" id="glossClose">关闭</button>
     </header>
     <div class="body">
       <dl class="gloss">
@@ -458,6 +460,9 @@
 
         <dt>source of record（记录来源）</dt>
         <dd>你的 Markdown 和 YAML。AWR 的 SQLite 只是投影，随时可以重建；改内容永远是改源文件。</dd>
+
+        <dt>刷新与只读</dt>
+        <dd>这个工具不改你的 Markdown / YAML，也不推进任何工作状态。但读命令本身会刷新 AWR 的源投影（<code>status</code> 会报 <code>source_refresh_performed: true</code>），所以它不是「运行时完全只读」。重新索引是一次显式的维护操作，默认关闭。</dd>
 
         <dt>MCP</dt>
         <dd>agent 连接 AWR 的协议。控制台走 CLI，agent 走 MCP，两边读到的是同一份状态。</dd>
