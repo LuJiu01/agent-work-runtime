@@ -1,9 +1,8 @@
 use crate::error::{PgError, PgResult};
 use serde_json::{Value, json};
-use tokio_postgres::Client;
 
 pub struct TeamStore {
-    url: String,
+    pool: crate::PgPool,
 }
 
 #[derive(Clone, Debug)]
@@ -26,15 +25,13 @@ pub struct CommandOutcome {
 
 impl TeamStore {
     pub fn new(url: impl Into<String>) -> Self {
-        Self { url: url.into() }
+        Self {
+            pool: crate::PgPool::new(url),
+        }
     }
 
-    pub(crate) fn url(&self) -> &str {
-        &self.url
-    }
-
-    async fn connect(&self) -> PgResult<Client> {
-        crate::connect(&self.url).await
+    pub(crate) async fn connect(&self) -> PgResult<crate::PgClient> {
+        self.pool.get().await
     }
 
     pub async fn execute(&self, request: CommandRequest) -> PgResult<CommandOutcome> {

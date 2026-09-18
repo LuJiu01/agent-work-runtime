@@ -4,7 +4,6 @@ use awr_team::{CompletionView, EvidenceBundle, EvidenceGrade, ReviewPolicy, curr
 use serde::Serialize;
 use serde_json::{Value, json};
 use sha2::{Digest, Sha256};
-use tokio_postgres::Client;
 
 #[derive(Clone, Debug, Serialize)]
 pub struct EvidenceRecord {
@@ -33,16 +32,18 @@ pub struct CompletionReceipt {
 }
 
 pub struct ReviewStore {
-    url: String,
+    pool: crate::PgPool,
 }
 
 impl ReviewStore {
     pub fn new(url: impl Into<String>) -> Self {
-        Self { url: url.into() }
+        Self {
+            pool: crate::PgPool::new(url),
+        }
     }
 
-    async fn connect(&self) -> PgResult<Client> {
-        crate::connect(&self.url).await
+    async fn connect(&self) -> PgResult<crate::PgClient> {
+        self.pool.get().await
     }
 
     pub async fn record_evidence(

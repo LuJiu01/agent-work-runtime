@@ -23,6 +23,23 @@ parser binding happen before the project lock. The lock only writes already
 hashed, immutable rows. An unactivated candidate cannot be read as the
 current contract. A failed activation keeps the previous `active_snapshot_id`.
 
+## Connection pooling and TLS
+
+Domain stores acquire connections from a `deadpool-postgres` pool instead of
+opening one TCP connection per operation (ADR-0004). Pool size defaults to 8
+per store instance and can be overridden with `AWR_TEAM_PG_POOL_MAX_SIZE`.
+Acquire/create/recycle timeouts are fixed at 10s/5s/5s. Scope binding uses
+transaction-local `set_config`, so fast connection recycling is safe.
+
+Owner migration commands (`migrate`, `check_schema`) keep a dedicated single
+connection and do not use the pool.
+
+TLS is an opt-in `tls` cargo feature (rustls + webpki-roots). With the feature
+enabled, `sslmode=require` in `AWR_TEAM_DATABASE_URL` selects a verified TLS
+connection; `disable`/`prefer` or an omitted sslmode stays plaintext. Without
+the feature, a TLS-requiring URL fails with an explicit error instead of
+silently downgrading.
+
 This is not a production high-availability topology.
 
 ## Consistent reads

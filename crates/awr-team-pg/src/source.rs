@@ -4,7 +4,6 @@ use crate::tx::{bind_scope, new_id};
 use awr_team::{SourceActivationPlan, WorkContract, WorkId};
 use serde_json::{Value, json};
 use sha2::{Digest, Sha256};
-use tokio_postgres::Client;
 
 #[derive(Clone, Debug)]
 pub struct SourceFile {
@@ -41,16 +40,18 @@ pub struct CurrentSource {
 }
 
 pub struct SourceStore {
-    url: String,
+    pool: crate::PgPool,
 }
 
 impl SourceStore {
     pub fn new(url: impl Into<String>) -> Self {
-        Self { url: url.into() }
+        Self {
+            pool: crate::PgPool::new(url),
+        }
     }
 
-    async fn connect(&self) -> PgResult<Client> {
-        crate::connect(&self.url).await
+    async fn connect(&self) -> PgResult<crate::PgClient> {
+        self.pool.get().await
     }
 
     pub async fn ingest(&self, request: IngestRequest) -> PgResult<CandidateRecord> {

@@ -3,7 +3,6 @@ use crate::tx::{bind_scope, new_id};
 use serde::{Deserialize, Serialize};
 use serde_json::{Value, json};
 use std::collections::{HashMap, HashSet, VecDeque};
-use tokio_postgres::Client;
 
 #[derive(Clone, Debug, PartialEq, Eq, Serialize, Deserialize)]
 pub struct DependencyEdge {
@@ -94,16 +93,18 @@ pub fn require_main_scope(scope_id: &str) -> PgResult<()> {
 }
 
 pub struct GraphStore {
-    url: String,
+    pool: crate::PgPool,
 }
 
 impl GraphStore {
     pub fn new(url: impl Into<String>) -> Self {
-        Self { url: url.into() }
+        Self {
+            pool: crate::PgPool::new(url),
+        }
     }
 
-    async fn connect(&self) -> PgResult<Client> {
-        crate::connect(&self.url).await
+    async fn connect(&self) -> PgResult<crate::PgClient> {
+        self.pool.get().await
     }
 
     pub async fn replace_edges(

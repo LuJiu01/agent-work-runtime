@@ -4,7 +4,6 @@ use serde::Serialize;
 use serde_json::{Value, json};
 use sha2::{Digest, Sha256};
 use std::collections::BTreeSet;
-use tokio_postgres::Client;
 
 #[derive(Clone, Debug, Serialize)]
 pub struct InspectReport {
@@ -36,16 +35,18 @@ pub struct RestoreRun {
 }
 
 pub struct ImportStore {
-    url: String,
+    pool: crate::PgPool,
 }
 
 impl ImportStore {
     pub fn new(url: impl Into<String>) -> Self {
-        Self { url: url.into() }
+        Self {
+            pool: crate::PgPool::new(url),
+        }
     }
 
-    async fn connect(&self) -> PgResult<Client> {
-        crate::connect(&self.url).await
+    async fn connect(&self) -> PgResult<crate::PgClient> {
+        self.pool.get().await
     }
 
     pub fn inspect_sources(&self, sources: &[(&str, &str)]) -> PgResult<InspectReport> {
