@@ -7,4 +7,6 @@ services:
       POSTGRES_PASSWORD: awr-test
       POSTGRES_DB: awr_team_test
     ports:
-      - "55432:5432"
+      # Loopback only: a "local verification" default must not listen on
+      # every host interface with repository-fixed credentials (CR #36 P2-3).
+      - "127.0.0.1:55432:5432"
