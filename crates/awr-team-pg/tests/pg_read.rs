@@ -61,6 +61,8 @@ async fn setup() -> (MutexGuard<'static, ()>, Client, String) {
                 ('tenant-a','actor-b','human','B','active');
              INSERT INTO awr_team.projects(tenant_id,id,key,mode,coordinator_epoch,status)
                 VALUES ('tenant-a','project-a','alpha','team','epoch-1','active');
+             INSERT INTO awr_team.project_memberships(tenant_id,project_id,actor_id,role)
+                VALUES ('tenant-a','project-a','actor-b','reviewer');
              INSERT INTO awr_team.work_scopes(tenant_id,project_id,id,name,status)
                 VALUES ('tenant-a','project-a','main','main','active');
              INSERT INTO awr_team.work_items(tenant_id,project_id,id,external_key)
