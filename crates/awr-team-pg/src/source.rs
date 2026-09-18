@@ -201,32 +201,7 @@ impl SourceStore {
         if author == reviewer_actor_id {
             return Err(PgError::AuthorCannotApprove);
         }
-        // The reviewer must be a real, active account with an
-        // approval-capable membership in THIS project. A string that merely
-        // differs from the author proves nothing (CR #37 P2-1).
-        let reviewer = tx
-            .query_opt(
-                "SELECT a.status, m.role
-                 FROM awr_team.actors a
-                 LEFT JOIN awr_team.project_memberships m
-                   ON m.tenant_id=a.tenant_id AND m.actor_id=a.id
-                  AND m.project_id=$2
-                 WHERE a.tenant_id=$1 AND a.id=$3",
-                &[&tenant_id, &project_id, &reviewer_actor_id],
-            )
-            .await?;
-        let Some((status, role)) =
-            reviewer.map(|r| (r.get::<_, String>(0), r.get::<_, Option<String>>(1)))
-        else {
-            return Err(PgError::Forbidden);
-        };
-        if status != "active" {
-            return Err(PgError::Forbidden);
-        }
-        match role.as_deref() {
-            Some("admin") | Some("reviewer") => {}
-            _ => return Err(PgError::Forbidden),
-        }
+        validate_reviewer(&tx, tenant_id, project_id, reviewer_actor_id).await?;
         if digest != candidate_digest {
             return Err(PgError::StaleApproval);
         }
@@ -357,7 +332,7 @@ impl SourceStore {
         }
         let approval = tx
             .query_opt(
-                "SELECT candidate_digest FROM awr_team.source_approvals
+                "SELECT candidate_digest, reviewer_actor_id FROM awr_team.source_approvals
                  WHERE tenant_id=$1 AND project_id=$2 AND proposal_id=$3
                    AND decision='approve'
                  ORDER BY decided_at DESC LIMIT 1",
@@ -366,9 +341,14 @@ impl SourceStore {
             .await?
             .ok_or(PgError::CandidateNotApproved)?;
         let approved_digest: String = approval.get(0);
+        let approval_reviewer: String = approval.get(1);
         if approved_digest != digest {
             return Err(PgError::StaleApproval);
         }
+        // Approvals written before reviewer validation existed (or by any
+        // legacy path) must not activate: the consumed approval is checked
+        // with the SAME rules as a fresh one (CR #54 P2).
+        validate_reviewer(&tx, tenant_id, project_id, &approval_reviewer).await?;
 
         let files = files_from_ref(&source_ref)?;
         let contract = parse_contract(&files)?;
@@ -603,6 +583,42 @@ fn parse_contract(files: &[(String, Vec<u8>)]) -> PgResult<WorkContract> {
     Ok(contract)
 }
 
+/// The reviewer must be a real, active account with an approval-capable
+/// membership in THIS project. A string that merely differs from the author
+/// proves nothing (CR #37 P2-1). Shared by approve() (new approvals) and
+/// activate_inner() (consuming existing approvals, including ones written
+/// before the identity check existed — CR #54 P2).
+async fn validate_reviewer(
+    tx: &tokio_postgres::Transaction<'_>,
+    tenant_id: &str,
+    project_id: &str,
+    reviewer_actor_id: &str,
+) -> PgResult<()> {
+    let reviewer = tx
+        .query_opt(
+            "SELECT a.status, m.role
+             FROM awr_team.actors a
+             LEFT JOIN awr_team.project_memberships m
+               ON m.tenant_id=a.tenant_id AND m.actor_id=a.id
+              AND m.project_id=$2
+             WHERE a.tenant_id=$1 AND a.id=$3",
+            &[&tenant_id, &project_id, &reviewer_actor_id],
+        )
+        .await?;
+    let Some((status, role)) =
+        reviewer.map(|r| (r.get::<_, String>(0), r.get::<_, Option<String>>(1)))
+    else {
+        return Err(PgError::Forbidden);
+    };
+    if status != "active" {
+        return Err(PgError::Forbidden);
+    }
+    match role.as_deref() {
+        Some("admin") | Some("reviewer") => Ok(()),
+        _ => Err(PgError::Forbidden),
+    }
+}
+
 fn files_from_ref(source_ref: &Value) -> PgResult<Vec<(String, Vec<u8>)>> {
     let files = source_ref
         .get("files")
@@ -633,9 +649,7 @@ fn files_from_ref(source_ref: &Value) -> PgResult<Vec<(String, Vec<u8>)>> {
                 .and_then(Value::as_u64)
                 .ok_or_else(|| PgError::Protocol("file byte length missing".into()))?;
             if sha256_hex(&bytes) != expected_sha || bytes.len() as u64 != expected_len {
-                return Err(PgError::Protocol(format!(
-                    "snapshot file drifted from its recorded digest: {path}"
-                )));
+                return Err(PgError::SnapshotDrift(path));
             }
             Ok((path, bytes))
         })

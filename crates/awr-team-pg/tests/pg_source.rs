@@ -425,12 +425,17 @@ async fn tampered_snapshot_text_fails_closed() {
         )
         .await
         .unwrap();
+    // Swap in a DIFFERENT but still valid contract, keeping the recorded
+    // digest/length metadata untouched. Without the digest check the file
+    // would parse and activate fine, so this test only passes while the
+    // integrity check exists (CR #54 P3).
+    let swapped = String::from_utf8(contract_bytes("b")).unwrap();
     admin
         .execute(
             "UPDATE awr_team.source_snapshots
-             SET source_ref_json = jsonb_set(source_ref_json, '{files,0,text}', '\"tampered\"')
+             SET source_ref_json = jsonb_set(source_ref_json, '{files,0,text}', to_jsonb($2::text))
              WHERE id=$1",
-            &[&candidate.snapshot_id],
+            &[&candidate.snapshot_id, &swapped],
         )
         .await
         .unwrap();
@@ -444,5 +449,62 @@ async fn tampered_snapshot_text_fails_closed() {
         )
         .await
         .unwrap_err();
-    assert!(matches!(err, PgError::Protocol(_)), "got {err}");
+    assert!(matches!(err, PgError::SnapshotDrift(_)), "got {err}");
+}
+
+// CR #54 P2: an approval written by the PRE-FIX API (ghost reviewer, valid
+// digest, proposal marked approved) must not activate after the upgrade;
+// adding a valid independent approval then lets the same candidate through.
+#[tokio::test]
+async fn legacy_ghost_approval_cannot_activate_after_upgrade() {
+    let (_lock, admin, store) = setup().await;
+    let candidate = store.ingest(package(PARSER_V1, "a")).await.unwrap();
+    // Reproduce exactly what the pre-fix approve() accepted: a reviewer
+    // string that does not exist, a matching digest, state approved.
+    admin
+        .batch_execute(&format!(
+            "INSERT INTO awr_team.source_approvals(
+                tenant_id, project_id, id, proposal_id, candidate_digest,
+                reviewer_actor_id, decision)
+             VALUES ('tenant-a','project-a','legacy-approval-1','{}','{}','ghost-reviewer','approve');
+             UPDATE awr_team.source_proposals SET state='approved'
+             WHERE id='{}';",
+            candidate.proposal_id, candidate.manifest_digest, candidate.proposal_id
+        ))
+        .await
+        .unwrap();
+    let err = store
+        .activate(
+            TENANT,
+            PROJECT,
+            AUTHOR,
+            &candidate.proposal_id,
+            &plan(&candidate, "0"),
+        )
+        .await
+        .unwrap_err();
+    assert!(matches!(err, PgError::Forbidden), "got {err}");
+    let blocked = store.current(TENANT, PROJECT, "work-a").await.unwrap_err();
+    assert!(matches!(blocked, PgError::InactiveCandidate));
+    // A valid independent approval supersedes the ghost record (latest wins).
+    store
+        .approve(
+            TENANT,
+            PROJECT,
+            &candidate.proposal_id,
+            REVIEWER,
+            &candidate.manifest_digest,
+        )
+        .await
+        .unwrap();
+    store
+        .activate(
+            TENANT,
+            PROJECT,
+            AUTHOR,
+            &candidate.proposal_id,
+            &plan(&candidate, "0"),
+        )
+        .await
+        .expect("candidate with a valid approval must activate");
 }

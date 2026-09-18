@@ -14,6 +14,8 @@ pub enum PgError {
     UnsafeSourcePath(String),
     #[error("file is not valid UTF-8: {0}")]
     InvalidUtf8(String),
+    #[error("snapshot content drifted from its recorded digest: {0}")]
+    SnapshotDrift(String),
     #[error("stale or unbound approval")]
     StaleApproval,
     #[error("authority epoch mismatch")]
