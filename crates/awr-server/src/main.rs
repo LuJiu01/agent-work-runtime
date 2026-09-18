@@ -12,7 +12,14 @@ struct Args {
 #[derive(Subcommand)]
 enum Command {
     /// Apply owner migrations, then refuse to start if schema is incompatible.
-    Migrate,
+    Migrate {
+        /// Re-apply the application role grants after migrating (idempotent).
+        /// Required when upgrading a database bootstrapped by an older
+        /// version whose grants predate the current bootstrap (CR #52 P2-1).
+        /// Runs as the owner connection; never required from app credentials.
+        #[arg(long)]
+        app_role: Option<String>,
+    },
     /// Check schema version without running migrations.
     Check,
     /// Experimental Team v1 query entry. Unknown ops return Unsupported.
@@ -39,8 +46,8 @@ async fn main() -> ExitCode {
     match args.command {
         Command::Query { op, body } => run_query(&op, body.as_deref()).await,
         Command::Command { op, body } => run_command(&op, body.as_deref()).await,
-        Command::Migrate => schema_command(true).await,
-        Command::Check => schema_command(false).await,
+        Command::Migrate { app_role } => schema_command(true, app_role).await,
+        Command::Check => schema_command(false, None).await,
     }
 }
 
@@ -49,7 +56,7 @@ fn fail(code: &str, message: impl ToString) -> ExitCode {
     ExitCode::FAILURE
 }
 
-async fn schema_command(migrate: bool) -> ExitCode {
+async fn schema_command(migrate: bool, app_role: Option<String>) -> ExitCode {
     let url = match std::env::var("AWR_TEAM_DATABASE_URL") {
         Ok(url) => url,
         Err(_) => return fail("SchemaIncompatible", "AWR_TEAM_DATABASE_URL is required"),
@@ -59,7 +66,13 @@ async fn schema_command(migrate: bool) -> ExitCode {
         Err(error) => return fail("SchemaIncompatible", error.to_string()),
     };
     let result = if migrate {
-        awr_team_pg::migrate(&client).await
+        match awr_team_pg::migrate(&client).await {
+            Ok(()) => match &app_role {
+                Some(role) => awr_team_pg::Bootstrap::grant_app(&client, role).await,
+                None => Ok(()),
+            },
+            Err(error) => Err(error),
+        }
     } else {
         awr_team_pg::check_schema(&client).await
     };

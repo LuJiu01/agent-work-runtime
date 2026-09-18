@@ -13,7 +13,13 @@ cargo test -p awr-team-pg --features pg-tests
 ```
 
 `awr-server check` exits non-zero when `awr_team.schema_state` is missing or
-the version does not match. `awr-server migrate` applies owner migrations on
+the version does not match. The command entry (`TeamStore::execute`) runs the
+same check before opening a write transaction.
+
+Upgrading a database bootstrapped by an older build: run
+`awr-server migrate --app-role <role>` once with owner credentials. This
+re-applies the application grants (idempotent, no schema rebuild, no data
+loss); older grant sets did not allow the app role to read `schema_state`. `awr-server migrate` applies owner migrations on
 a clean database and returns successfully when the expected version is
 already present. The application role is not table owner and does not
 receive `BYPASSRLS`. Event history is insert-only for that role.
