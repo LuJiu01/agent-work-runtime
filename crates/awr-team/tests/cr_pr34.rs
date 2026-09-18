@@ -2,7 +2,7 @@
 //! Covers the three confirmed P2 findings through the real deserialization
 //! entry points, plus characterization of the completion input contract.
 use awr_team::*;
-use serde_json::{json, Value};
+use serde_json::{Value, json};
 
 fn valid_contract_json() -> Value {
     json!({
@@ -22,15 +22,15 @@ fn valid_contract_json() -> Value {
 // P2-1: typed ID deserialization must enforce the same rules as `new()`.
 macro_rules! id_deser_case {
     ($test_name:ident, $name:ident) => {
-            #[test]
-            fn $test_name() {
-                assert!(serde_json::from_value::<$name>(json!("")).is_err());
-                assert!(serde_json::from_value::<$name>(json!("x".repeat(129))).is_err());
-                assert!(serde_json::from_value::<$name>(json!("a\nb")).is_err());
-                assert!(serde_json::from_value::<$name>(json!("a\u{0}b")).is_err());
-                let ok = serde_json::from_value::<$name>(json!("valid-1")).unwrap();
-                assert_eq!(ok.as_str(), "valid-1");
-            }
+        #[test]
+        fn $test_name() {
+            assert!(serde_json::from_value::<$name>(json!("")).is_err());
+            assert!(serde_json::from_value::<$name>(json!("x".repeat(129))).is_err());
+            assert!(serde_json::from_value::<$name>(json!("a\nb")).is_err());
+            assert!(serde_json::from_value::<$name>(json!("a\u{0}b")).is_err());
+            let ok = serde_json::from_value::<$name>(json!("valid-1")).unwrap();
+            assert_eq!(ok.as_str(), "valid-1");
+        }
     };
 }
 id_deser_case!(tenant_id_deserialization_is_validated, TenantId);
@@ -64,7 +64,9 @@ fn decode_u64_canonical_form_only() {
     assert_eq!(decode_u64("0").unwrap(), 0);
     assert_eq!(decode_u64("1").unwrap(), 1);
     assert_eq!(decode_u64(&u64::MAX.to_string()).unwrap(), u64::MAX);
-    for bad in ["", "01", "00", "+1", "+01", "+00", " 1", "1 ", "1.0", "１２"] {
+    for bad in [
+        "", "01", "00", "+1", "+01", "+00", " 1", "1 ", "1.0", "１２",
+    ] {
         assert!(decode_u64(bad).is_err(), "accepted non-canonical {bad:?}");
     }
     assert!(decode_u64("18446744073709551616").is_err()); // u64::MAX + 1
