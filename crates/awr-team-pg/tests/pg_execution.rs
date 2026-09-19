@@ -846,10 +846,18 @@ async fn receipts_are_append_only_for_the_app_role() {
 // ---------- Runner filesystem regressions (CR #41 P1-1, P2-3, P2-4) ----------
 
 fn delivery_for(writes: serde_json::Value, scope: &[&str]) -> awr_team_pg::OutboxDelivery {
+    delivery_named("exec-fs-1", writes, scope)
+}
+
+fn delivery_named(
+    id: &str,
+    writes: serde_json::Value,
+    scope: &[&str],
+) -> awr_team_pg::OutboxDelivery {
     awr_team_pg::OutboxDelivery {
-        outbox_id: "ob-1".into(),
-        execution_id: "exec-fs-1".into(),
-        effect_key: "exec-fs-1".into(),
+        outbox_id: format!("ob-{id}"),
+        execution_id: id.into(),
+        effect_key: id.into(),
         fence: 1,
         fencing_class: "hard_fence".into(),
         declared_scope: json!(scope),
@@ -870,43 +878,81 @@ async fn runner_refuses_worktree_escapes_before_writing() {
     std::fs::write(&sentinel, "original").unwrap();
     // traversal
     let runner = ReferenceRunner::new(base.join("r1"));
-    let delivery = delivery_for(
+    let delivery = delivery_named(
+        "exec-traversal",
         json!([{"path": "../../outside/sentinel.txt", "content": "tampered"}]),
         &["src"],
     );
     let outcome = runner.handle_delivery(&delivery, CrashPoint::None);
     assert_eq!(outcome.state, "failed");
     assert_eq!(std::fs::read_to_string(&sentinel).unwrap(), "original");
-    // absolute path
-    let delivery = delivery_for(
+    // absolute path (independent root + execution id so it cannot ride on
+    // the previous journal)
+    let runner = ReferenceRunner::new(base.join("r2"));
+    let delivery = delivery_named(
+        "exec-absolute",
         json!([{"path": sentinel.to_string_lossy(), "content": "tampered"}]),
         &["src"],
     );
     let outcome = runner.handle_delivery(&delivery, CrashPoint::None);
     assert_eq!(outcome.state, "failed");
     assert_eq!(std::fs::read_to_string(&sentinel).unwrap(), "original");
-    // symlink escape
+    // positive control: an in-scope write still lands
+    let runner = ReferenceRunner::new(base.join("r4"));
+    let delivery = delivery_named(
+        "exec-ok",
+        json!([{"path": "src/ok.txt", "content": "ok"}]),
+        &["src"],
+    );
+    let outcome = runner.handle_delivery(&delivery, CrashPoint::None);
+    assert_eq!(outcome.state, "succeeded");
+}
+
+// Symlink escapes (directory-level AND file-level) are refused; the outside
+// file stays untouched. Unix-only scenario (CR #58 P2-9).
+#[cfg(unix)]
+#[tokio::test]
+async fn runner_refuses_symlink_escapes_unix() {
+    let base = std::env::temp_dir().join(format!("awr-p7-links-{}", std::process::id()));
+    let _ = std::fs::remove_dir_all(&base);
+    let outside = base.join("outside");
+    std::fs::create_dir_all(&outside).unwrap();
+    let sentinel = outside.join("sentinel.txt");
+    std::fs::write(&sentinel, "original").unwrap();
+    // directory-level symlink: worktree/src -> outside
     let root = base.join("r3");
     let worktree = root.join("worktree");
     std::fs::create_dir_all(&worktree).unwrap();
-    #[cfg(unix)]
     std::os::unix::fs::symlink(&outside, worktree.join("src")).unwrap();
     let runner = ReferenceRunner::new(&root);
-    let delivery = delivery_for(
+    let delivery = delivery_named(
+        "exec-dirsymlink",
         json!([{"path": "src/sentinel.txt", "content": "tampered"}]),
         &["src"],
     );
     let outcome = runner.handle_delivery(&delivery, CrashPoint::None);
     assert_eq!(
         outcome.state, "failed",
-        "symlink escape not refused: {outcome:?}"
+        "dir symlink not refused: {outcome:?}"
     );
     assert_eq!(std::fs::read_to_string(&sentinel).unwrap(), "original");
-    // positive control: an in-scope write still lands
-    let runner = ReferenceRunner::new(base.join("r4"));
-    let delivery = delivery_for(json!([{"path": "src/ok.txt", "content": "ok"}]), &["src"]);
+    // FILE-level symlink: worktree/src is real, the target file links outside
+    let root = base.join("r5");
+    let file_dir = root.join("worktree/src");
+    std::fs::create_dir_all(&file_dir).unwrap();
+    std::os::unix::fs::symlink(&sentinel, file_dir.join("target.txt")).unwrap();
+    let runner = ReferenceRunner::new(&root);
+    let delivery = delivery_named(
+        "exec-filesymlink",
+        json!([{"path": "src/target.txt", "content": "tampered"}]),
+        &["src"],
+    );
     let outcome = runner.handle_delivery(&delivery, CrashPoint::None);
-    assert_eq!(outcome.state, "succeeded");
+    assert_eq!(
+        outcome.state, "failed",
+        "file symlink not refused: {outcome:?}"
+    );
+    assert_eq!(std::fs::read_to_string(&sentinel).unwrap(), "original");
 }
 
 // CR #41 P2-4: a failed write is reported as failed with the error, never
@@ -944,5 +990,281 @@ async fn runner_treats_corrupt_journal_as_unknown_not_unexecuted() {
     assert!(
         !base.join("worktree/src/a.txt").exists(),
         "effects ran despite corrupt journal"
+    );
+}
+
+// CR #58 P1: resource-end fencing — a stale delivery (older fence) must not
+// overwrite a newer result.
+#[tokio::test]
+async fn runner_rejects_stale_fencing_tokens() {
+    let base = std::env::temp_dir().join(format!("awr-p7-fence-{}", std::process::id()));
+    let _ = std::fs::remove_dir_all(&base);
+    let runner = ReferenceRunner::new(&base);
+    let mut newer = delivery_named(
+        "exec-new",
+        json!([{"path": "src/out.txt", "content": "new"}]),
+        &["src"],
+    );
+    newer.fence = 2;
+    let outcome = runner.handle_delivery(&newer, CrashPoint::None);
+    assert_eq!(outcome.state, "succeeded");
+    let mut stale = delivery_named(
+        "exec-old",
+        json!([{"path": "src/out.txt", "content": "old"}]),
+        &["src"],
+    );
+    stale.fence = 1;
+    let outcome = runner.handle_delivery(&stale, CrashPoint::None);
+    assert_eq!(outcome.state, "failed", "stale fence accepted: {outcome:?}");
+    let content = std::fs::read_to_string(base.join("worktree/src/out.txt")).unwrap();
+    assert_eq!(content, "new", "stale execution overwrote the newer result");
+}
+
+// CR #58 P2-3: a non-terminal journal means the previous handler died; the
+// delivery goes to the unknown recovery path and effects do not re-run.
+#[tokio::test]
+async fn runner_recovers_crashed_journal_as_unknown() {
+    let base = std::env::temp_dir().join(format!("awr-p7-crash-{}", std::process::id()));
+    let _ = std::fs::remove_dir_all(&base);
+    let runner = ReferenceRunner::new(&base);
+    let delivery = delivery_named(
+        "exec-crash",
+        json!([{"path": "src/a.txt", "content": "x"}]),
+        &["src"],
+    );
+    // Simulate a crash after the accepted journal but before the final record.
+    let mut accepted = runner.base_outcome(&delivery, "accepted");
+    accepted.state = "accepted".into();
+    std::fs::create_dir_all(base.join("journal")).unwrap();
+    std::fs::write(
+        base.join("journal/exec-crash.json"),
+        serde_json::to_vec(&accepted).unwrap(),
+    )
+    .unwrap();
+    let outcome = runner.handle_delivery(&delivery, CrashPoint::None);
+    assert!(
+        outcome.unknown,
+        "crashed journal not recovered as unknown: {outcome:?}"
+    );
+    assert!(
+        !base.join("worktree/src/a.txt").exists(),
+        "effects re-ran for a crashed journal"
+    );
+}
+
+// CR #58 P2-4: a mid-plan failure records complete writes, touched files,
+// and never reports the attempt as "not executed".
+#[tokio::test]
+async fn runner_records_partial_side_effects_honestly() {
+    let base = std::env::temp_dir().join(format!("awr-p7-partial-{}", std::process::id()));
+    let _ = std::fs::remove_dir_all(&base);
+    // Second target is a directory: first write lands, second must fail.
+    std::fs::create_dir_all(base.join("worktree/src/blocked.txt")).unwrap();
+    let runner = ReferenceRunner::new(&base);
+    let outcome = runner.handle_delivery(
+        &delivery_named(
+            "exec-partial",
+            json!([
+                {"path": "src/good.txt", "content": "ok"},
+                {"path": "src/blocked.txt", "content": "x"}
+            ]),
+            &["src"],
+        ),
+        CrashPoint::None,
+    );
+    assert_eq!(outcome.state, "failed");
+    assert!(outcome.started, "partial execution reported as not started");
+    assert_eq!(outcome.observed_paths, vec!["src/good.txt".to_string()]);
+    assert_eq!(outcome.partial_paths, vec!["src/blocked.txt".to_string()]);
+}
+
+// CR #58 P2-5: same-outcome reports with diverging facts cannot rewrite the
+// terminal result, and out-of-scope observed paths cannot flip it to failed.
+#[tokio::test]
+async fn terminal_same_outcome_is_semantic_idempotency() {
+    let (_lock, _, store, leases, _, _db) = setup().await;
+    let (_session, claim) = claimed(&leases).await;
+    let execution = prepare_default(&store, &claim, "prep-ti").await;
+    store.accept(TENANT, PROJECT, &execution, 1).await.unwrap();
+    store.start(TENANT, PROJECT, &execution, 1).await.unwrap();
+    store
+        .report(
+            TENANT,
+            PROJECT,
+            RUNNER,
+            "trusted_executor",
+            &execution,
+            "succeeded",
+            json!({"output_digest": "d1"}),
+            &["src/foo".into()],
+        )
+        .await
+        .unwrap();
+    // Identical replay: allowed, no error.
+    store
+        .report(
+            TENANT,
+            PROJECT,
+            RUNNER,
+            "trusted_executor",
+            &execution,
+            "succeeded",
+            json!({"output_digest": "d1"}),
+            &["src/foo".into()],
+        )
+        .await
+        .unwrap();
+    // Diverging digest: audited, refused, digest stays d1.
+    let err = store
+        .report(
+            TENANT,
+            PROJECT,
+            RUNNER,
+            "trusted_executor",
+            &execution,
+            "succeeded",
+            json!({"output_digest": "d2"}),
+            &["src/foo".into()],
+        )
+        .await
+        .unwrap_err();
+    assert!(matches!(err, PgError::Protocol(_)), "got {err}");
+    // Out-of-scope paths on a terminal execution: also refused, NOT failed.
+    let err = store
+        .report(
+            TENANT,
+            PROJECT,
+            RUNNER,
+            "trusted_executor",
+            &execution,
+            "succeeded",
+            json!({"output_digest": "d1"}),
+            &["src".into()],
+        )
+        .await
+        .unwrap_err();
+    assert!(matches!(err, PgError::Protocol(_)), "got {err}");
+    let record = store.get(TENANT, PROJECT, &execution).await.unwrap();
+    assert_eq!(record.state, "succeeded");
+}
+
+// CR #58 P2-6: report-time scope checks reject parent components even
+// inside the declared prefix.
+#[tokio::test]
+async fn report_scope_rejects_parent_components() {
+    let (_lock, _, store, leases, _, _db) = setup().await;
+    let (_session, claim) = claimed(&leases).await;
+    let prepared = prepare_default(&store, &claim, "prep-dd").await;
+    store.accept(TENANT, PROJECT, &prepared, 1).await.unwrap();
+    let err = store
+        .report(
+            TENANT,
+            PROJECT,
+            RUNNER,
+            "trusted_executor",
+            &prepared,
+            "succeeded",
+            json!({"output_digest": "d"}),
+            &["src/foo/../bar/a.rs".into()],
+        )
+        .await
+        .unwrap_err();
+    assert!(matches!(err, PgError::ScopeExceeded), "got {err}");
+}
+
+// CR #58 P2-7: same-state transitions are idempotent (no duplicate events),
+// and the scope-fail path emits its lifecycle event exactly once.
+#[tokio::test]
+async fn lifecycle_events_cover_early_exits_and_stay_idempotent() {
+    let (_lock, admin, store, leases, _, _db) = setup().await;
+    let (_session, claim) = claimed(&leases).await;
+    let execution = prepare_default(&store, &claim, "prep-ev").await;
+    store.accept(TENANT, PROJECT, &execution, 1).await.unwrap();
+    store.accept(TENANT, PROJECT, &execution, 1).await.unwrap();
+    let accepted_events: i64 = admin
+        .query_one(
+            "SELECT count(*) FROM awr_team.events WHERE event_type='execution.accepted'",
+            &[],
+        )
+        .await
+        .unwrap()
+        .get(0);
+    assert_eq!(accepted_events, 1, "repeated accept emitted again");
+    // Scope-fail report emits execution.reported for the failed outcome.
+    store.start(TENANT, PROJECT, &execution, 1).await.unwrap();
+    let err = store
+        .report(
+            TENANT,
+            PROJECT,
+            RUNNER,
+            "trusted_executor",
+            &execution,
+            "succeeded",
+            json!({"output_digest": "d"}),
+            &["src".into()],
+        )
+        .await
+        .unwrap_err();
+    assert!(matches!(err, PgError::ScopeExceeded));
+    let reported: Vec<String> = admin
+        .query(
+            "SELECT payload_json->>'outcome' FROM awr_team.events WHERE event_type='execution.reported'",
+            &[],
+        )
+        .await
+        .unwrap()
+        .iter()
+        .map(|r| r.get(0))
+        .collect();
+    assert_eq!(
+        reported,
+        vec!["failed".to_string()],
+        "early exit event missing: {reported:?}"
+    );
+}
+
+// CR #58 P2-8: nested outbox payload and cancel receipt fences are strings.
+#[tokio::test]
+async fn nested_fences_are_decimal_strings() {
+    let (_lock, admin, store, leases, _, _db) = setup().await;
+    let (_session, claim) = claimed(&leases).await;
+    let execution = prepare_default(&store, &claim, "prep-nest").await;
+    let delivery = store
+        .claim_dispatch(TENANT, PROJECT)
+        .await
+        .unwrap()
+        .unwrap();
+    assert!(
+        delivery.payload["fence"].is_string(),
+        "outbox payload fence is not a string: {}",
+        delivery.payload["fence"]
+    );
+    let stored: serde_json::Value = admin
+        .query_one(
+            "SELECT payload_json FROM awr_team.outbox WHERE aggregate_id=$1",
+            &[&execution],
+        )
+        .await
+        .unwrap()
+        .get(0);
+    assert!(
+        stored["fence"].is_string(),
+        "stored outbox fence is not a string"
+    );
+    store
+        .cancel(TENANT, PROJECT, ACTOR, CLIENT, "cancel-nest", &execution)
+        .await
+        .unwrap();
+    let receipt: serde_json::Value = admin
+        .query_one(
+            "SELECT result_json FROM awr_team.operations WHERE request_id='cancel-nest'",
+            &[],
+        )
+        .await
+        .unwrap()
+        .get(0);
+    assert!(
+        receipt["fence"].is_string(),
+        "cancel receipt fence is not a string"
     );
 }

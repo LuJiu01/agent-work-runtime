@@ -122,8 +122,18 @@ pub fn validate_required_graph(nodes: &[String], edges: &[DependencyEdge]) -> Pg
 /// This is NOT the symmetric overlap used for reservation conflicts —
 /// `src` is NOT inside `src/foo` (CR #41 P2-10).
 pub fn path_within_scope(declared: &str, path: &str) -> bool {
-    let declared = canonicalize(declared);
-    let path = canonicalize(path);
+    // Both sides must be safe relative forms: a path with parent components
+    // (src/foo/../bar) or an absolute path is never "within" (CR #58 P2-6).
+    fn safe_form(raw: &str) -> Option<String> {
+        let normalized = raw.replace('\\', "/");
+        if normalized.starts_with('/') || normalized.split('/').any(|s| s == "..") {
+            return None;
+        }
+        Some(canonicalize(&normalized))
+    }
+    let (Some(declared), Some(path)) = (safe_form(declared), safe_form(path)) else {
+        return false;
+    };
     path == declared || path.starts_with(&format!("{declared}/"))
 }
 

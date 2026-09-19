@@ -29,6 +29,11 @@ pub struct RunnerOutcome {
     pub exactly_once_supported: bool,
     #[serde(default)]
     pub error: Option<String>,
+    /// Files touched but whose final state is uncertain after an I/O error
+    /// (may be truncated or partially written). Never silently reported as
+    /// "not executed" (CR #58 P2-4).
+    #[serde(default)]
+    pub partial_paths: Vec<String>,
 }
 
 pub struct ReferenceRunner {
@@ -51,7 +56,8 @@ impl ReferenceRunner {
         }
     }
 
-    fn base_outcome(&self, delivery: &OutboxDelivery, state: &str) -> RunnerOutcome {
+    /// Visible to pg-tests for crash-recovery fixtures.
+    pub fn base_outcome(&self, delivery: &OutboxDelivery, state: &str) -> RunnerOutcome {
         RunnerOutcome {
             execution_id: delivery.execution_id.clone(),
             effect_key: delivery.effect_key.clone(),
@@ -64,7 +70,31 @@ impl ReferenceRunner {
             scope_violation: false,
             exactly_once_supported: delivery.fencing_class != "uncontrolled",
             error: None,
+            partial_paths: vec![],
         }
+    }
+
+    /// Resource-end fencing: side effects are bound to a monotonic fencing
+    /// token kept next to the journals. A delivery whose fence is OLDER than
+    /// the current token is a stale executor and must not write (CR #58 P1).
+    fn check_fence(&self, delivery: &OutboxDelivery) -> Result<(), String> {
+        let ledger = self.journal_dir.join("fence-ledger");
+        let current: Option<i64> = fs::read_to_string(&ledger)
+            .ok()
+            .and_then(|raw| raw.trim().parse().ok());
+        if let Some(current) = current {
+            if delivery.fence < current {
+                return Err(format!(
+                    "stale fencing token {} (current {current})",
+                    delivery.fence
+                ));
+            }
+        }
+        if current.map(|c| delivery.fence > c).unwrap_or(true) {
+            fs::write(&ledger, delivery.fence.to_string())
+                .map_err(|e| format!("fence ledger persist failed: {e}"))?;
+        }
+        Ok(())
     }
 
     pub fn handle_delivery(&self, delivery: &OutboxDelivery, crash: CrashPoint) -> RunnerOutcome {
@@ -79,7 +109,22 @@ impl ReferenceRunner {
         // unreadable one is NOT "never executed" — it takes the unknown path
         // and must not re-run effects (CR #41 P2-3).
         match self.load(&delivery.execution_id) {
-            JournalLoad::Owned(existing) => return existing,
+            JournalLoad::Owned(existing) => {
+                // A terminal journal is the idempotent result. A NON-terminal
+                // one means the previous handler died mid-execution: effects
+                // are uncertain, so recovery must not treat it as "never
+                // executed" nor as a final answer (CR #58 P2-3).
+                if matches!(existing.state.as_str(), "succeeded" | "failed") || existing.unknown {
+                    return existing;
+                }
+                let mut outcome = existing;
+                outcome.state = "unknown".into();
+                outcome.unknown = true;
+                outcome.error =
+                    Some("previous handler died mid-execution; effects uncertain".into());
+                let _ = self.persist(&outcome);
+                return outcome;
+            }
             JournalLoad::Corrupt(error) => {
                 let mut outcome = self.base_outcome(delivery, "unknown");
                 outcome.unknown = true;
@@ -175,17 +220,43 @@ impl ReferenceRunner {
         }
         // Execute the plan; propagate real I/O errors and record only the
         // writes that actually happened (CR #41 P2-4).
+        if let Err(error) = self.check_fence(delivery) {
+            let mut outcome = self.base_outcome(delivery, "failed");
+            outcome.error = Some(error);
+            let _ = self.persist(&outcome);
+            return outcome;
+        }
         let mut observed = Vec::new();
+        let mut partial = Vec::new();
         for (rel, dest, content) in &plan {
-            let result = dest
-                .parent()
-                .map(|parent| fs::create_dir_all(parent))
-                .unwrap_or_else(|| Ok(()))
+            // Re-verify AT WRITE TIME: the destination itself must not be a
+            // symlink, and its parent must still resolve inside the worktree
+            // (plan-time checks alone leave a check/use window — CR #58 P1).
+            let guarded = (|| -> Result<(), String> {
+                if let Ok(meta) = fs::symlink_metadata(dest) {
+                    if meta.file_type().is_symlink() {
+                        return Err(format!("write target is a symlink: {}", dest.display()));
+                    }
+                }
+                self.ensure_inside(&root_canon, dest)
+            })();
+            let result = guarded
+                .map_err(|e| std::io::Error::new(ErrorKind::PermissionDenied, e))
+                .and_then(|_| {
+                    dest.parent()
+                        .map(|parent| fs::create_dir_all(parent))
+                        .unwrap_or_else(|| Ok(()))
+                })
                 .and_then(|_| fs::write(dest, content));
             if let Err(error) = result {
+                // A failed write does NOT mean the file is unchanged: it may
+                // be truncated or partially written. Record it as touched,
+                // never as untouched (CR #58 P2-4).
+                partial.push(rel.clone());
                 let mut outcome = self.base_outcome(delivery, "failed");
-                outcome.started = !observed.is_empty();
+                outcome.started = true;
                 outcome.observed_paths = observed.clone();
+                outcome.partial_paths = partial.clone();
                 outcome.output_digest = Some(output_digest(&self.worktree_root, &observed));
                 outcome.error = Some(format!("write failed for {rel}: {error}"));
                 let _ = self.persist(&outcome);
@@ -274,13 +345,18 @@ impl ReferenceRunner {
             .create_new(true)
             .open(self.journal_path(&outcome.execution_id))?;
         use std::io::Write;
-        file.write_all(&bytes)
+        file.write_all(&bytes)?;
+        // Closing is not durability; make the admission record durable
+        // before relying on it (CR #58 P2-3).
+        file.sync_all()
     }
 
     fn persist_result(&self, outcome: &RunnerOutcome) -> std::io::Result<()> {
         let bytes = serde_json::to_vec(outcome)
             .map_err(|e| std::io::Error::new(ErrorKind::InvalidData, e))?;
-        fs::write(self.journal_path(&outcome.execution_id), bytes)
+        let path = self.journal_path(&outcome.execution_id);
+        fs::write(&path, &bytes)?;
+        fs::File::open(&path)?.sync_all()
     }
 
     fn persist(&self, outcome: &RunnerOutcome) {

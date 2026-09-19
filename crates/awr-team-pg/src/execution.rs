@@ -178,7 +178,7 @@ impl ExecutionStore {
             "work_id": work_id,
             "session_id": session_id,
             "claim_id": claim_id,
-            "fence": fence,
+            "fence": fence.to_string(),
             "contract_hash": contract_hash,
             "input_digest": input_digest,
             "executor_actor_id": executor_actor_id,
@@ -292,7 +292,18 @@ impl ExecutionStore {
                 .and_then(Value::as_str)
                 .unwrap_or(&execution_id)
                 .to_owned(),
-            fence: payload.get("fence").and_then(Value::as_i64).unwrap_or(0),
+            fence: match payload.get("fence") {
+                // Decimal-string (current) and legacy numeric forms; a
+                // missing or invalid fence never silently becomes 0
+                // (CR #58 P2-8).
+                Some(Value::String(s)) => s
+                    .parse()
+                    .map_err(|_| PgError::Protocol("outbox payload has invalid fence".into()))?,
+                Some(Value::Number(n)) => n
+                    .as_i64()
+                    .ok_or_else(|| PgError::Protocol("outbox payload has invalid fence".into()))?,
+                _ => return Err(PgError::Protocol("outbox payload missing fence".into())),
+            },
             fencing_class: payload
                 .get("fencing_class")
                 .and_then(Value::as_str)
@@ -432,7 +443,7 @@ impl ExecutionStore {
             "work_id": row.get::<_, String>(2),
             "session_id": row.get::<_, Option<String>>(3).unwrap_or_default(),
             "claim_id": row.get::<_, Option<String>>(4).unwrap_or_default(),
-            "fence": fence,
+            "fence": fence.to_string(),
             "contract_hash": row.get::<_, String>(5),
             "effect_key": row.get::<_, Option<String>>(6).unwrap_or_default(),
             "state": next_state,
@@ -553,12 +564,26 @@ impl ExecutionStore {
                 &payload,
             )
             .await?;
-            tx.execute(
-                "UPDATE awr_team.executions SET cancel_requested=TRUE
-                 WHERE tenant_id=$1 AND project_id=$2 AND id=$3",
-                &[&tenant_id, &project_id, &execution_id],
-            )
-            .await?;
+            if !cancel_requested {
+                tx.execute(
+                    "UPDATE awr_team.executions SET cancel_requested=TRUE
+                     WHERE tenant_id=$1 AND project_id=$2 AND id=$3",
+                    &[&tenant_id, &project_id, &execution_id],
+                )
+                .await?;
+                // The flag change is a state change: it must be observable
+                // (CR #58 P2-7).
+                emit_event(
+                    &tx,
+                    tenant_id,
+                    project_id,
+                    actor_id,
+                    &work_id,
+                    "execution.cancel_requested",
+                    json!({"execution_id": execution_id}),
+                )
+                .await?;
+            }
             tx.commit().await?;
             return self.get(tenant_id, project_id, execution_id).await;
         }
@@ -568,6 +593,47 @@ impl ExecutionStore {
         // - running + cancelled            → a real stop confirmation lands
         // - cancel requested then success  → success still stands (unchanged)
         let terminal = matches!(current.as_str(), "succeeded" | "failed" | "cancelled");
+        if terminal && outcome == current {
+            // Same outcome is NOT automatically the same result: replay only
+            // when the key facts match; otherwise keep an audit receipt and
+            // leave the terminal state untouched (CR #58 P2-5). Authorized
+            // corrections go through reconcile().
+            let stored_digest: Option<String> = tx
+                .query_one(
+                    "SELECT result_digest FROM awr_team.executions WHERE tenant_id=$1 AND project_id=$2 AND id=$3",
+                    &[&tenant_id, &project_id, &execution_id],
+                )
+                .await?
+                .get(0);
+            let stored_paths: Value = tx
+                .query_one(
+                    "SELECT observed_paths_json FROM awr_team.executions WHERE tenant_id=$1 AND project_id=$2 AND id=$3",
+                    &[&tenant_id, &project_id, &execution_id],
+                )
+                .await?
+                .get(0);
+            let incoming_digest = payload.get("output_digest").and_then(Value::as_str);
+            let facts_match = stored_digest.as_deref() == incoming_digest
+                && stored_paths == json!(observed_paths);
+            if facts_match {
+                tx.commit().await?;
+                return self.get(tenant_id, project_id, execution_id).await;
+            }
+            insert_receipt(
+                &tx,
+                tenant_id,
+                project_id,
+                execution_id,
+                actor_id,
+                receipt_kind,
+                &json!({"late_diverging_report": outcome, "payload": payload}),
+            )
+            .await?;
+            tx.commit().await?;
+            return Err(PgError::Protocol(format!(
+                "diverging late report for terminal execution in state {current}"
+            )));
+        }
         if terminal && outcome != current {
             insert_receipt(
                 &tx,
@@ -612,6 +678,18 @@ impl ExecutionStore {
                     &execution_id,
                     &json!(observed_paths),
                 ],
+            )
+            .await?;
+            // Early exits that still change state must emit the lifecycle
+            // event in the same transaction (CR #58 P2-7).
+            emit_event(
+                &tx,
+                tenant_id,
+                project_id,
+                actor_id,
+                &work_id,
+                "execution.reported",
+                json!({"execution_id": execution_id, "outcome": "failed", "receipt_kind": receipt_kind, "scope_violation": true}),
             )
             .await?;
             tx.commit().await?;
@@ -884,11 +962,14 @@ impl ExecutionStore {
         if !claim_valid {
             return Err(PgError::StaleFence);
         }
+        // Idempotent same-state calls return BEFORE any update or event;
+        // 'accepted'/'running' are in their own allowed sets, so this check
+        // must come first (CR #58 P2-7).
+        if state == next {
+            tx.commit().await?;
+            return self.get(tenant_id, project_id, execution_id).await;
+        }
         if !allowed.contains(&state.as_str()) {
-            if state == next {
-                tx.commit().await?;
-                return self.get(tenant_id, project_id, execution_id).await;
-            }
             return Err(PgError::Protocol(format!(
                 "cannot move execution from {state} to {next}"
             )));
