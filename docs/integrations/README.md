@@ -67,7 +67,7 @@ events unreadable by older binaries; the namespaced ID avoids that. Use
 | Grok Build | L1 | [Grok note](grok.md) | Project MCP add, native `--continue` / `--resume`, dated check |
 | Kimi Code | L1 | [Kimi note](kimi.md) | `.kimi-code/mcp.json`, native session flags, dated check |
 | Codex | L2 | [Codex adapter](codex.md) | `.codex` MCP merge, `client install` hooks, AGENTS snippet |
-| Cursor | L1 | [Cursor note](cursor.md) | `.cursor/mcp.json`, `type: stdio`, grouped MCP vs Cloud Agent HTTPS, dated Agent Window check |
+| Cursor | L1 | [Cursor note](cursor.md) | `.cursor/mcp.json`, `type: stdio`, source-built grouped MCP, Cloud Agent HTTPS |
 | Claude Code, Windsurf, … | L0 | [Session workflow](session-workflow.md) | None needed: `--client generic` with a `host:`-prefixed conversation ID |
 
 Application hosts that invoke `awr` over argv follow the

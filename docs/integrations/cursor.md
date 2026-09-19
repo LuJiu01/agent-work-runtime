@@ -25,12 +25,14 @@ Do not copy the L0 tutorial here. Do not add `--client cursor`. Do not run
 
 ## MCP merge paths
 
-Install **0.4.0** and point `command` at the packaged `awr-mcp` (absolute path):
+This note describes the **current source tree**. Packaged **0.4.0** does not
+expose grouped `awr_query`. Build `awr` and `awr-mcp` from this repository
+using [the repository instructions](../../README.md), then point `command` at
+that binary (absolute path):
 
 ```sh
-npm install -g @originoneai/agent-work-runtime@0.4.0
-# or: python -m pip install agent-work-runtime==0.4.0
-command -v awr-mcp
+cargo build --locked -p awr-cli -p awr-mcp
+# binaries: target/debug/awr and target/debug/awr-mcp
 ```
 
 Initialize the project before starting the server. Merge
@@ -126,10 +128,17 @@ trigger and checkpoint receipt exist.
 
 ## Dated check
 
-On 2026-09-17 this host initialized a copy of `examples/basic`, ran the L0 CLI
-lifecycle with `--provider cursor`, then called `awr_project_status` and
-`awr_work_ready` from the Cursor 3.18.9 Agent Window (flat names). The server
-reported project `AWR example`, `EXAMPLE-001` ready,
-`freshness_basis: source_verified_readonly`. That is stdio discovery plus those
-two read tools. It is not a grouped-catalog recheck, Cloud Agent run, hook
-activation, model turn, or business acceptance.
+On 2026-09-19 a disposable copy of `examples/basic` was initialized with
+`target/debug/awr` built from commit
+`7ffcb8312a0309e42530cbcd889908dc7a3a473e`. The same tree's `awr-mcp` was
+spoken to over stdio (initialize, then the default catalog):
+
+1. `tools/list` returned the eight domain tools, including `awr_query`
+2. `awr_query` with `{}` returned the child manifest; `awr_project_status` was present
+3. `awr_query` with `{"child_tool":"awr_project_status","arguments":{}}` reported
+   project `AWR example`, `EXAMPLE-001` ready,
+   `freshness_basis: source_verified_readonly`
+
+That is the grouped Cursor route against this source build. It is not a Cursor
+Agent Window recheck, Cloud Agent run, hook activation, model turn, or business
+acceptance.
