@@ -51,6 +51,15 @@ pub fn check_loopback(config: &Config) -> Result<(), String> {
     Ok(())
 }
 
+/// The raw test connection string exactly as configured (or the loopback
+/// default). Pass THIS to subprocesses instead of re-serializing a parsed
+/// Config — the child re-parses it and keeps IPv6/hostaddr/Unix semantics
+/// (CR #56 round 3).
+pub fn test_database_url_raw() -> String {
+    std::env::var("AWR_TEAM_TEST_DATABASE_URL")
+        .unwrap_or_else(|_| "postgres://postgres:awr-test@127.0.0.1:55432/postgres".into())
+}
+
 pub fn test_config() -> Config {
     let raw = std::env::var("AWR_TEAM_TEST_DATABASE_URL")
         .unwrap_or_else(|_| "postgres://postgres:awr-test@127.0.0.1:55432/postgres".into());

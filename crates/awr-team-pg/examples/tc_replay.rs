@@ -7,12 +7,74 @@ use serde_json::{Value, json};
 
 const TENANT: &str = "tenant-t13";
 
-fn url() -> String {
-    std::env::var("AWR_TEAM_DATABASE_URL")
-        .unwrap_or_else(|_| "postgres://postgres:awr-test@127.0.0.1:55432/awr_team_test".into())
+/// Connection handling is Config-native: the raw URL is parsed once, the
+/// database comes from TC_DB (falling back to the URL's dbname), and the
+/// app role is applied as a config override. Nothing is re-serialized, so
+/// IPv6, hostaddr and Unix socket targets keep their meaning (CR #56 r3).
+fn base_config() -> tokio_postgres::config::Config {
+    let raw = std::env::var("AWR_TEAM_DATABASE_URL")
+        .unwrap_or_else(|_| "postgres://postgres:awr-test@127.0.0.1:55432/awr_team_test".into());
+    raw.parse().expect("invalid AWR_TEAM_DATABASE_URL")
 }
-fn app_url() -> String {
-    url().replacen("postgres:awr-test", "awr_app:app-test", 1)
+fn db_name(config: &tokio_postgres::config::Config) -> String {
+    std::env::var("TC_DB")
+        .unwrap_or_else(|_| config.get_dbname().unwrap_or("awr_team_test").to_string())
+}
+fn admin_config() -> tokio_postgres::config::Config {
+    let mut c = base_config();
+    let db = db_name(&c);
+    c.dbname(&db);
+    c
+}
+fn app_config() -> tokio_postgres::config::Config {
+    let mut c = admin_config();
+    c.user("awr_app");
+    c.password("app-test");
+    c
+}
+fn leases() -> LeaseStore {
+    LeaseStore::from_config(app_config())
+}
+fn reviews() -> ReviewStore {
+    ReviewStore::from_config(app_config())
+}
+fn executions() -> ExecutionStore {
+    ExecutionStore::from_config(app_config())
+}
+fn team_store() -> TeamStore {
+    TeamStore::from_config(app_config())
+}
+fn graphs() -> GraphStore {
+    GraphStore::from_config(app_config())
+}
+fn imports() -> ImportStore {
+    ImportStore::from_config(app_config())
+}
+fn sources() -> SourceStore {
+    SourceStore::from_config(app_config())
+}
+fn reads() -> ReadStore {
+    ReadStore::from_config(app_config())
+}
+async fn admin_client() -> tokio_postgres::Client {
+    let (client, connection) = admin_config()
+        .connect(tokio_postgres::NoTls)
+        .await
+        .expect("admin connect");
+    tokio::spawn(async move {
+        let _ = connection.await;
+    });
+    client
+}
+async fn app_client() -> tokio_postgres::Client {
+    let (client, connection) = app_config()
+        .connect(tokio_postgres::NoTls)
+        .await
+        .expect("app connect");
+    tokio::spawn(async move {
+        let _ = connection.await;
+    });
+    client
 }
 
 #[tokio::main]
@@ -29,7 +91,7 @@ async fn main() {
                 arg(&args, 5),
                 arg(&args, 6),
             );
-            let leases = LeaseStore::new(app_url());
+            let leases = leases();
             let r = async {
                 let session = leases
                     .start_session(TENANT, &p, &a, &c, &v, "main", &w)
@@ -59,7 +121,7 @@ async fn main() {
                 arg(&args, 6),
                 arg(&args, 7),
             );
-            let leases = LeaseStore::new(app_url());
+            let leases = leases();
             match leases
                 .claim(TENANT, &p, &s, &a, &c, &format!("{v}-claim"), 600)
                 .await
@@ -73,7 +135,7 @@ async fn main() {
         "release" => {
             // release <project> <claim> <actor>
             let (p, cl, a) = (arg(&args, 2), arg(&args, 3), arg(&args, 4));
-            let leases = LeaseStore::new(app_url());
+            let leases = leases();
             match leases.release(TENANT, &p, &cl, &a).await {
                 Ok(()) => {
                     Ok(json!({"ok":true,"op":"release","actor":a,"claim":cl,"released":true}))
@@ -91,7 +153,7 @@ async fn main() {
                 arg(&args, 6),
                 arg(&args, 7),
             );
-            let leases = LeaseStore::new(app_url());
+            let leases = leases();
             match leases.handoff(TENANT, &p, &cl, &f, &t, &c, &v).await {
                 Ok(h) => Ok(
                     json!({"ok":true,"op":"handoff","from":f,"to":t,"claim":h.id,"fence":h.fence.to_string(),"session":h.session_id}),
@@ -103,7 +165,7 @@ async fn main() {
             // check-fence <project> <work> <actor> <fence>
             let (p, w, a, f) = (arg(&args, 2), arg(&args, 3), arg(&args, 4), arg(&args, 5));
             let fence: i64 = f.parse().expect("fence int");
-            let leases = LeaseStore::new(app_url());
+            let leases = leases();
             match leases
                 .require_fence(TENANT, &p, "main", &w, &a, fence)
                 .await
@@ -134,7 +196,7 @@ async fn main() {
             } else {
                 Some("cli-in")
             };
-            let review = ReviewStore::new(app_url());
+            let review = reviews();
             match review
                 .record_evidence(
                     TENANT,
@@ -159,7 +221,7 @@ async fn main() {
         "open-review" => {
             // open-review <project> <work> <actor> <evidence>
             let (p, w, a, ev) = (arg(&args, 2), arg(&args, 3), arg(&args, 4), arg(&args, 5));
-            let review = ReviewStore::new(app_url());
+            let review = reviews();
             match review.open_review(TENANT, &p, &a, &w, &ev).await {
                 Ok(r) => Ok(json!({"ok":true,"op":"open-review","actor":a,"work":w,"round":r.id})),
                 Err(e) => Err(e.to_string()),
@@ -174,7 +236,7 @@ async fn main() {
                 arg(&args, 5),
                 arg(&args, 6),
             );
-            let review = ReviewStore::new(app_url());
+            let review = reviews();
             match review.decide_review(TENANT, &p, &a, &r, &d, &n).await {
                 Ok(_) => Ok(json!({"ok":true,"op":"decide","actor":a,"round":r,"decision":d})),
                 Err(e) => Err(e.to_string()),
@@ -185,7 +247,7 @@ async fn main() {
             let (p, w, a, ev) = (arg(&args, 2), arg(&args, 3), arg(&args, 4), arg(&args, 5));
             let policy = args.get(6).cloned();
             let ctx = args.get(7).map(|v| v == "true").unwrap_or(true);
-            let review = ReviewStore::new(app_url());
+            let review = reviews();
             match review
                 .complete(TENANT, &p, &a, &w, "main", &ev, policy.as_deref(), ctx)
                 .await
@@ -210,7 +272,7 @@ async fn main() {
                 .map(|s| s.trim().to_string())
                 .collect();
             let writes: Value = serde_json::from_str(&arg(&args, 10)).expect("writes json");
-            let exec = ExecutionStore::new(app_url());
+            let exec = executions();
             match exec
                 .prepare(
                     TENANT,
@@ -237,7 +299,7 @@ async fn main() {
         "dispatch-twice" => {
             // dispatch-twice <project>
             let p = arg(&args, 2);
-            let exec = ExecutionStore::new(app_url());
+            let exec = executions();
             (async {
                 let first = exec.claim_dispatch(TENANT, &p).await.map_err(|e| e.to_string())?;
                 let second = exec.claim_dispatch(TENANT, &p).await.map_err(|e| e.to_string())?;
@@ -249,8 +311,7 @@ async fn main() {
             // cross-read <project> <other_project>
             let (p, other) = (arg(&args, 2), arg(&args, 3));
             (async {
-                let (mut client, connection) = tokio_postgres::connect(&app_url(), tokio_postgres::NoTls).await.map_err(|e| e.to_string())?;
-                tokio::spawn(async move { let _ = connection.await; });
+                let mut client = app_client().await;
                 let tx = client.transaction().await.map_err(|e| e.to_string())?;
                 tx.batch_execute(&format!("SELECT set_config('awr.tenant_id','{TENANT}',false); SELECT set_config('awr.project_id','{p}',false);")).await.map_err(|e| e.to_string())?;
                 let n: i64 = tx.query_one("SELECT count(*) FROM awr_team.claims WHERE tenant_id=$1 AND project_id=$2", &[&TENANT, &other]).await.map_err(|e| e.to_string())?.get(0);
@@ -262,8 +323,7 @@ async fn main() {
             // cross-write <project> <other_project>
             let (p, other) = (arg(&args, 2), arg(&args, 3));
             (async {
-                let (mut client, connection) = tokio_postgres::connect(&app_url(), tokio_postgres::NoTls).await.map_err(|e| e.to_string())?;
-                tokio::spawn(async move { let _ = connection.await; });
+                let mut client = app_client().await;
                 let tx = client.transaction().await.map_err(|e| e.to_string())?;
                 tx.batch_execute(&format!("SELECT set_config('awr.tenant_id','{TENANT}',false); SELECT set_config('awr.project_id','{p}',false);")).await.map_err(|e| e.to_string())?;
                 let r = tx.execute("INSERT INTO awr_team.work_runtime(tenant_id, project_id, scope_id, work_id, state, work_version, last_fence) VALUES ($1,$2,'main','work-x','active',1,0)", &[&TENANT, &other]).await;
@@ -284,7 +344,7 @@ async fn main() {
                 arg(&args, 6),
                 arg(&args, 7),
             );
-            let store = TeamStore::new(app_url());
+            let store = team_store();
             let req = awr_team_pg::CommandRequest {
                 tenant_id: TENANT.into(),
                 project_id: p.clone(),
@@ -305,7 +365,7 @@ async fn main() {
             // report-out-of-scope <project> <execution> <fence>
             let (p, e, f) = (arg(&args, 2), arg(&args, 3), arg(&args, 4));
             let fence: i64 = f.parse().expect("fence int");
-            let exec = ExecutionStore::new(app_url());
+            let exec = executions();
             (async {
                 exec.accept(TENANT, &p, &e, fence).await.map_err(|e| e.to_string())?;
                 exec.start(TENANT, &p, &e, fence).await.map_err(|e| e.to_string())?;
@@ -324,7 +384,7 @@ async fn main() {
             } else {
                 paths.split(',').map(|s| s.trim().to_string()).collect()
             };
-            let exec = ExecutionStore::new(app_url());
+            let exec = executions();
             match exec
                 .report(
                     TENANT,
@@ -347,7 +407,7 @@ async fn main() {
         "graph-cycle" => {
             // graph-cycle <project> <snapshot>
             let (p, snap) = (arg(&args, 2), arg(&args, 3));
-            let g = GraphStore::new(app_url());
+            let g = graphs();
             let edges = vec![
                 DependencyEdge {
                     from: "work-a".into(),
@@ -380,7 +440,7 @@ async fn main() {
         "reserve" => {
             // reserve <project> <work> <kind> <path>
             let (p, w, k, path) = (arg(&args, 2), arg(&args, 3), arg(&args, 4), arg(&args, 5));
-            let g = GraphStore::new(app_url());
+            let g = graphs();
             match g.reserve(TENANT, &p, &w, &k, &path).await {
                 Ok(rid) => {
                     Ok(json!({"ok":true,"op":"reserve","work":w,"path":path,"reservation":rid}))
@@ -392,7 +452,7 @@ async fn main() {
             // split <project> <work> <child1,child2>
             let (p, w, kids) = (arg(&args, 2), arg(&args, 3), arg(&args, 4));
             let children: Vec<String> = kids.split(',').map(|s| s.trim().to_string()).collect();
-            let g = GraphStore::new(app_url());
+            let g = graphs();
             match g
                 .propose_split(
                     TENANT,
@@ -410,7 +470,7 @@ async fn main() {
         "complete-parent" => {
             // complete-parent <project> <work>
             let (p, w) = (arg(&args, 2), arg(&args, 3));
-            let g = GraphStore::new(app_url());
+            let g = graphs();
             match g.complete_parent_from_children(TENANT, &p, &w).await {
                 Ok(_) => Err("parent completed from children unexpectedly".into()),
                 Err(e) => {
@@ -421,7 +481,7 @@ async fn main() {
         "bind-invalidate" => {
             // bind-invalidate <project> <work> <upstream>
             let (p, w, up) = (arg(&args, 2), arg(&args, 3), arg(&args, 4));
-            let g = GraphStore::new(app_url());
+            let g = graphs();
             (async {
                 g.bind_dependency(TENANT, &p, &w, &up, "bind-live").await.map_err(|e| e.to_string())?;
                 g.invalidate_downstream(TENANT, &p, &up).await.map_err(|e| e.to_string())?;
@@ -432,7 +492,7 @@ async fn main() {
         "activate-check" => {
             // activate-check <project> <work> <hash>
             let (p, w, h) = (arg(&args, 2), arg(&args, 3), arg(&args, 4));
-            let g = GraphStore::new(app_url());
+            let g = graphs();
             match g.activation_blocked_by_claims(TENANT, &p, &w, &h).await {
                 Ok(()) => {
                     Ok(json!({"ok":true,"op":"activate-check","work":w,"hash":h,"allowed":true}))
@@ -443,7 +503,7 @@ async fn main() {
         "graph-scope" => {
             // graph-scope <project> <snapshot> <scope>
             let (p, snap, s) = (arg(&args, 2), arg(&args, 3), arg(&args, 4));
-            let g = GraphStore::new(app_url());
+            let g = graphs();
             match g
                 .replace_edges(TENANT, &p, &snap, &s, &["work-a".into()], &[])
                 .await
@@ -455,7 +515,7 @@ async fn main() {
             }
         }
         "budget-check" => {
-            let g = GraphStore::new(app_url());
+            let g = graphs();
             let edges = vec![
                 DependencyEdge {
                     from: "a".into(),
@@ -485,7 +545,7 @@ async fn main() {
         }
         "freeze" => {
             let p = arg(&args, 2);
-            let imp = ImportStore::new(app_url());
+            let imp = imports();
             match imp.freeze(TENANT, &p).await {
                 Ok(()) => Ok(json!({"ok":true,"op":"freeze","project":p})),
                 Err(e) => Err(e.to_string()),
@@ -494,7 +554,7 @@ async fn main() {
         "import-load" => {
             // import-load <project> <actor> <key>
             let (p, a, k) = (arg(&args, 2), arg(&args, 3), arg(&args, 4));
-            let imp = ImportStore::new(app_url());
+            let imp = imports();
             let manifest = json!({"works":[{"id":"work-i1","external_key":"IMP-1"}],"evidence":[{"id":"ev-1","claimed_trust":"trusted_executor","work_id":"work-i1"}]});
             match imp.load(TENANT, &p, &a, &k, &manifest).await {
                 Ok(j) => Ok(
@@ -515,7 +575,7 @@ async fn main() {
         "ingest-unsafe" => {
             // ingest-unsafe <project> <actor>
             let (p, a) = (arg(&args, 2), arg(&args, 3));
-            let src = SourceStore::new(app_url());
+            let src = sources();
             let req = IngestRequest {
                 tenant_id: TENANT.into(),
                 project_id: p.clone(),
@@ -547,7 +607,7 @@ async fn main() {
             // events-page <project> <limit>
             let (p, l) = (arg(&args, 2), arg(&args, 3));
             let limit: i64 = l.parse().expect("limit int");
-            let read = ReadStore::new(app_url());
+            let read = reads();
             (async {
                 let mut cursor: Option<String> = None;
                 let mut pages = 0u32;
@@ -572,7 +632,7 @@ async fn main() {
         "three-surfaces" => three_surfaces(),
         "complete-direct" => {
             let (p, w, a) = (arg(&args, 2), arg(&args, 3), arg(&args, 4));
-            let review = ReviewStore::new(app_url());
+            let review = reviews();
             match review
                 .complete(TENANT, &p, &a, &w, "main", "ev-nonexistent", None, true)
                 .await
@@ -646,7 +706,8 @@ fn arg(args: &[String], i: usize) -> String {
 }
 
 async fn oracle(project: &str, work: &str) -> Result<Value, String> {
-    let (client, connection) = tokio_postgres::connect(&url(), tokio_postgres::NoTls)
+    let (client, connection) = admin_config()
+        .connect(tokio_postgres::NoTls)
         .await
         .map_err(|e| e.to_string())?;
     tokio::spawn(async move {

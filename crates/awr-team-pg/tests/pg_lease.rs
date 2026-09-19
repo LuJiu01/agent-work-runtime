@@ -9,7 +9,7 @@ use std::sync::MutexGuard;
 use tokio_postgres::Client;
 
 mod common;
-use common::{fresh_team_schema, gate_db_name, test_config, with_app_role, with_db};
+use common::{fresh_team_schema, gate_db_name, test_config, test_database_url_raw, with_app_role};
 
 const TENANT: &str = "tenant-a";
 const PROJECT: &str = "project-a";
@@ -806,6 +806,9 @@ async fn concurrent_claims_exactly_one_wins() {
 }
 
 // CR #56 P2-4: the replay driver's actual stdout carries fence as a string.
+// The child receives the SAME raw connection string plus this run's database
+// name (never a re-serialized URL), and the driver binary is located from
+// Cargo's own artifact output, so custom target dirs and profiles work.
 #[tokio::test]
 async fn replay_driver_stdout_has_decimal_string_fence() {
     let (_lock, admin, _store, _db) = setup().await;
@@ -824,37 +827,20 @@ async fn replay_driver_stdout_has_decimal_string_fence() {
         .await
         .unwrap();
     let db = gate_db_name().await;
-    let mut url = String::new();
-    let config = with_db(&test_config(), &db);
-    // Build the admin URL from the validated config for the driver env.
-    url.push_str("postgres://postgres:awr-test@");
-    match &config.get_hosts()[0] {
-        tokio_postgres::config::Host::Tcp(h) => url.push_str(h),
-        #[cfg(unix)]
-        tokio_postgres::config::Host::Unix(p) => url.push_str(&p.display().to_string()),
-    }
-    url.push_str(&format!(
-        ":{}/{}",
-        config.get_ports().first().copied().unwrap_or(5432),
-        db
-    ));
-    let output = std::process::Command::new(concat!(
-        env!("CARGO_MANIFEST_DIR"),
-        "/../../target/debug/examples/tc_replay"
-    ))
-    .args([
-        "claim",
-        "project-tc003",
-        "work-tc003",
-        "kimi-cli",
-        "kimi",
-        "conv-1",
-    ])
-    .env("AWR_TEAM_DATABASE_URL", &url)
-    .output()
-    .expect(
-        "run tc_replay example (build it with: cargo build -p awr-team-pg --example tc_replay)",
-    );
+    let executable = build_example_and_locate("tc_replay");
+    let output = std::process::Command::new(executable)
+        .args([
+            "claim",
+            "project-tc003",
+            "work-tc003",
+            "kimi-cli",
+            "kimi",
+            "conv-1",
+        ])
+        .env("AWR_TEAM_DATABASE_URL", test_database_url_raw())
+        .env("TC_DB", &db)
+        .output()
+        .expect("run the tc_replay driver built by this Cargo invocation");
     assert!(
         output.status.success(),
         "driver failed: {}",
@@ -865,4 +851,48 @@ async fn replay_driver_stdout_has_decimal_string_fence() {
         stdout["fence"].is_string(),
         "driver stdout fence must be a decimal string: {stdout}"
     );
+}
+
+/// Build the example through Cargo itself and locate the executable from
+/// the compiler-artifact JSON, so CARGO_TARGET_DIR, --target-dir and release
+/// profiles all resolve to THIS build's output (CR #56 round 3). Fails
+/// loudly if the artifact cannot be produced or found.
+fn build_example_and_locate(example: &str) -> String {
+    let manifest_dir = env!("CARGO_MANIFEST_DIR");
+    let output =
+        std::process::Command::new(std::env::var("CARGO").unwrap_or_else(|_| "cargo".into()))
+            .args([
+                "build",
+                "-p",
+                "awr-team-pg",
+                "--example",
+                example,
+                "--message-format=json",
+            ])
+            .current_dir(format!("{manifest_dir}/../.."))
+            .output()
+            .expect("invoke cargo build for the example");
+    assert!(
+        output.status.success(),
+        "cargo build --example {example} failed: {}",
+        String::from_utf8_lossy(&output.stderr)
+    );
+    for line in String::from_utf8_lossy(&output.stdout).lines() {
+        let Ok(message) = serde_json::from_str::<serde_json::Value>(line) else {
+            continue;
+        };
+        if message["reason"] != "compiler-artifact" {
+            continue;
+        }
+        let is_example = message["target"]["kind"]
+            .as_array()
+            .map(|k| k.iter().any(|v| v == "example"))
+            .unwrap_or(false);
+        if is_example && message["target"]["name"] == example {
+            if let Some(executable) = message["executable"].as_str() {
+                return executable.to_string();
+            }
+        }
+    }
+    panic!("cargo did not report an executable for example {example}");
 }
