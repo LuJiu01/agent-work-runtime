@@ -28,8 +28,11 @@ pub struct OutboxDelivery {
     pub effect_key: String,
     #[serde(serialize_with = "ser_i64_string", deserialize_with = "de_i64_flex")]
     pub fence: i64,
-    /// Work identity of the token issuer; fences from different works are
-    /// unrelated counters and must never be compared (CR #58 r3).
+    /// Full identity of the token issuer: fences increment per
+    /// (tenant, project, scope, work) and must never be compared across
+    /// them (CR #58 r3/r4).
+    pub tenant_id: String,
+    pub project_id: String,
     pub work_id: String,
     pub scope_id: String,
     pub fencing_class: String,
@@ -179,6 +182,8 @@ impl ExecutionStore {
         let payload = json!({
             "execution_id": execution_id,
             "effect_key": effect_key,
+            "tenant_id": tenant_id,
+            "project_id": project_id,
             "work_id": work_id,
             "scope_id": scope_id,
             "session_id": session_id,
@@ -309,6 +314,16 @@ impl ExecutionStore {
                     .ok_or_else(|| PgError::Protocol("outbox payload has invalid fence".into()))?,
                 _ => return Err(PgError::Protocol("outbox payload missing fence".into())),
             },
+            tenant_id: payload
+                .get("tenant_id")
+                .and_then(Value::as_str)
+                .unwrap_or_default()
+                .to_owned(),
+            project_id: payload
+                .get("project_id")
+                .and_then(Value::as_str)
+                .unwrap_or_default()
+                .to_owned(),
             work_id: payload
                 .get("work_id")
                 .and_then(Value::as_str)

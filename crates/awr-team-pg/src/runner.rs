@@ -39,9 +39,6 @@ pub struct RunnerOutcome {
 pub struct ReferenceRunner {
     journal_dir: PathBuf,
     worktree_root: PathBuf,
-    /// How old a non-terminal journal must be before recovery may convert
-    /// it to unknown. Tests override; production default is 60s.
-    recovery_stale_ms: u64,
 }
 
 enum JournalLoad {
@@ -50,24 +47,23 @@ enum JournalLoad {
     Corrupt(String),
 }
 
+/// RAII holder for an OS-level advisory lock. File locks are released when
+/// the process dies or the handle closes — no orphan lock files, unlike
+/// create_new marker files (CR #58 r4 P2-2).
+struct OsLock {
+    _file: fs::File,
+}
+
 impl ReferenceRunner {
     pub fn new(root: impl Into<PathBuf>) -> Self {
         let root = root.into();
         Self {
             journal_dir: root.join("journal"),
             worktree_root: root.join("worktree"),
-            recovery_stale_ms: 60_000,
         }
     }
 
-    /// Test hook: zero means "immediately stale" for recovery fixtures.
-    pub fn with_recovery_stale_ms(mut self, ms: u64) -> Self {
-        self.recovery_stale_ms = ms;
-        self
-    }
-
-    /// Visible to pg-tests for crash-recovery fixtures.
-    pub fn base_outcome(&self, delivery: &OutboxDelivery, state: &str) -> RunnerOutcome {
+    fn base_outcome_impl(&self, delivery: &OutboxDelivery, state: &str) -> RunnerOutcome {
         RunnerOutcome {
             execution_id: delivery.execution_id.clone(),
             effect_key: delivery.effect_key.clone(),
@@ -84,93 +80,154 @@ impl ReferenceRunner {
         }
     }
 
-    fn fence_ledger_path(&self, work_id: &str) -> PathBuf {
-        self.journal_dir.join(format!("fence-ledger-{work_id}"))
+    /// Visible to pg-tests for crash-recovery fixtures.
+    pub fn base_outcome(&self, delivery: &OutboxDelivery, state: &str) -> RunnerOutcome {
+        self.base_outcome_impl(delivery, state)
     }
 
-    /// Resource-end fencing (CR #58 r3):
-    /// - the ledger identity matches the token issuer: one ledger PER WORK,
-    ///   because fences from different works are unrelated counters
-    /// - read-check-update runs under an advisory lock held for the WHOLE
-    ///   effect phase, so "passes check, another finishes, resumes" cannot
-    ///   reorder side effects
-    /// - a missing ledger is "not yet fenced"; a CORRUPT one refuses side
-    ///   effects instead of pretending the token state is unknown-safe
-    fn acquire_fence(&self, delivery: &OutboxDelivery) -> Result<FenceGuard, String> {
-        let ledger = self.fence_ledger_path(&delivery.work_id);
-        let lock = self
-            .journal_dir
-            .join(format!("fence-ledger-{}.lock", delivery.work_id));
+    fn fencing_dir(&self) -> PathBuf {
+        self.journal_dir.join("fencing")
+    }
+    fn exec_lock_dir(&self) -> PathBuf {
+        self.journal_dir.join("locks")
+    }
+
+    /// The fencing ledger key is the FULL token identity
+    /// (tenant/project/scope/work), percent-encoded into an unambiguous file
+    /// name; ledgers and locks live in separate namespaces, so a work id
+    /// like "task.lock" cannot collide with another work's lock (CR #58 r4
+    /// P2-3).
+    fn fence_paths(&self, delivery: &OutboxDelivery) -> (PathBuf, PathBuf) {
+        let key = encode_key(&format!(
+            "{}|{}|{}|{}",
+            delivery.tenant_id, delivery.project_id, delivery.scope_id, delivery.work_id
+        ));
+        (
+            self.fencing_dir().join(format!("ledger-{key}")),
+            self.fencing_dir().join(format!("lock-{key}")),
+        )
+    }
+
+    /// Acquire an OS advisory lock with bounded spin; the lock releases on
+    /// process death (CR #58 r4 P2-2).
+    fn acquire_os_lock(&self, path: &Path, what: &str) -> Result<OsLock, String> {
+        let file = fs::OpenOptions::new()
+            .read(true)
+            .write(true)
+            .create(true)
+            .truncate(false)
+            .open(path)
+            .map_err(|e| format!("{what} lock open failed: {e}"))?;
         let mut attempts = 0;
-        let lock_file = loop {
-            match fs::OpenOptions::new()
-                .write(true)
-                .create_new(true)
-                .open(&lock)
-            {
-                Ok(file) => break file,
-                Err(error) if error.kind() == ErrorKind::AlreadyExists => {
+        loop {
+            match file.try_lock() {
+                Ok(()) => return Ok(OsLock { _file: file }),
+                Err(fs::TryLockError::WouldBlock) => {
                     attempts += 1;
                     if attempts > 40 {
-                        return Err("fence ledger busy".to_string());
+                        return Err(format!("{what} busy"));
                     }
                     std::thread::sleep(std::time::Duration::from_millis(50));
                 }
-                Err(error) => return Err(format!("fence ledger lock failed: {error}")),
-            }
-        };
-        let outcome = (|| {
-            let current: Option<i64> = match fs::read_to_string(&ledger) {
-                Ok(raw) => Some(
-                    raw.trim()
-                        .parse()
-                        .map_err(|_| "fence ledger is corrupt".to_string())?,
-                ),
-                Err(error) if error.kind() == ErrorKind::NotFound => None,
-                Err(error) => return Err(format!("fence ledger unreadable: {error}")),
-            };
-            if let Some(current) = current {
-                if delivery.fence < current {
-                    return Err(format!(
-                        "stale fencing token {} (current {current})",
-                        delivery.fence
-                    ));
-                }
-            }
-            if current.map(|c| delivery.fence > c).unwrap_or(true) {
-                fs::write(&ledger, delivery.fence.to_string())
-                    .map_err(|e| format!("fence ledger persist failed: {e}"))?;
-            }
-            Ok(())
-        })();
-        match outcome {
-            Ok(()) => Ok(FenceGuard {
-                _lock: lock_file,
-                lock_path: lock,
-            }),
-            Err(error) => {
-                let _ = fs::remove_file(&lock);
-                Err(error)
+                Err(error) => return Err(format!("{what} lock failed: {error}")),
             }
         }
     }
 
+    /// Resource-end fencing under the per-identity OS lock. The caller keeps
+    /// the guard for the WHOLE effect phase, so a stale executor that passed
+    /// an earlier check cannot reorder its writes past a newer one
+    /// (CR #58 r3/r4).
+    fn acquire_fence(&self, delivery: &OutboxDelivery) -> Result<OsLock, String> {
+        let (ledger, lock) = self.fence_paths(delivery);
+        let guard = self.acquire_os_lock(&lock, "fence ledger")?;
+        let current: Option<i64> = match fs::read_to_string(&ledger) {
+            Ok(raw) => Some(
+                raw.trim()
+                    .parse()
+                    .map_err(|_| "fence ledger is corrupt".to_string())?,
+            ),
+            Err(error) if error.kind() == ErrorKind::NotFound => None,
+            Err(error) => return Err(format!("fence ledger unreadable: {error}")),
+        };
+        if let Some(current) = current {
+            if delivery.fence < current {
+                return Err(format!(
+                    "stale fencing token {} (current {current})",
+                    delivery.fence
+                ));
+            }
+        }
+        if current.map(|c| delivery.fence > c).unwrap_or(true) {
+            // Writable handle + sync BEFORE relying on the ledger (Windows
+            // cannot flush a read-only handle — CR #58 r4 P2-5).
+            let mut file = fs::OpenOptions::new()
+                .write(true)
+                .create(true)
+                .truncate(true)
+                .open(&ledger)
+                .map_err(|e| format!("fence ledger persist failed: {e}"))?;
+            use std::io::Write;
+            file.write_all(delivery.fence.to_string().as_bytes())
+                .map_err(|e| format!("fence ledger persist failed: {e}"))?;
+            file.sync_all()
+                .map_err(|e| format!("fence ledger sync failed: {e}"))?;
+        }
+        Ok(guard)
+    }
+
+    /// Recovery ownership: a live duplicate returns the in-flight record
+    /// unchanged; only once the execution OS lock is FREE (the owner is
+    /// provably dead) may the record convert to unknown, and a terminal
+    /// record found on re-read always wins (CR #58 r4 P2-4).
+    fn recover_or_wait(&self, existing: RunnerOutcome) -> RunnerOutcome {
+        let lock_path = self
+            .exec_lock_dir()
+            .join(format!("{}.lock", existing.execution_id));
+        let guard = match fs::OpenOptions::new()
+            .read(true)
+            .write(true)
+            .create(true)
+            .truncate(false)
+            .open(&lock_path)
+            .map_err(|e| e.to_string())
+            .and_then(|file| match file.try_lock() {
+                Ok(()) => Ok(file),
+                Err(fs::TryLockError::WouldBlock) => Err("in-flight".to_string()),
+                Err(error) => Err(error.to_string()),
+            }) {
+            Ok(file) => file,
+            Err(_) => return existing, // owner provably alive
+        };
+        // The owner is dead: the OS released the lock.
+        let current = match self.load(&existing.execution_id) {
+            JournalLoad::Owned(current) => current,
+            _ => existing,
+        };
+        drop(guard);
+        if matches!(current.state.as_str(), "succeeded" | "failed") || current.unknown {
+            return current;
+        }
+        let mut recovered = current;
+        recovered.state = "unknown".into();
+        recovered.unknown = true;
+        recovered.error = Some("previous handler died mid-execution; effects uncertain".into());
+        let _ = self.persist_result(&recovered);
+        recovered
+    }
+
     pub fn handle_delivery(&self, delivery: &OutboxDelivery, crash: CrashPoint) -> RunnerOutcome {
         if let Err(error) = fs::create_dir_all(&self.journal_dir)
+            .and_then(|_| fs::create_dir_all(&self.fencing_dir()))
+            .and_then(|_| fs::create_dir_all(&self.exec_lock_dir()))
             .and_then(|_| fs::create_dir_all(&self.worktree_root))
         {
             let mut outcome = self.base_outcome(delivery, "failed");
             outcome.error = Some(format!("runner directories unavailable: {error}"));
             return outcome;
         }
-        // An existing journal is the execution admission record. A corrupt or
-        // unreadable one is NOT "never executed" — it takes the unknown path
-        // and must not re-run effects (CR #41 P2-3).
         match self.load(&delivery.execution_id) {
             JournalLoad::Owned(existing) => {
-                // A terminal journal is the idempotent result. A NON-terminal
-                // one proves NOTHING about the previous handler being dead —
-                // recovery requires explicit ownership (CR #58 r3 P2-4).
                 if matches!(existing.state.as_str(), "succeeded" | "failed") || existing.unknown {
                     return existing;
                 }
@@ -184,10 +241,21 @@ impl ReferenceRunner {
             }
             JournalLoad::Missing => {}
         }
-        if crash == CrashPoint::BeforeJournal {
-            return self.base_outcome(delivery, "prepared");
-        }
-        // Atomic admission: only the FIRST handler may create the journal.
+        // Execution ownership for the whole run; released by the OS on
+        // death, so recovery can provably take over (CR #58 r4 P2-2/P2-4).
+        let exec_lock = self
+            .exec_lock_dir()
+            .join(format!("{}.lock", delivery.execution_id));
+        let _exec_guard = match self.acquire_os_lock(&exec_lock, "execution") {
+            Ok(guard) => guard,
+            Err(error) => {
+                let mut outcome = self.base_outcome(delivery, "accepted");
+                outcome.error = Some(format!("execution busy: {error}"));
+                return outcome;
+            }
+        };
+        // The ownership lock is held before touching the journal, so the
+        // first handler cannot be shadowed mid-run (CR #58 r4 P2-4).
         if let Err(error) = self.persist_new(&self.base_outcome(delivery, "accepted")) {
             match error.kind() {
                 ErrorKind::AlreadyExists => match self.load(&delivery.execution_id) {
@@ -213,20 +281,23 @@ impl ReferenceRunner {
                 }
             }
         }
+        if crash == CrashPoint::BeforeJournal {
+            return self.base_outcome(delivery, "prepared");
+        }
         if crash == CrashPoint::AfterJournalBeforeEffect {
             let mut outcome = self.base_outcome(delivery, "unknown");
             outcome.unknown = true;
-            self.persist(&outcome);
+            let _ = self.persist_result(&outcome);
             return outcome;
         }
-        // Validate the COMPLETE write plan before any side effect (CR #41
-        // P1-1, P2-10). A single violation means zero writes.
+        // Validate the COMPLETE write plan — including the destination files
+        // themselves — before any side effect (CR #41 P1-1, CR #58 r4 P1).
         let root_canon = match self.worktree_root.canonicalize() {
             Ok(path) => path,
             Err(error) => {
                 let mut outcome = self.base_outcome(delivery, "failed");
                 outcome.error = Some(format!("worktree unavailable: {error}"));
-                let _ = self.persist(&outcome);
+                let _ = self.persist_result(&outcome);
                 return outcome;
             }
         };
@@ -260,53 +331,35 @@ impl ReferenceRunner {
                 outcome.scope_violation = true;
                 outcome.observed_paths = vec![rel.clone()];
                 outcome.error = Some(format!("path outside declared scope: {rel}"));
-                let _ = self.persist(&outcome);
+                let _ = self.persist_result(&outcome);
                 return outcome;
             }
             let dest = self.worktree_root.join(&rel);
-            if let Err(error) = self.ensure_inside(&root_canon, &dest) {
+            // Pre-check the FULL chain including the final component, so a
+            // known-illegal plan fails before ANY write (CR #58 r4 P1).
+            if let Err(error) = self.verify_chain(&root_canon, &dest) {
                 return self.reject_plan(delivery, error);
             }
             plan.push((rel, dest, content));
         }
-        // Execute the plan; propagate real I/O errors and record only the
-        // writes that actually happened (CR #41 P2-4). The fence guard is
-        // held for the whole effect phase (CR #58 r3 P1).
         let _fence_guard = match self.acquire_fence(delivery) {
             Ok(guard) => guard,
             Err(error) => {
                 let mut outcome = self.base_outcome(delivery, "failed");
                 outcome.error = Some(error);
-                let _ = self.persist(&outcome);
+                let _ = self.persist_result(&outcome);
                 return outcome;
             }
         };
         let mut observed = Vec::new();
         let mut partial = Vec::new();
         for (rel, dest, content) in &plan {
-            // Re-verify AT WRITE TIME: the destination itself must not be a
-            // symlink, and its parent must still resolve inside the worktree
-            // (plan-time checks alone leave a check/use window — CR #58 P1).
-            let guarded = (|| -> Result<(), String> {
-                if let Ok(meta) = fs::symlink_metadata(dest) {
-                    if meta.file_type().is_symlink() {
-                        return Err(format!("write target is a symlink: {}", dest.display()));
-                    }
-                }
-                self.ensure_inside(&root_canon, dest)
-            })();
-            let result = guarded
+            let result = self
+                .verify_chain(&root_canon, dest)
                 .map_err(|e| std::io::Error::new(ErrorKind::PermissionDenied, e))
-                .and_then(|_| {
-                    dest.parent()
-                        .map(|parent| fs::create_dir_all(parent))
-                        .unwrap_or_else(|| Ok(()))
-                })
-                .and_then(|_| guarded_write(dest, content));
+                .and_then(|_| confined_write(&root_canon, rel, content));
             if let Err(error) = result {
-                // A failed write does NOT mean the file is unchanged: it may
-                // be truncated or partially written. Record it as touched,
-                // never as untouched (CR #58 P2-4).
+                // A failed write does NOT mean the file is unchanged (CR #58 P2-4).
                 partial.push(rel.clone());
                 let mut outcome = self.base_outcome(delivery, "failed");
                 outcome.started = true;
@@ -314,7 +367,7 @@ impl ReferenceRunner {
                 outcome.partial_paths = partial.clone();
                 outcome.output_digest = Some(output_digest(&self.worktree_root, &observed));
                 outcome.error = Some(format!("write failed for {rel}: {error}"));
-                let _ = self.persist(&outcome);
+                let _ = self.persist_result(&outcome);
                 return outcome;
             }
             observed.push(rel.clone());
@@ -326,7 +379,7 @@ impl ReferenceRunner {
             outcome.started = true;
             outcome.observed_paths = observed;
             outcome.output_digest = Some(digest);
-            self.persist(&outcome);
+            let _ = self.persist_result(&outcome);
             return outcome;
         }
         let mut outcome = self.base_outcome(delivery, "succeeded");
@@ -347,17 +400,27 @@ impl ReferenceRunner {
         let mut outcome = self.base_outcome(delivery, "failed");
         outcome.scope_violation = true;
         outcome.error = Some(error);
-        let _ = self.persist(&outcome);
+        let _ = self.persist_result(&outcome);
         outcome
     }
 
-    /// Defense in depth at write time: the destination's deepest existing
-    /// ancestor must resolve INSIDE the canonical worktree, so symlinks
-    /// cannot escape (CR #41 P1-1).
-    fn ensure_inside(&self, root_canon: &Path, dest: &Path) -> Result<(), String> {
+    /// Every component from the canonical root down to the final file must
+    /// be present-or-creatable and NOT a symlink (CR #41 P1-1, CR #58 r4 P1).
+    fn verify_chain(&self, root_canon: &Path, dest: &Path) -> Result<(), String> {
+        if let Ok(meta) = fs::symlink_metadata(dest) {
+            if meta.file_type().is_symlink() {
+                return Err(format!("write target is a symlink: {}", dest.display()));
+            }
+        }
         let mut ancestor = dest.parent().map(Path::to_path_buf);
         while let Some(dir) = ancestor.clone() {
             if dir.exists() {
+                if fs::symlink_metadata(&dir)
+                    .map(|m| m.file_type().is_symlink())
+                    .unwrap_or(false)
+                {
+                    return Err(format!("path contains a symlink: {}", dir.display()));
+                }
                 let canon = dir
                     .canonicalize()
                     .map_err(|e| format!("cannot resolve {}: {e}", dir.display()))?;
@@ -375,58 +438,6 @@ impl ReferenceRunner {
             "write target has no existing ancestor: {}",
             dest.display()
         ))
-    }
-
-    /// Recovery ownership protocol: a live duplicate returns the in-flight
-    /// record unchanged; only a caller that acquires the recovery lock AND
-    /// finds the record stale may convert it to unknown. Terminal records
-    /// discovered on re-read win over any stale local copy (CR #58 r3 P2-4).
-    fn recover_or_wait(&self, existing: RunnerOutcome) -> RunnerOutcome {
-        let recovery_lock = self
-            .journal_dir
-            .join(format!("{}.recovery.lock", existing.execution_id));
-        let lock = match fs::OpenOptions::new()
-            .write(true)
-            .create_new(true)
-            .open(&recovery_lock)
-        {
-            Ok(file) => file,
-            Err(error) if error.kind() == ErrorKind::AlreadyExists => {
-                // Another handler holds recovery ownership; report the
-                // in-flight record unchanged.
-                return existing;
-            }
-            Err(_) => return existing,
-        };
-        let result = (|| {
-            let current = match self.load(&existing.execution_id) {
-                JournalLoad::Owned(current) => current,
-                _ => return existing,
-            };
-            if matches!(current.state.as_str(), "succeeded" | "failed") || current.unknown {
-                return current;
-            }
-            let stale_ms = self.recovery_stale_ms;
-            let age_ms = fs::metadata(self.journal_path(&current.execution_id))
-                .and_then(|m| m.modified())
-                .ok()
-                .and_then(|m| m.elapsed().ok())
-                .map(|e| e.as_millis() as u64)
-                .unwrap_or(0);
-            if age_ms < stale_ms {
-                // Still fresh: the owner may be alive; report unchanged.
-                return current;
-            }
-            let mut recovered = current;
-            recovered.state = "unknown".into();
-            recovered.unknown = true;
-            recovered.error = Some("previous handler died mid-execution; effects uncertain".into());
-            let _ = self.persist_result(&recovered);
-            recovered
-        })();
-        drop(lock);
-        let _ = fs::remove_file(&recovery_lock);
-        result
     }
 
     fn journal_path(&self, execution_id: &str) -> PathBuf {
@@ -453,8 +464,6 @@ impl ReferenceRunner {
             .open(self.journal_path(&outcome.execution_id))?;
         use std::io::Write;
         file.write_all(&bytes)?;
-        // Closing is not durability; make the admission record durable
-        // before relying on it (CR #58 P2-3).
         file.sync_all()
     }
 
@@ -462,17 +471,48 @@ impl ReferenceRunner {
         let bytes = serde_json::to_vec(outcome)
             .map_err(|e| std::io::Error::new(ErrorKind::InvalidData, e))?;
         let path = self.journal_path(&outcome.execution_id);
-        // Atomic replace: a torn write must never look like a valid journal.
-        let tmp = path.with_extension("json.tmp");
-        fs::write(&tmp, &bytes)?;
-        fs::File::open(&tmp)?.sync_all()?;
+        // Unique temp name (no cross-writer tmp collisions), writable handle
+        // synced BEFORE rename (read-only handles cannot flush on Windows —
+        // CR #58 r4 P2-5), then an atomic replace.
+        let tmp = path.with_extension(format!(
+            "json.tmp.{}.{}",
+            std::process::id(),
+            std::time::SystemTime::now()
+                .duration_since(std::time::UNIX_EPOCH)
+                .map(|d| d.subsec_nanos())
+                .unwrap_or(0)
+        ));
+        {
+            let mut file = fs::File::create(&tmp)?;
+            use std::io::Write;
+            file.write_all(&bytes)?;
+            file.sync_all()?;
+        }
         fs::rename(&tmp, &path)?;
-        fs::File::open(&path)?.sync_all()
+        #[cfg(unix)]
+        {
+            if let Some(dir) = path.parent() {
+                if let Ok(dir) = fs::File::open(dir) {
+                    let _ = dir.sync_all();
+                }
+            }
+        }
+        Ok(())
     }
+}
 
-    fn persist(&self, outcome: &RunnerOutcome) {
-        let _ = self.persist_result(outcome);
+/// Percent-encode an identity segment so file names are unambiguous.
+/// Exposed to pg-tests for lock/ledger fixtures.
+#[doc(hidden)]
+pub fn encode_key(raw: &str) -> String {
+    let mut out = String::new();
+    for byte in raw.bytes() {
+        match byte {
+            b'a'..=b'z' | b'A'..=b'Z' | b'0'..=b'9' | b'-' | b'_' | b'.' => out.push(byte as char),
+            other => out.push_str(&format!("%{other:02X}")),
+        }
     }
+    out
 }
 
 /// Normalize a write path to a safe relative form; rejects absolute paths,
@@ -495,6 +535,94 @@ fn normalize_write_path(path: &str) -> Option<String> {
     Some(parts.join("/"))
 }
 
+/// Confined write: resolve every component relative to the worktree dir fd
+/// with O_NOFOLLOW, so neither the final file NOR any intermediate directory
+/// can be a symlink, and path resolution cannot escape the root (CR #58 r4
+/// P1). Non-unix keeps the caller's lexical checks (weaker, documented).
+#[cfg(unix)]
+fn confined_write(root: &Path, rel: &str, content: &str) -> std::io::Result<()> {
+    use std::ffi::CString;
+    use std::io::Write;
+    use std::os::unix::ffi::OsStrExt;
+    use std::os::unix::io::FromRawFd;
+
+    fn cstr(bytes: &[u8]) -> std::io::Result<CString> {
+        CString::new(bytes).map_err(|_| std::io::Error::new(ErrorKind::InvalidInput, "NUL"))
+    }
+
+    let root_fd = unsafe {
+        libc::open(
+            cstr(root.as_os_str().as_bytes())?.as_ptr(),
+            libc::O_RDONLY | libc::O_DIRECTORY | libc::O_NOFOLLOW | libc::O_CLOEXEC,
+        )
+    };
+    if root_fd < 0 {
+        return Err(std::io::Error::last_os_error());
+    }
+    let mut fd = root_fd;
+    let components: Vec<&str> = rel.split('/').collect();
+    for directory in &components[..components.len() - 1] {
+        let name = cstr(directory.as_bytes())?;
+        let next = unsafe {
+            libc::openat(
+                fd,
+                name.as_ptr(),
+                libc::O_RDONLY | libc::O_DIRECTORY | libc::O_NOFOLLOW | libc::O_CLOEXEC,
+            )
+        };
+        if next < 0 && std::io::Error::last_os_error().raw_os_error() == Some(libc::ENOENT) {
+            if unsafe { libc::mkdirat(fd, name.as_ptr(), 0o755) } < 0 {
+                let error = std::io::Error::last_os_error();
+                unsafe { libc::close(fd) };
+                return Err(error);
+            }
+            let opened = unsafe {
+                libc::openat(
+                    fd,
+                    name.as_ptr(),
+                    libc::O_RDONLY | libc::O_DIRECTORY | libc::O_NOFOLLOW | libc::O_CLOEXEC,
+                )
+            };
+            unsafe { libc::close(fd) };
+            if opened < 0 {
+                return Err(std::io::Error::last_os_error());
+            }
+            fd = opened;
+        } else {
+            unsafe { libc::close(fd) };
+            if next < 0 {
+                return Err(std::io::Error::last_os_error());
+            }
+            fd = next;
+        }
+    }
+    let name = cstr(components[components.len() - 1].as_bytes())?;
+    let file_fd = unsafe {
+        libc::openat(
+            fd,
+            name.as_ptr(),
+            libc::O_WRONLY | libc::O_CREAT | libc::O_TRUNC | libc::O_NOFOLLOW | libc::O_CLOEXEC,
+            0o644,
+        )
+    };
+    unsafe { libc::close(fd) };
+    if file_fd < 0 {
+        return Err(std::io::Error::last_os_error());
+    }
+    let mut file = unsafe { fs::File::from_raw_fd(file_fd) };
+    file.write_all(content.as_bytes())?;
+    file.sync_all()
+}
+
+#[cfg(not(unix))]
+fn confined_write(root: &Path, rel: &str, content: &str) -> std::io::Result<()> {
+    let dest = root.join(rel);
+    if let Some(parent) = dest.parent() {
+        fs::create_dir_all(parent)?;
+    }
+    fs::write(dest, content)
+}
+
 fn env_digest(worktree: &Path) -> String {
     format!(
         "{:x}",
@@ -513,41 +641,4 @@ fn output_digest(worktree: &Path, paths: &[String]) -> String {
         }
     }
     format!("{:x}", hasher.finalize())
-}
-
-/// Guard keeping the per-work fence lock for the whole effect phase.
-struct FenceGuard {
-    _lock: fs::File,
-    lock_path: PathBuf,
-}
-
-impl Drop for FenceGuard {
-    fn drop(&mut self) {
-        let _ = fs::remove_file(&self.lock_path);
-    }
-}
-
-/// On unix the final component is opened with O_NOFOLLOW so a symlink
-/// swapped in after the last check cannot be followed (CR #58 r3 P1).
-/// Residual note: full resolution control would need openat2-style
-/// semantics; ancestor re-checks plus O_NOFOLLOW are what std+libc offer.
-#[cfg(unix)]
-fn guarded_write(dest: &Path, content: &str) -> std::io::Result<()> {
-    use std::io::Write;
-    use std::os::unix::fs::OpenOptionsExt;
-    let mut file = fs::OpenOptions::new()
-        .write(true)
-        .create(true)
-        .truncate(true)
-        .custom_flags(libc::O_NOFOLLOW)
-        .open(dest)?;
-    file.write_all(content.as_bytes())?;
-    file.sync_all()
-}
-
-#[cfg(not(unix))]
-fn guarded_write(dest: &Path, content: &str) -> std::io::Result<()> {
-    // Weaker platform: the write-time symlink_metadata and ancestor checks
-    // in the caller still apply, but the final open cannot refuse links.
-    fs::write(dest, content)
 }

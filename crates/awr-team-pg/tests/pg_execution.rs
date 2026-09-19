@@ -867,6 +867,8 @@ fn delivery_on_work(
         outbox_id: format!("ob-{id}"),
         execution_id: id.into(),
         effect_key: id.into(),
+        tenant_id: "tenant-a".into(),
+        project_id: "project-a".into(),
         work_id: work_id.into(),
         scope_id: "main".into(),
         fence: 1,
@@ -1037,7 +1039,7 @@ async fn runner_rejects_stale_fencing_tokens() {
 async fn runner_recovers_crashed_journal_as_unknown() {
     let base = std::env::temp_dir().join(format!("awr-p7-crash-{}", std::process::id()));
     let _ = std::fs::remove_dir_all(&base);
-    let runner = ReferenceRunner::new(&base).with_recovery_stale_ms(0);
+    let runner = ReferenceRunner::new(&base);
     let delivery = delivery_named(
         "exec-crash",
         json!([{"path": "src/a.txt", "content": "x"}]),
@@ -1333,8 +1335,13 @@ async fn runner_fence_ledger_is_scoped_per_work() {
 async fn runner_refuses_side_effects_with_corrupt_fence_ledger() {
     let base = std::env::temp_dir().join(format!("awr-p7-fencecorrupt-{}", std::process::id()));
     let _ = std::fs::remove_dir_all(&base);
-    std::fs::create_dir_all(base.join("journal")).unwrap();
-    std::fs::write(base.join("journal/fence-ledger-work-a"), "not-a-number").unwrap();
+    std::fs::create_dir_all(base.join("journal/fencing")).unwrap();
+    let key = awr_team_pg::encode_key("tenant-a|project-a|main|work-a");
+    std::fs::write(
+        base.join("journal/fencing").join(format!("ledger-{key}")),
+        "not-a-number",
+    )
+    .unwrap();
     let runner = ReferenceRunner::new(&base);
     let delivery = delivery_on_work(
         "exec-cf",
@@ -1357,8 +1364,17 @@ async fn runner_refuses_side_effects_with_corrupt_fence_ledger() {
 async fn runner_does_not_write_past_a_held_fence_lock() {
     let base = std::env::temp_dir().join(format!("awr-p7-fencelock-{}", std::process::id()));
     let _ = std::fs::remove_dir_all(&base);
-    std::fs::create_dir_all(base.join("journal")).unwrap();
-    std::fs::write(base.join("journal/fence-ledger-work-a.lock"), "").unwrap();
+    std::fs::create_dir_all(base.join("journal/fencing")).unwrap();
+    let key = awr_team_pg::encode_key("tenant-a|project-a|main|work-a");
+    let lock_path = base.join("journal/fencing").join(format!("lock-{key}"));
+    let holder = std::fs::OpenOptions::new()
+        .read(true)
+        .write(true)
+        .create(true)
+        .truncate(false)
+        .open(&lock_path)
+        .unwrap();
+    std::fs::File::lock(&holder).unwrap();
     let runner = ReferenceRunner::new(&base);
     let delivery = delivery_on_work(
         "exec-busy",
@@ -1393,7 +1409,15 @@ async fn duplicate_delivery_does_not_overwrite_an_inflight_journal() {
     let journal = base.join("journal/exec-dup.json");
     std::fs::write(&journal, serde_json::to_vec(&inflight).unwrap()).unwrap();
     // A recovery lock is held by another handler.
-    std::fs::write(base.join("journal/exec-dup.recovery.lock"), "").unwrap();
+    std::fs::create_dir_all(base.join("journal/locks")).unwrap();
+    let holder = std::fs::OpenOptions::new()
+        .read(true)
+        .write(true)
+        .create(true)
+        .truncate(false)
+        .open(base.join("journal/locks/exec-dup.lock"))
+        .unwrap();
+    std::fs::File::lock(&holder).unwrap();
     let outcome = runner.handle_delivery(&delivery, CrashPoint::None);
     assert_eq!(
         outcome.state, "accepted",
@@ -1467,4 +1491,102 @@ async fn same_outcome_report_with_null_observed_facts_is_safe() {
         .await
         .unwrap_err();
     assert!(matches!(err, PgError::Protocol(_)), "got {err}");
+}
+
+// CR #58 r4 P2-3: same work, different scope = different counters.
+#[tokio::test]
+async fn runner_fence_ledger_distinguishes_scopes() {
+    let base = std::env::temp_dir().join(format!("awr-p7-scopelock-{}", std::process::id()));
+    let _ = std::fs::remove_dir_all(&base);
+    let runner = ReferenceRunner::new(&base);
+    let mut main_high = delivery_on_work(
+        "exec-m7",
+        "work-a",
+        json!([{"path": "src/m.txt", "content": "m7"}]),
+        &["src"],
+    );
+    main_high.fence = 7;
+    main_high.scope_id = "main".into();
+    assert_eq!(
+        runner.handle_delivery(&main_high, CrashPoint::None).state,
+        "succeeded"
+    );
+    let mut review_low = delivery_on_work(
+        "exec-r1",
+        "work-a",
+        json!([{"path": "src/r.txt", "content": "r1"}]),
+        &["src"],
+    );
+    review_low.fence = 1;
+    review_low.scope_id = "review".into();
+    let outcome = runner.handle_delivery(&review_low, CrashPoint::None);
+    assert_eq!(
+        outcome.state, "succeeded",
+        "review scope falsely refused: {outcome:?}"
+    );
+}
+
+// CR #58 r4 P2-3: raw-id/suffix collisions cannot collide ledgers and locks.
+#[tokio::test]
+async fn fence_files_never_collide_across_identities() {
+    let base = std::env::temp_dir().join(format!("awr-p7-namecollide-{}", std::process::id()));
+    let _ = std::fs::remove_dir_all(&base);
+    let runner = ReferenceRunner::new(&base);
+    let mut task_lock = delivery_on_work(
+        "exec-tl",
+        "task.lock",
+        json!([{"path": "src/tl.txt", "content": "tl"}]),
+        &["src"],
+    );
+    task_lock.fence = 1;
+    assert_eq!(
+        runner.handle_delivery(&task_lock, CrashPoint::None).state,
+        "succeeded"
+    );
+    let mut task = delivery_on_work(
+        "exec-t",
+        "task",
+        json!([{"path": "src/t.txt", "content": "t"}]),
+        &["src"],
+    );
+    task.fence = 1;
+    let outcome = runner.handle_delivery(&task, CrashPoint::None);
+    assert_eq!(
+        outcome.state, "succeeded",
+        "identity collision: {outcome:?}"
+    );
+}
+
+// CR #58 r4 P1: a plan with a KNOWN-illegal destination must fail before
+// ANY file is written.
+#[cfg(unix)]
+#[tokio::test]
+async fn runner_rejects_known_illegal_plan_before_any_write() {
+    let base = std::env::temp_dir().join(format!("awr-p7-planreject-{}", std::process::id()));
+    let _ = std::fs::remove_dir_all(&base);
+    let outside = base.join("outside");
+    std::fs::create_dir_all(&outside).unwrap();
+    let sentinel = outside.join("sentinel.txt");
+    std::fs::write(&sentinel, "original").unwrap();
+    let file_dir = base.join("worktree/src");
+    std::fs::create_dir_all(&file_dir).unwrap();
+    std::os::unix::fs::symlink(&sentinel, file_dir.join("bad.txt")).unwrap();
+    let runner = ReferenceRunner::new(&base);
+    let outcome = runner.handle_delivery(
+        &delivery_named(
+            "exec-planreject",
+            json!([
+                {"path": "src/good.txt", "content": "first"},
+                {"path": "src/bad.txt", "content": "tampered"}
+            ]),
+            &["src"],
+        ),
+        CrashPoint::None,
+    );
+    assert_eq!(outcome.state, "failed");
+    assert!(
+        !base.join("worktree/src/good.txt").exists(),
+        "a known-illegal plan still wrote the first file"
+    );
+    assert_eq!(std::fs::read_to_string(&sentinel).unwrap(), "original");
 }
