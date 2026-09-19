@@ -28,6 +28,10 @@ pub struct OutboxDelivery {
     pub effect_key: String,
     #[serde(serialize_with = "ser_i64_string", deserialize_with = "de_i64_flex")]
     pub fence: i64,
+    /// Work identity of the token issuer; fences from different works are
+    /// unrelated counters and must never be compared (CR #58 r3).
+    pub work_id: String,
+    pub scope_id: String,
     pub fencing_class: String,
     pub declared_scope: Value,
     pub payload: Value,
@@ -176,6 +180,7 @@ impl ExecutionStore {
             "execution_id": execution_id,
             "effect_key": effect_key,
             "work_id": work_id,
+            "scope_id": scope_id,
             "session_id": session_id,
             "claim_id": claim_id,
             "fence": fence.to_string(),
@@ -304,6 +309,16 @@ impl ExecutionStore {
                     .ok_or_else(|| PgError::Protocol("outbox payload has invalid fence".into()))?,
                 _ => return Err(PgError::Protocol("outbox payload missing fence".into())),
             },
+            work_id: payload
+                .get("work_id")
+                .and_then(Value::as_str)
+                .unwrap_or_default()
+                .to_owned(),
+            scope_id: payload
+                .get("scope_id")
+                .and_then(Value::as_str)
+                .unwrap_or("main")
+                .to_owned(),
             fencing_class: payload
                 .get("fencing_class")
                 .and_then(Value::as_str)
@@ -605,7 +620,10 @@ impl ExecutionStore {
                 )
                 .await?
                 .get(0);
-            let stored_paths: Value = tx
+            // observed_paths_json is NULLABLE (e.g. a terminal state set via
+            // reconcile never wrote it); read it safely instead of panicking
+            // (CR #58 r3 P2-5).
+            let stored_paths: Option<Value> = tx
                 .query_one(
                     "SELECT observed_paths_json FROM awr_team.executions WHERE tenant_id=$1 AND project_id=$2 AND id=$3",
                     &[&tenant_id, &project_id, &execution_id],
@@ -613,8 +631,14 @@ impl ExecutionStore {
                 .await?
                 .get(0);
             let incoming_digest = payload.get("output_digest").and_then(Value::as_str);
-            let facts_match = stored_digest.as_deref() == incoming_digest
-                && stored_paths == json!(observed_paths);
+            // A SQL NULL is "unknown facts", NOT "confirmed no effects";
+            // unknown facts can never prove the replay identical.
+            let facts_match = match &stored_paths {
+                Some(stored) => {
+                    stored_digest.as_deref() == incoming_digest && *stored == json!(observed_paths)
+                }
+                None => false,
+            };
             if facts_match {
                 tx.commit().await?;
                 return self.get(tenant_id, project_id, execution_id).await;

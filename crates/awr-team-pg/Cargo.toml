@@ -27,3 +27,7 @@ default = []
 pg-tests = []
 # Optional TLS for PostgreSQL connections (rustls). Client default builds stay TLS-free.
 tls = ["dep:tokio-postgres-rustls", "dep:rustls", "dep:webpki-roots"]
+
+
+[target.'cfg(unix)'.dependencies]
+libc = "0.2"

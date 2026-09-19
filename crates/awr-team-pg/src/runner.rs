@@ -39,6 +39,9 @@ pub struct RunnerOutcome {
 pub struct ReferenceRunner {
     journal_dir: PathBuf,
     worktree_root: PathBuf,
+    /// How old a non-terminal journal must be before recovery may convert
+    /// it to unknown. Tests override; production default is 60s.
+    recovery_stale_ms: u64,
 }
 
 enum JournalLoad {
@@ -53,7 +56,14 @@ impl ReferenceRunner {
         Self {
             journal_dir: root.join("journal"),
             worktree_root: root.join("worktree"),
+            recovery_stale_ms: 60_000,
         }
+    }
+
+    /// Test hook: zero means "immediately stale" for recovery fixtures.
+    pub fn with_recovery_stale_ms(mut self, ms: u64) -> Self {
+        self.recovery_stale_ms = ms;
+        self
     }
 
     /// Visible to pg-tests for crash-recovery fixtures.
@@ -74,27 +84,75 @@ impl ReferenceRunner {
         }
     }
 
-    /// Resource-end fencing: side effects are bound to a monotonic fencing
-    /// token kept next to the journals. A delivery whose fence is OLDER than
-    /// the current token is a stale executor and must not write (CR #58 P1).
-    fn check_fence(&self, delivery: &OutboxDelivery) -> Result<(), String> {
-        let ledger = self.journal_dir.join("fence-ledger");
-        let current: Option<i64> = fs::read_to_string(&ledger)
-            .ok()
-            .and_then(|raw| raw.trim().parse().ok());
-        if let Some(current) = current {
-            if delivery.fence < current {
-                return Err(format!(
-                    "stale fencing token {} (current {current})",
-                    delivery.fence
-                ));
+    fn fence_ledger_path(&self, work_id: &str) -> PathBuf {
+        self.journal_dir.join(format!("fence-ledger-{work_id}"))
+    }
+
+    /// Resource-end fencing (CR #58 r3):
+    /// - the ledger identity matches the token issuer: one ledger PER WORK,
+    ///   because fences from different works are unrelated counters
+    /// - read-check-update runs under an advisory lock held for the WHOLE
+    ///   effect phase, so "passes check, another finishes, resumes" cannot
+    ///   reorder side effects
+    /// - a missing ledger is "not yet fenced"; a CORRUPT one refuses side
+    ///   effects instead of pretending the token state is unknown-safe
+    fn acquire_fence(&self, delivery: &OutboxDelivery) -> Result<FenceGuard, String> {
+        let ledger = self.fence_ledger_path(&delivery.work_id);
+        let lock = self
+            .journal_dir
+            .join(format!("fence-ledger-{}.lock", delivery.work_id));
+        let mut attempts = 0;
+        let lock_file = loop {
+            match fs::OpenOptions::new()
+                .write(true)
+                .create_new(true)
+                .open(&lock)
+            {
+                Ok(file) => break file,
+                Err(error) if error.kind() == ErrorKind::AlreadyExists => {
+                    attempts += 1;
+                    if attempts > 40 {
+                        return Err("fence ledger busy".to_string());
+                    }
+                    std::thread::sleep(std::time::Duration::from_millis(50));
+                }
+                Err(error) => return Err(format!("fence ledger lock failed: {error}")),
+            }
+        };
+        let outcome = (|| {
+            let current: Option<i64> = match fs::read_to_string(&ledger) {
+                Ok(raw) => Some(
+                    raw.trim()
+                        .parse()
+                        .map_err(|_| "fence ledger is corrupt".to_string())?,
+                ),
+                Err(error) if error.kind() == ErrorKind::NotFound => None,
+                Err(error) => return Err(format!("fence ledger unreadable: {error}")),
+            };
+            if let Some(current) = current {
+                if delivery.fence < current {
+                    return Err(format!(
+                        "stale fencing token {} (current {current})",
+                        delivery.fence
+                    ));
+                }
+            }
+            if current.map(|c| delivery.fence > c).unwrap_or(true) {
+                fs::write(&ledger, delivery.fence.to_string())
+                    .map_err(|e| format!("fence ledger persist failed: {e}"))?;
+            }
+            Ok(())
+        })();
+        match outcome {
+            Ok(()) => Ok(FenceGuard {
+                _lock: lock_file,
+                lock_path: lock,
+            }),
+            Err(error) => {
+                let _ = fs::remove_file(&lock);
+                Err(error)
             }
         }
-        if current.map(|c| delivery.fence > c).unwrap_or(true) {
-            fs::write(&ledger, delivery.fence.to_string())
-                .map_err(|e| format!("fence ledger persist failed: {e}"))?;
-        }
-        Ok(())
     }
 
     pub fn handle_delivery(&self, delivery: &OutboxDelivery, crash: CrashPoint) -> RunnerOutcome {
@@ -111,19 +169,12 @@ impl ReferenceRunner {
         match self.load(&delivery.execution_id) {
             JournalLoad::Owned(existing) => {
                 // A terminal journal is the idempotent result. A NON-terminal
-                // one means the previous handler died mid-execution: effects
-                // are uncertain, so recovery must not treat it as "never
-                // executed" nor as a final answer (CR #58 P2-3).
+                // one proves NOTHING about the previous handler being dead —
+                // recovery requires explicit ownership (CR #58 r3 P2-4).
                 if matches!(existing.state.as_str(), "succeeded" | "failed") || existing.unknown {
                     return existing;
                 }
-                let mut outcome = existing;
-                outcome.state = "unknown".into();
-                outcome.unknown = true;
-                outcome.error =
-                    Some("previous handler died mid-execution; effects uncertain".into());
-                let _ = self.persist(&outcome);
-                return outcome;
+                return self.recover_or_wait(existing);
             }
             JournalLoad::Corrupt(error) => {
                 let mut outcome = self.base_outcome(delivery, "unknown");
@@ -219,13 +270,17 @@ impl ReferenceRunner {
             plan.push((rel, dest, content));
         }
         // Execute the plan; propagate real I/O errors and record only the
-        // writes that actually happened (CR #41 P2-4).
-        if let Err(error) = self.check_fence(delivery) {
-            let mut outcome = self.base_outcome(delivery, "failed");
-            outcome.error = Some(error);
-            let _ = self.persist(&outcome);
-            return outcome;
-        }
+        // writes that actually happened (CR #41 P2-4). The fence guard is
+        // held for the whole effect phase (CR #58 r3 P1).
+        let _fence_guard = match self.acquire_fence(delivery) {
+            Ok(guard) => guard,
+            Err(error) => {
+                let mut outcome = self.base_outcome(delivery, "failed");
+                outcome.error = Some(error);
+                let _ = self.persist(&outcome);
+                return outcome;
+            }
+        };
         let mut observed = Vec::new();
         let mut partial = Vec::new();
         for (rel, dest, content) in &plan {
@@ -247,7 +302,7 @@ impl ReferenceRunner {
                         .map(|parent| fs::create_dir_all(parent))
                         .unwrap_or_else(|| Ok(()))
                 })
-                .and_then(|_| fs::write(dest, content));
+                .and_then(|_| guarded_write(dest, content));
             if let Err(error) = result {
                 // A failed write does NOT mean the file is unchanged: it may
                 // be truncated or partially written. Record it as touched,
@@ -322,6 +377,58 @@ impl ReferenceRunner {
         ))
     }
 
+    /// Recovery ownership protocol: a live duplicate returns the in-flight
+    /// record unchanged; only a caller that acquires the recovery lock AND
+    /// finds the record stale may convert it to unknown. Terminal records
+    /// discovered on re-read win over any stale local copy (CR #58 r3 P2-4).
+    fn recover_or_wait(&self, existing: RunnerOutcome) -> RunnerOutcome {
+        let recovery_lock = self
+            .journal_dir
+            .join(format!("{}.recovery.lock", existing.execution_id));
+        let lock = match fs::OpenOptions::new()
+            .write(true)
+            .create_new(true)
+            .open(&recovery_lock)
+        {
+            Ok(file) => file,
+            Err(error) if error.kind() == ErrorKind::AlreadyExists => {
+                // Another handler holds recovery ownership; report the
+                // in-flight record unchanged.
+                return existing;
+            }
+            Err(_) => return existing,
+        };
+        let result = (|| {
+            let current = match self.load(&existing.execution_id) {
+                JournalLoad::Owned(current) => current,
+                _ => return existing,
+            };
+            if matches!(current.state.as_str(), "succeeded" | "failed") || current.unknown {
+                return current;
+            }
+            let stale_ms = self.recovery_stale_ms;
+            let age_ms = fs::metadata(self.journal_path(&current.execution_id))
+                .and_then(|m| m.modified())
+                .ok()
+                .and_then(|m| m.elapsed().ok())
+                .map(|e| e.as_millis() as u64)
+                .unwrap_or(0);
+            if age_ms < stale_ms {
+                // Still fresh: the owner may be alive; report unchanged.
+                return current;
+            }
+            let mut recovered = current;
+            recovered.state = "unknown".into();
+            recovered.unknown = true;
+            recovered.error = Some("previous handler died mid-execution; effects uncertain".into());
+            let _ = self.persist_result(&recovered);
+            recovered
+        })();
+        drop(lock);
+        let _ = fs::remove_file(&recovery_lock);
+        result
+    }
+
     fn journal_path(&self, execution_id: &str) -> PathBuf {
         self.journal_dir.join(format!("{execution_id}.json"))
     }
@@ -355,7 +462,11 @@ impl ReferenceRunner {
         let bytes = serde_json::to_vec(outcome)
             .map_err(|e| std::io::Error::new(ErrorKind::InvalidData, e))?;
         let path = self.journal_path(&outcome.execution_id);
-        fs::write(&path, &bytes)?;
+        // Atomic replace: a torn write must never look like a valid journal.
+        let tmp = path.with_extension("json.tmp");
+        fs::write(&tmp, &bytes)?;
+        fs::File::open(&tmp)?.sync_all()?;
+        fs::rename(&tmp, &path)?;
         fs::File::open(&path)?.sync_all()
     }
 
@@ -402,4 +513,41 @@ fn output_digest(worktree: &Path, paths: &[String]) -> String {
         }
     }
     format!("{:x}", hasher.finalize())
+}
+
+/// Guard keeping the per-work fence lock for the whole effect phase.
+struct FenceGuard {
+    _lock: fs::File,
+    lock_path: PathBuf,
+}
+
+impl Drop for FenceGuard {
+    fn drop(&mut self) {
+        let _ = fs::remove_file(&self.lock_path);
+    }
+}
+
+/// On unix the final component is opened with O_NOFOLLOW so a symlink
+/// swapped in after the last check cannot be followed (CR #58 r3 P1).
+/// Residual note: full resolution control would need openat2-style
+/// semantics; ancestor re-checks plus O_NOFOLLOW are what std+libc offer.
+#[cfg(unix)]
+fn guarded_write(dest: &Path, content: &str) -> std::io::Result<()> {
+    use std::io::Write;
+    use std::os::unix::fs::OpenOptionsExt;
+    let mut file = fs::OpenOptions::new()
+        .write(true)
+        .create(true)
+        .truncate(true)
+        .custom_flags(libc::O_NOFOLLOW)
+        .open(dest)?;
+    file.write_all(content.as_bytes())?;
+    file.sync_all()
+}
+
+#[cfg(not(unix))]
+fn guarded_write(dest: &Path, content: &str) -> std::io::Result<()> {
+    // Weaker platform: the write-time symlink_metadata and ancestor checks
+    // in the caller still apply, but the final open cannot refuse links.
+    fs::write(dest, content)
 }

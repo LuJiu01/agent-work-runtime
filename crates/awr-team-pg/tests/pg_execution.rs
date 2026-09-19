@@ -854,10 +854,21 @@ fn delivery_named(
     writes: serde_json::Value,
     scope: &[&str],
 ) -> awr_team_pg::OutboxDelivery {
+    delivery_on_work(id, "work-a", writes, scope)
+}
+
+fn delivery_on_work(
+    id: &str,
+    work_id: &str,
+    writes: serde_json::Value,
+    scope: &[&str],
+) -> awr_team_pg::OutboxDelivery {
     awr_team_pg::OutboxDelivery {
         outbox_id: format!("ob-{id}"),
         execution_id: id.into(),
         effect_key: id.into(),
+        work_id: work_id.into(),
+        scope_id: "main".into(),
         fence: 1,
         fencing_class: "hard_fence".into(),
         declared_scope: json!(scope),
@@ -1026,7 +1037,7 @@ async fn runner_rejects_stale_fencing_tokens() {
 async fn runner_recovers_crashed_journal_as_unknown() {
     let base = std::env::temp_dir().join(format!("awr-p7-crash-{}", std::process::id()));
     let _ = std::fs::remove_dir_all(&base);
-    let runner = ReferenceRunner::new(&base);
+    let runner = ReferenceRunner::new(&base).with_recovery_stale_ms(0);
     let delivery = delivery_named(
         "exec-crash",
         json!([{"path": "src/a.txt", "content": "x"}]),
@@ -1267,4 +1278,193 @@ async fn nested_fences_are_decimal_strings() {
         receipt["fence"].is_string(),
         "cancel receipt fence is not a string"
     );
+}
+
+// CR #58 r3 P2: the fence ledger is PER WORK — a lower fence on a different
+// work is fine, the same work's older fence is refused.
+#[tokio::test]
+async fn runner_fence_ledger_is_scoped_per_work() {
+    let base = std::env::temp_dir().join(format!("awr-p7-fenceperwork-{}", std::process::id()));
+    let _ = std::fs::remove_dir_all(&base);
+    let runner = ReferenceRunner::new(&base);
+    let mut a2 = delivery_on_work(
+        "exec-a2",
+        "work-a",
+        json!([{"path": "src/a.txt", "content": "a2"}]),
+        &["src"],
+    );
+    a2.fence = 2;
+    assert_eq!(
+        runner.handle_delivery(&a2, CrashPoint::None).state,
+        "succeeded"
+    );
+    // Different work, unrelated counter: fence 1 is fine.
+    let mut b1 = delivery_on_work(
+        "exec-b1",
+        "work-b",
+        json!([{"path": "src/b.txt", "content": "b1"}]),
+        &["src"],
+    );
+    b1.fence = 1;
+    let outcome = runner.handle_delivery(&b1, CrashPoint::None);
+    assert_eq!(
+        outcome.state, "succeeded",
+        "different work falsely refused: {outcome:?}"
+    );
+    // Same work, older fence: refused, and the newer result stays.
+    let mut a1 = delivery_on_work(
+        "exec-a1",
+        "work-a",
+        json!([{"path": "src/a.txt", "content": "a1"}]),
+        &["src"],
+    );
+    a1.fence = 1;
+    let outcome = runner.handle_delivery(&a1, CrashPoint::None);
+    assert_eq!(outcome.state, "failed");
+    assert_eq!(
+        std::fs::read_to_string(base.join("worktree/src/a.txt")).unwrap(),
+        "a2"
+    );
+}
+
+// CR #58 r3 P2: a corrupt fence ledger refuses side effects instead of
+// pretending the token state is unknown-safe.
+#[tokio::test]
+async fn runner_refuses_side_effects_with_corrupt_fence_ledger() {
+    let base = std::env::temp_dir().join(format!("awr-p7-fencecorrupt-{}", std::process::id()));
+    let _ = std::fs::remove_dir_all(&base);
+    std::fs::create_dir_all(base.join("journal")).unwrap();
+    std::fs::write(base.join("journal/fence-ledger-work-a"), "not-a-number").unwrap();
+    let runner = ReferenceRunner::new(&base);
+    let delivery = delivery_on_work(
+        "exec-cf",
+        "work-a",
+        json!([{"path": "src/x.txt", "content": "x"}]),
+        &["src"],
+    );
+    let outcome = runner.handle_delivery(&delivery, CrashPoint::None);
+    assert_eq!(
+        outcome.state, "failed",
+        "corrupt ledger allowed effects: {outcome:?}"
+    );
+    assert!(outcome.error.is_some());
+    assert!(!base.join("worktree/src/x.txt").exists());
+}
+
+// CR #58 r3 P1: a held fence lock means another handler is mid-effects; the
+// delivery must wait/fail, not write past it.
+#[tokio::test]
+async fn runner_does_not_write_past_a_held_fence_lock() {
+    let base = std::env::temp_dir().join(format!("awr-p7-fencelock-{}", std::process::id()));
+    let _ = std::fs::remove_dir_all(&base);
+    std::fs::create_dir_all(base.join("journal")).unwrap();
+    std::fs::write(base.join("journal/fence-ledger-work-a.lock"), "").unwrap();
+    let runner = ReferenceRunner::new(&base);
+    let delivery = delivery_on_work(
+        "exec-busy",
+        "work-a",
+        json!([{"path": "src/x.txt", "content": "x"}]),
+        &["src"],
+    );
+    let outcome = runner.handle_delivery(&delivery, CrashPoint::None);
+    assert_eq!(
+        outcome.state, "failed",
+        "wrote past a held fence lock: {outcome:?}"
+    );
+    assert!(!base.join("worktree/src/x.txt").exists());
+}
+
+// CR #58 r3 P2-4: a duplicate delivery seeing an in-flight journal with a
+// held recovery lock returns it UNCHANGED (no death declaration, no
+// overwrite of a possibly-completed record).
+#[tokio::test]
+async fn duplicate_delivery_does_not_overwrite_an_inflight_journal() {
+    let base = std::env::temp_dir().join(format!("awr-p7-dup-{}", std::process::id()));
+    let _ = std::fs::remove_dir_all(&base);
+    std::fs::create_dir_all(base.join("journal")).unwrap();
+    let runner = ReferenceRunner::new(&base);
+    let delivery = delivery_named(
+        "exec-dup",
+        json!([{"path": "src/a.txt", "content": "x"}]),
+        &["src"],
+    );
+    let mut inflight = runner.base_outcome(&delivery, "accepted");
+    inflight.state = "accepted".into();
+    let journal = base.join("journal/exec-dup.json");
+    std::fs::write(&journal, serde_json::to_vec(&inflight).unwrap()).unwrap();
+    // A recovery lock is held by another handler.
+    std::fs::write(base.join("journal/exec-dup.recovery.lock"), "").unwrap();
+    let outcome = runner.handle_delivery(&delivery, CrashPoint::None);
+    assert_eq!(
+        outcome.state, "accepted",
+        "in-flight journal was disturbed: {outcome:?}"
+    );
+    assert!(!outcome.unknown);
+    let persisted: serde_json::Value =
+        serde_json::from_slice(&std::fs::read(&journal).unwrap()).unwrap();
+    assert_eq!(persisted["state"], "accepted", "journal was overwritten");
+}
+
+// CR #58 r3 P2-4: terminal records discovered during recovery win over any
+// stale local copy (no overwrite of a completed result).
+#[tokio::test]
+async fn recovery_never_overwrites_a_terminal_journal() {
+    let base = std::env::temp_dir().join(format!("awr-p7-term-{}", std::process::id()));
+    let _ = std::fs::remove_dir_all(&base);
+    std::fs::create_dir_all(base.join("journal")).unwrap();
+    let runner = ReferenceRunner::new(&base);
+    let delivery = delivery_named("exec-term", json!([]), &["src"]);
+    let mut terminal = runner.base_outcome(&delivery, "succeeded");
+    terminal.state = "succeeded".into();
+    terminal.started = true;
+    std::fs::write(
+        base.join("journal/exec-term.json"),
+        serde_json::to_vec(&terminal).unwrap(),
+    )
+    .unwrap();
+    let outcome = runner.handle_delivery(&delivery, CrashPoint::None);
+    assert_eq!(outcome.state, "succeeded");
+    let persisted: serde_json::Value =
+        serde_json::from_slice(&std::fs::read(base.join("journal/exec-term.json")).unwrap())
+            .unwrap();
+    assert_eq!(
+        persisted["state"], "succeeded",
+        "terminal journal was overwritten"
+    );
+}
+
+// CR #58 r3 P2-5: a terminal state reached via reconcile (no observed
+// paths) must not panic the same-outcome report branch; it is a structured
+// refusal, not a crash.
+#[tokio::test]
+async fn same_outcome_report_with_null_observed_facts_is_safe() {
+    let (_lock, _, store, leases, _, _db) = setup().await;
+    let (_session, claim) = claimed(&leases).await;
+    let execution = prepare_default(&store, &claim, "prep-null").await;
+    store
+        .reconcile(
+            TENANT,
+            PROJECT,
+            RUNNER,
+            &execution,
+            "failed",
+            json!({}),
+            false,
+        )
+        .await
+        .unwrap();
+    let err = store
+        .report(
+            TENANT,
+            PROJECT,
+            RUNNER,
+            "trusted_executor",
+            &execution,
+            "failed",
+            json!({"output_digest": "d"}),
+            &["src/foo".into()],
+        )
+        .await
+        .unwrap_err();
+    assert!(matches!(err, PgError::Protocol(_)), "got {err}");
 }

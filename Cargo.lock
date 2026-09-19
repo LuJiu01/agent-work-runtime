@@ -253,6 +253,7 @@ version = "0.4.0"
 dependencies = [
  "awr-team",
  "deadpool-postgres",
+ "libc",
  "rustls",
  "serde",
  "serde_json",
