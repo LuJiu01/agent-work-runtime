@@ -365,47 +365,55 @@ impl SourceStore {
                     .unwrap_or(serde_json::json!([])),
             )
             .map_err(|e| PgError::Protocol(e.to_string()))?;
-            let nodes: Vec<String> = parsed
-                .get("nodes")
-                .and_then(|v| v.as_array())
-                .map(|rows| {
-                    rows.iter()
-                        .filter_map(|v| v.as_str().map(str::to_owned))
-                        .collect()
-                })
-                .unwrap_or_else(|| vec![contract.work_id.as_str().to_string()]);
-            crate::graph::validate_required_graph(&nodes, &edges)?;
+            // V1 installs exactly one contract projection per activation and
+            // does not install dependency edges from graph.json. Accepting a
+            // non-empty graph and then silently dropping it is worse than
+            // refusing it (CR #40 P2-6).
+            if !edges.is_empty() {
+                return Err(PgError::Protocol(
+                    "graph.json with edges is not supported in V1".into(),
+                ));
+            }
         }
-        let claimed: i64 = tx
-            .query_one(
-                "SELECT count(*) FROM awr_team.claims
-                 WHERE tenant_id=$1 AND project_id=$2 AND work_id=$3 AND state='active'",
-                &[
-                    &tenant_id,
-                    &project_id,
-                    &contract.work_id.as_str().to_string(),
-                ],
+        // A source switch affects EVERY work whose contract is added,
+        // changed or REMOVED — including split children that the new
+        // projection no longer contains. Only claims that are still valid
+        // (state active AND not past expires_at at the database's current
+        // time) block the change (CR #40 P2-7, P2-8).
+        let claimed_works: Vec<String> = tx
+            .query(
+                "SELECT DISTINCT work_id FROM awr_team.claims
+                 WHERE tenant_id=$1 AND project_id=$2 AND state='active'
+                   AND expires_at > clock_timestamp()",
+                &[&tenant_id, &project_id],
             )
             .await?
-            .get(0);
-        if claimed > 0 {
-            let current = tx
-                .query_opt(
-                    "SELECT c.contract_hash FROM awr_team.work_contracts c
-                     JOIN awr_team.projects p
-                       ON p.tenant_id=c.tenant_id AND p.id=c.project_id
-                      AND p.active_snapshot_id=c.snapshot_id
-                     WHERE c.tenant_id=$1 AND c.project_id=$2 AND c.work_id=$3",
-                    &[
-                        &tenant_id,
-                        &project_id,
-                        &contract.work_id.as_str().to_string(),
-                    ],
-                )
-                .await?;
-            if let Some(row) = current {
-                let old_hash: String = row.get(0);
-                if old_hash != contract_hash {
+            .iter()
+            .map(|row| row.get(0))
+            .collect();
+        if !claimed_works.is_empty() {
+            let new_work = contract.work_id.as_str().to_string();
+            for work_id in &claimed_works {
+                let old_hash: Option<String> = match &previous_snapshot {
+                    Some(snapshot) => tx
+                        .query_opt(
+                            "SELECT contract_hash FROM awr_team.work_contracts
+                             WHERE tenant_id=$1 AND project_id=$2 AND snapshot_id=$3
+                               AND work_id=$4 AND scope_id='main'",
+                            &[&tenant_id, &project_id, snapshot, work_id],
+                        )
+                        .await?
+                        .map(|row| row.get(0)),
+                    None => None,
+                };
+                let new_hash: Option<String> = if *work_id == new_work {
+                    Some(contract_hash.clone())
+                } else {
+                    // Not present in the new projection: this activation
+                    // removes the claimed work's contract.
+                    None
+                };
+                if old_hash != new_hash {
                     return Err(PgError::ClaimBlocksActivation);
                 }
             }
