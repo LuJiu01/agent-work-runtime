@@ -287,11 +287,21 @@ impl ExecutionStore {
         let execution_id: String = row.get(1);
         let payload: Value = row.get(2);
         let attempts: i32 = row.get(3);
-        // Tenant/project come from the ROW, not the payload: legacy outbox
-        // entries (written before the payload carried them) must land in the
-        // same fencing namespace as new ones (CR #58 r5 P2-3).
+        // Identity comes from the outbox ROW plus the linked EXECUTION row,
+        // never from the payload: legacy messages lack these fields, and
+        // missing scope must NOT default to main (CR #58 r6 P2-1).
         let tenant: String = row.get(4);
         let project: String = row.get(5);
+        let identity = tx
+            .query_opt(
+                "SELECT scope_id, work_id FROM awr_team.executions
+                 WHERE tenant_id=$1 AND project_id=$2 AND id=$3",
+                &[&tenant, &project, &execution_id],
+            )
+            .await?
+            .ok_or_else(|| PgError::Protocol("dispatch without an execution row".into()))?;
+        let scope_id: String = identity.get(0);
+        let work_id: String = identity.get(1);
         tx.execute(
             "UPDATE awr_team.executions SET state='queued'
              WHERE tenant_id=$1 AND project_id=$2 AND id=$3 AND state='prepared'",
@@ -321,16 +331,8 @@ impl ExecutionStore {
             },
             tenant_id: tenant,
             project_id: project,
-            work_id: payload
-                .get("work_id")
-                .and_then(Value::as_str)
-                .unwrap_or_default()
-                .to_owned(),
-            scope_id: payload
-                .get("scope_id")
-                .and_then(Value::as_str)
-                .unwrap_or("main")
-                .to_owned(),
+            work_id,
+            scope_id,
             fencing_class: payload
                 .get("fencing_class")
                 .and_then(Value::as_str)

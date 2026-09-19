@@ -1593,6 +1593,7 @@ async fn runner_rejects_known_illegal_plan_before_any_write() {
 
 // CR #58 r5 P2: identities containing the separator character get distinct
 // ledgers (structured digest keys).
+#[cfg(unix)]
 #[tokio::test]
 async fn fence_keys_are_unambiguous_for_separator_bearing_identities() {
     let base = std::env::temp_dir().join(format!("awr-p7-sepkey-{}", std::process::id()));
@@ -1624,8 +1625,10 @@ async fn fence_keys_are_unambiguous_for_separator_bearing_identities() {
     );
 }
 
-// CR #58 r5 P2-3: legacy outbox rows (payload without tenant/project) get
-// the row's identity, landing in the SAME fencing namespace as new entries.
+// CR #58 r5 P2-3 + r6 P2-1: legacy outbox rows (payload without
+// tenant/project/scope) recover the FULL identity from the execution row —
+// including a non-main scope — landing in the same fencing namespace as new
+// entries.
 #[tokio::test]
 async fn legacy_outbox_payload_keeps_row_identity() {
     let (_lock, admin, store, leases, _, _db) = setup().await;
@@ -1647,10 +1650,87 @@ async fn legacy_outbox_payload_keeps_row_identity() {
         .unwrap();
     assert_eq!(delivery.tenant_id, TENANT);
     assert_eq!(delivery.project_id, PROJECT);
+    assert_eq!(delivery.scope_id, "main");
+    assert_eq!(delivery.work_id, "work-a");
+}
+
+// CR #58 r6 P2-1: a legacy payload from a NON-main execution recovers the
+// real scope from the execution row instead of guessing main.
+#[tokio::test]
+async fn legacy_outbox_payload_recovers_the_real_scope() {
+    let (_lock, admin, store, leases, _, _db) = setup().await;
+    admin
+        .batch_execute(
+            "INSERT INTO awr_team.work_scopes(tenant_id,project_id,id,name,status)
+             VALUES ('tenant-a','project-a','review','review','active');",
+        )
+        .await
+        .unwrap();
+    let session = leases
+        .start_session(
+            TENANT,
+            PROJECT,
+            ACTOR,
+            CLIENT,
+            "conv-review",
+            "review",
+            "work-a",
+        )
+        .await
+        .unwrap();
+    let claim = leases
+        .claim(
+            TENANT,
+            PROJECT,
+            &session.id,
+            ACTOR,
+            CLIENT,
+            "claim-review",
+            3600,
+        )
+        .await
+        .unwrap();
+    let execution = store
+        .prepare(
+            TENANT,
+            PROJECT,
+            ACTOR,
+            CLIENT,
+            "prep-review",
+            &claim.id,
+            RUNNER,
+            "hash-a",
+            "in-1",
+            "hard_fence",
+            &["src/foo".into()],
+            &writes_in_scope(),
+        )
+        .await
+        .unwrap()
+        .id;
+    admin
+        .execute(
+            "UPDATE awr_team.outbox SET payload_json = payload_json - 'tenant_id' - 'project_id' - 'scope_id'
+             WHERE aggregate_id=$1",
+            &[&execution],
+        )
+        .await
+        .unwrap();
+    let delivery = store
+        .claim_dispatch(TENANT, PROJECT)
+        .await
+        .unwrap()
+        .unwrap();
+    assert_eq!(
+        delivery.scope_id, "review",
+        "legacy scope recovered as main"
+    );
+    assert_eq!(delivery.work_id, "work-a");
 }
 
 // CR #58 r5 P2: concurrent handlers creating the same fresh directory both
 // succeed (EEXIST on mkdirat reopens safely).
+#[cfg(unix)]
 #[tokio::test]
 async fn concurrent_directory_creation_both_succeed() {
     let base = std::env::temp_dir().join(format!("awr-p7-mkdirrace-{}", std::process::id()));
@@ -1687,6 +1767,7 @@ async fn concurrent_directory_creation_both_succeed() {
 
 // CR #58 r5 P3: BeforeJournal means NO admission record was written; a
 // normal redelivery then proceeds to execute.
+#[cfg(unix)]
 #[tokio::test]
 async fn before_journal_crash_leaves_no_admission_record() {
     let base = std::env::temp_dir().join(format!("awr-p7-beforejournal-{}", std::process::id()));
@@ -1708,4 +1789,37 @@ async fn before_journal_crash_leaves_no_admission_record() {
         outcome.state, "succeeded",
         "redelivery did not execute: {outcome:?}"
     );
+}
+
+// CR #58 r6 P2-2: pure key semantics are platform-independent and stay
+// cross-platform.
+#[test]
+fn fence_keys_are_deterministic_and_collision_free() {
+    let a = awr_team_pg::fence_key("tenant", "project", "main|aux", "task");
+    let b = awr_team_pg::fence_key("tenant", "project", "main", "aux|task");
+    assert_ne!(a, b, "separator-bearing identities collided");
+    assert_eq!(a.len(), 64, "key is a fixed-length hex digest");
+    let long = awr_team_pg::fence_key("t".repeat(64).as_str(), "p", "s", "w");
+    assert_eq!(long.len(), 64, "long identities must not lengthen the key");
+}
+
+// CR #58 r6 P2-2: on non-unix the protected write is REFUSED and business
+// files stay untouched (verified on Windows CI; compiles everywhere).
+#[cfg(not(unix))]
+#[tokio::test]
+async fn non_unix_refuses_protected_writes_without_side_effects() {
+    let base = std::env::temp_dir().join(format!("awr-p7-nonunix-{}", std::process::id()));
+    let _ = std::fs::remove_dir_all(&base);
+    let runner = ReferenceRunner::new(&base);
+    let outcome = runner.handle_delivery(
+        &delivery_named(
+            "exec-nonunix",
+            json!([{"path": "src/x.txt", "content": "x"}]),
+            &["src"],
+        ),
+        CrashPoint::None,
+    );
+    assert_eq!(outcome.state, "failed");
+    assert!(outcome.error.is_some());
+    assert!(!base.join("worktree/src/x.txt").exists());
 }
