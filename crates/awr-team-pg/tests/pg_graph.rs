@@ -278,11 +278,44 @@ async fn path_aliases_cannot_bypass_the_conflict_check() {
             "alias {alias}: got {err}"
         );
     }
+    // Mixed separators: the parent segment must be recognized AFTER
+    // separator unification, and nothing may be reserved (CR #57 P2-1).
+    let before: i64 = admin
+        .query_one("SELECT count(*) FROM awr_team.resource_reservations", &[])
+        .await
+        .unwrap()
+        .get(0);
+    for traversal in [
+        "src/../secret",
+        "src\\..\\secret",
+        "src\\../secret",
+        "src/..\\secret",
+    ] {
+        let err = store
+            .reserve(TENANT, PROJECT, "work-b", "file", traversal)
+            .await
+            .unwrap_err();
+        assert!(
+            matches!(err, PgError::UnsafeSourcePath(_)),
+            "traversal {traversal}: got {err}"
+        );
+    }
+    let after: i64 = admin
+        .query_one("SELECT count(*) FROM awr_team.resource_reservations", &[])
+        .await
+        .unwrap()
+        .get(0);
+    assert_eq!(before, after, "rejected traversals left reservations");
+    // Positive control: plain backslashes normalize to the same file.
+    store
+        .reserve(TENANT, PROJECT, "work-b", "file", "src\\foo\\b.rs")
+        .await
+        .unwrap();
     let err = store
-        .reserve(TENANT, PROJECT, "work-b", "file", "src/../secret")
+        .reserve(TENANT, PROJECT, "work-a", "file", "src/foo/b.rs")
         .await
         .unwrap_err();
-    assert!(matches!(err, PgError::UnsafeSourcePath(_)), "got {err}");
+    assert!(matches!(err, PgError::ResourceConflict), "got {err}");
     let stored: String = admin
         .query_one(
             "SELECT canonical_key FROM awr_team.resource_reservations LIMIT 1",

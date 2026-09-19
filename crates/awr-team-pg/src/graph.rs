@@ -51,10 +51,14 @@ fn normalize_resource_key(kind: &str, key: &str) -> PgResult<String> {
         }
         return Ok(key.to_string());
     }
-    if key.split('/').any(|segment| segment == "..") {
+    // Unify separators BEFORE any segment check: a backslash '..' must not
+    // become a parent segment only after validation (CR #57 P2-1). The same
+    // normalized form is then checked, compared and stored.
+    let normalized = key.replace('\\', "/");
+    if normalized.split('/').any(|segment| segment == "..") {
         return Err(PgError::UnsafeSourcePath(key.into()));
     }
-    let canonical = canonicalize(key);
+    let canonical = canonicalize(&normalized);
     if canonical.is_empty() {
         return Err(PgError::UnsafeSourcePath(key.into()));
     }

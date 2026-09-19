@@ -242,6 +242,21 @@ impl ReadStore {
             .ok_or(PgError::InactiveCandidate)?;
         let contract_hash: String = contract.get(0);
         let contract_json: Value = contract.get(1);
+        // Never emit a stored hash that does not recompute from its content:
+        // records written by older builds (e.g. splits that stored the raw
+        // child id as the hash) must surface as an integrity error instead
+        // of passing as a valid identity (CR #57 P2-2).
+        let parsed_contract: awr_team::WorkContract = serde_json::from_value(contract_json.clone())
+            .map_err(|e| PgError::Protocol(format!("stored contract is not parseable: {e}")))?;
+        let recomputed = parsed_contract
+            .hash()
+            .map_err(|e| PgError::Protocol(e.to_string()))?;
+        if recomputed != contract_hash {
+            return Err(PgError::Protocol(format!(
+                "stored contract hash does not match its content (legacy or corrupt record; republish or repair): {}",
+                parsed_contract.work_id.as_str()
+            )));
+        }
         let text_list = |key: &str| {
             contract_json
                 .get(key)

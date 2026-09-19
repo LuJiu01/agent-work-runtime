@@ -315,14 +315,21 @@ async fn prepare_marks_missing_goals_as_incomplete() {
         )
         .await
         .unwrap();
+    // Store a goal-less contract WITH a valid recomputed hash, so the only
+    // defect under test is the missing required content (not the hash).
+    let mut goalless: serde_json::Value = serde_json::from_slice(&contract_json_full("r")).unwrap();
+    goalless["goals"] = serde_json::json!([]);
+    goalless["work_id"] = serde_json::json!("work-b");
+    goalless["external_key"] = serde_json::json!("work-b");
+    let goalless_hash = serde_json::from_value::<WorkContract>(goalless.clone())
+        .unwrap()
+        .hash()
+        .unwrap();
     admin
         .execute(
             "INSERT INTO awr_team.work_contracts(tenant_id,project_id,snapshot_id,scope_id,work_id,contract_hash,definition_state,title,contract_json)
-             SELECT 'tenant-a','project-a',$1,'main','work-b','hash-b','enabled','W2',
-                    contract_json - 'goals' || '{\"goals\": []}'::jsonb
-             FROM awr_team.work_contracts
-             WHERE tenant_id='tenant-a' AND project_id='project-a' AND work_id='work-a'",
-            &[&snapshot],
+             VALUES ('tenant-a','project-a',$1,'main','work-b',$2,'enabled','W2',$3)",
+            &[&snapshot, &goalless_hash, &goalless],
         )
         .await
         .unwrap();
@@ -336,6 +343,46 @@ async fn prepare_marks_missing_goals_as_incomplete() {
             .completeness_reasons
             .contains(&"missing_goals".into())
     );
+}
+
+// CR #57 P2-2: a legacy record whose contract_hash is the raw child id
+// (the old propose_split output shape) must NOT come back from prepare as a
+// valid identity; it surfaces as an integrity error instead.
+#[tokio::test]
+async fn prepare_rejects_legacy_child_id_hash_records() {
+    let (_lock, admin, db) = setup().await;
+    let snapshot = activate_rule(&db, "r").await;
+    let mut legacy_json: serde_json::Value =
+        serde_json::from_slice(&contract_json_full("r")).unwrap();
+    legacy_json["work_id"] = serde_json::json!("work-a-1");
+    legacy_json["external_key"] = serde_json::json!("work-a-1");
+    admin
+        .execute(
+            "INSERT INTO awr_team.work_items(tenant_id,project_id,id,external_key)
+             VALUES ('tenant-a','project-a','work-a-1','W1')",
+            &[],
+        )
+        .await
+        .unwrap();
+    admin
+        .execute(
+            "INSERT INTO awr_team.work_contracts(tenant_id,project_id,snapshot_id,scope_id,work_id,contract_hash,definition_state,title,contract_json)
+             VALUES ('tenant-a','project-a',$1,'main','work-a-1','work-a-1','enabled','W1',$2)",
+            &[&snapshot, &legacy_json],
+        )
+        .await
+        .unwrap();
+    let err = ReadStore::from_config(app_config(&db))
+        .prepare(TENANT, PROJECT, "work-a-1", None)
+        .await
+        .unwrap_err();
+    assert!(matches!(err, PgError::Protocol(_)), "got {err}");
+    // The healthy record next to it still prepares fine (positive control).
+    let ok = ReadStore::from_config(app_config(&db))
+        .prepare(TENANT, PROJECT, "work-a", None)
+        .await
+        .unwrap();
+    assert_eq!(ok.completeness, "complete");
 }
 
 // CR #38 P2-1a: a higher work_version in ANOTHER scope must not leak into
