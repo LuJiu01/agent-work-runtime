@@ -30,7 +30,35 @@ pub fn paths_conflict(kind_a: &str, key_a: &str, kind_b: &str, key_b: &str) -> b
 }
 
 fn canonicalize(path: &str) -> String {
-    path.trim_matches('/').replace('\\', "/")
+    // Normalize repeated separators and '.' segments so aliases of one file
+    // cannot bypass the conflict check (CR #40 P2-2). '..' stays visible
+    // here; it is rejected at the reserve entry.
+    path.replace('\\', "/")
+        .split('/')
+        .filter(|segment| !segment.is_empty() && *segment != ".")
+        .collect::<Vec<_>>()
+        .join("/")
+}
+
+/// Entry-level resource key validation/normalization. file/prefix resources
+/// are normalized to their canonical workspace-relative form; named
+/// resources keep their own identity rules and are not path-processed
+/// (CR #40 P2-2).
+fn normalize_resource_key(kind: &str, key: &str) -> PgResult<String> {
+    if kind == "named" {
+        if key.is_empty() {
+            return Err(PgError::UnsafeSourcePath("empty named resource".into()));
+        }
+        return Ok(key.to_string());
+    }
+    if key.split('/').any(|segment| segment == "..") {
+        return Err(PgError::UnsafeSourcePath(key.into()));
+    }
+    let canonical = canonicalize(key);
+    if canonical.is_empty() {
+        return Err(PgError::UnsafeSourcePath(key.into()));
+    }
+    Ok(canonical)
 }
 
 fn segment_prefix_overlap(a: &str, b: &str) -> bool {
@@ -92,6 +120,25 @@ pub fn require_main_scope(scope_id: &str) -> PgResult<()> {
     Ok(())
 }
 
+/// Serialize resource/graph writes on the project coordination row: the
+/// check-then-write sequence in reserve/replace_edges/split is only safe
+/// when every writer follows the same protocol (CR #40 P2-1, P2-3). An empty
+/// reservation set has no rows to lock, so the lock must not live on the
+/// reservations themselves.
+async fn lock_project(
+    tx: &tokio_postgres::Transaction<'_>,
+    tenant_id: &str,
+    project_id: &str,
+) -> PgResult<()> {
+    tx.query_opt(
+        "SELECT id FROM awr_team.projects WHERE tenant_id=$1 AND id=$2 FOR UPDATE",
+        &[&tenant_id, &project_id],
+    )
+    .await?
+    .ok_or(PgError::ProjectNotAvailable)?;
+    Ok(())
+}
+
 pub struct GraphStore {
     pool: crate::PgPool,
 }
@@ -128,6 +175,10 @@ impl GraphStore {
         let mut client = self.connect().await?;
         let tx = client.transaction().await?;
         bind_scope(&tx, tenant_id, project_id).await?;
+        // Two acyclic replacements must not commit a cyclic union: writers
+        // serialize on the project row, so the last writer replaces the
+        // committed graph wholesale instead of merging (CR #40 P2-3).
+        lock_project(&tx, tenant_id, project_id).await?;
         tx.execute(
             "DELETE FROM awr_team.dependency_edges
              WHERE tenant_id=$1 AND project_id=$2 AND snapshot_id=$3 AND scope_id=$4",
@@ -165,9 +216,14 @@ impl GraphStore {
         kind: &str,
         key: &str,
     ) -> PgResult<String> {
+        let key = normalize_resource_key(kind, key)?;
         let mut client = self.connect().await?;
         let tx = client.transaction().await?;
         bind_scope(&tx, tenant_id, project_id).await?;
+        // The conflict check and the insert must be one serialized business
+        // operation: without the project lock, two conflicting reservations
+        // can both pass the check and both commit (CR #40 P2-1).
+        lock_project(&tx, tenant_id, project_id).await?;
         let rows = tx
             .query(
                 "SELECT resource_kind, canonical_key FROM awr_team.resource_reservations
@@ -178,7 +234,7 @@ impl GraphStore {
         for row in rows {
             let existing_kind: String = row.get(0);
             let existing_key: String = row.get(1);
-            if paths_conflict(kind, key, &existing_kind, &existing_key) {
+            if paths_conflict(kind, &key, &existing_kind, &existing_key) {
                 return Err(PgError::ResourceConflict);
             }
         }
@@ -205,9 +261,40 @@ impl GraphStore {
         if children.is_empty() {
             return Err(PgError::Protocol("split requires children".into()));
         }
+        // Identity rules: children must be new, unique, and different from
+        // the parent. Reusing an existing id would either skip the contract
+        // inheritance (ON CONFLICT DO NOTHING) or write a required self-loop
+        // edge (CR #40 P2-5).
+        let unique: HashSet<&str> = children.iter().map(|c| c.as_str()).collect();
+        if unique.len() != children.len() {
+            return Err(PgError::Protocol("split children must be unique".into()));
+        }
+        if unique.contains(parent_work_id) {
+            return Err(PgError::Protocol(
+                "split children must differ from the parent".into(),
+            ));
+        }
         let mut client = self.connect().await?;
         let tx = client.transaction().await?;
         bind_scope(&tx, tenant_id, project_id).await?;
+        lock_project(&tx, tenant_id, project_id).await?;
+        let existing: i64 = tx
+            .query_one(
+                "SELECT count(*) FROM awr_team.work_items
+                 WHERE tenant_id=$1 AND project_id=$2 AND id = ANY($3)",
+                &[
+                    &tenant_id,
+                    &project_id,
+                    &children.iter().collect::<Vec<_>>(),
+                ],
+            )
+            .await?
+            .get(0);
+        if existing > 0 {
+            return Err(PgError::Protocol(
+                "split children must be new work ids".into(),
+            ));
+        }
         let parent = tx
             .query_opt(
                 "SELECT c.contract_json FROM awr_team.work_contracts c
@@ -220,34 +307,53 @@ impl GraphStore {
             .await?
             .ok_or_else(|| PgError::Protocol("parent contract missing".into()))?;
         let parent_json: Value = parent.get(0);
+        let snapshot: String = tx
+            .query_one(
+                "SELECT active_snapshot_id FROM awr_team.projects
+                 WHERE tenant_id=$1 AND id=$2",
+                &[&tenant_id, &project_id],
+            )
+            .await?
+            .get(0);
+        let mut split_edges = Vec::new();
         for child in children {
             tx.execute(
                 "INSERT INTO awr_team.work_items(tenant_id, project_id, id, external_key)
-                 VALUES ($1,$2,$3,$3)
-                 ON CONFLICT (tenant_id, project_id, id) DO NOTHING",
+                 VALUES ($1,$2,$3,$3)",
                 &[&tenant_id, &project_id, &child],
             )
             .await?;
+            // Child contracts are REAL contracts: inherit the parent content
+            // with the child identity, re-validate and re-hash. Storing the
+            // raw child id as the hash (the old behavior) made the hash both
+            // unreproducible and content-free (CR #40 P2-4).
             let mut child_json = parent_json.clone();
             if let Some(obj) = child_json.as_object_mut() {
                 obj.insert("work_id".into(), json!(child));
                 obj.insert("external_key".into(), json!(child));
             }
-            let snapshot: String = tx
-                .query_one(
-                    "SELECT active_snapshot_id FROM awr_team.projects
-                     WHERE tenant_id=$1 AND id=$2",
-                    &[&tenant_id, &project_id],
-                )
-                .await?
-                .get(0);
+            let child_contract: awr_team::WorkContract = serde_json::from_value(child_json.clone())
+                .map_err(|e| PgError::Protocol(format!("invalid inherited child contract: {e}")))?;
+            let child_hash = child_contract
+                .hash()
+                .map_err(|e| PgError::Protocol(e.to_string()))?;
+            let stored_json = serde_json::to_value(&child_contract)
+                .map_err(|e| PgError::Protocol(e.to_string()))?;
+            let title = child_contract.external_key.clone();
             tx.execute(
                 "INSERT INTO awr_team.work_contracts(
                     tenant_id, project_id, snapshot_id, scope_id, work_id,
                     contract_hash, definition_state, title, contract_json)
-                 VALUES ($1,$2,$3,'main',$4,$4,'enabled',$4,$5)
-                 ON CONFLICT (tenant_id, project_id, snapshot_id, scope_id, work_id) DO NOTHING",
-                &[&tenant_id, &project_id, &snapshot, &child, &child_json],
+                 VALUES ($1,$2,$3,'main',$4,$5,'enabled',$6,$7)",
+                &[
+                    &tenant_id,
+                    &project_id,
+                    &snapshot,
+                    &child,
+                    &child_hash,
+                    &title,
+                    &stored_json,
+                ],
             )
             .await?;
             tx.execute(
@@ -259,7 +365,42 @@ impl GraphStore {
                 &[&tenant_id, &project_id, &snapshot, &parent_work_id, &child],
             )
             .await?;
+            split_edges.push(DependencyEdge {
+                from: parent_work_id.into(),
+                to: child.clone(),
+                relation: "split-child".into(),
+                required: true,
+            });
         }
+        // The graph AFTER adding the split edges must still be valid.
+        let mut nodes: Vec<String> = vec![parent_work_id.to_string()];
+        nodes.extend(children.iter().cloned());
+        let existing_edges: Vec<DependencyEdge> = tx
+            .query(
+                "SELECT from_work_id, to_work_id, relation, required
+                 FROM awr_team.dependency_edges
+                 WHERE tenant_id=$1 AND project_id=$2 AND snapshot_id=$3 AND scope_id='main'",
+                &[&tenant_id, &project_id, &snapshot],
+            )
+            .await?
+            .iter()
+            .map(|row| DependencyEdge {
+                from: row.get(0),
+                to: row.get(1),
+                relation: row.get(2),
+                required: row.get(3),
+            })
+            .collect();
+        let mut all_nodes = nodes;
+        for edge in &existing_edges {
+            if !all_nodes.contains(&edge.from) {
+                all_nodes.push(edge.from.clone());
+            }
+            if !all_nodes.contains(&edge.to) {
+                all_nodes.push(edge.to.clone());
+            }
+        }
+        validate_required_graph(&all_nodes, &existing_edges)?;
         let id = new_id();
         let child_json = json!(children);
         tx.execute(
@@ -392,7 +533,8 @@ impl GraphStore {
         let claimed: i64 = tx
             .query_one(
                 "SELECT count(*) FROM awr_team.claims
-                 WHERE tenant_id=$1 AND project_id=$2 AND work_id=$3 AND state='active'",
+                 WHERE tenant_id=$1 AND project_id=$2 AND work_id=$3 AND state='active'
+                   AND expires_at > clock_timestamp()",
                 &[&tenant_id, &project_id, &work_id],
             )
             .await?
