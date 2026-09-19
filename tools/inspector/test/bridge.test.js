@@ -316,3 +316,113 @@ test('演示模式不执行任何 awr 命令', async () => {
     fs.rmSync(argvLog, { force: true });
   }
 });
+
+// ───────────── 6. 复核提出的四个 P2 ─────────────
+
+test('畸形请求行不会带走整个进程', async () => {
+  const b = await startBridge();
+  try {
+    // `GET // HTTP/1.1` 会让 new URL('//', base) 抛出。
+    const bad = await new Promise((resolve, reject) => {
+      const sock = require('node:net').connect(b.port, '127.0.0.1', () => {
+        sock.write('GET // HTTP/1.1\r\nHost: 127.0.0.1:' + b.port + '\r\n\r\n');
+      });
+      let text = '';
+      sock.on('data', (d) => (text += d));
+      sock.on('end', () => resolve(text));
+      sock.on('error', reject);
+      setTimeout(() => { sock.end(); resolve(text); }, 1500);
+    });
+    assert.ok(/HTTP\/1\.1 4\d\d/.test(bad), `期望 4xx，实际响应头：${bad.slice(0, 60)}`);
+
+    // 关键断言：进程还活着，后续请求照常。
+    const health = await fetch(`${b.base}/api/health`, { headers: GUARD });
+    assert.equal(health.status, 200);
+    assert.equal((await health.json()).ok, true);
+  } finally {
+    await b.stop();
+  }
+});
+
+test('槽位按子进程释放，不按响应释放', async () => {
+  // 写超时缩到 300ms，子进程活 30 秒：响应早就回了，子进程还在。
+  const b = await startBridge({
+    allowReindex: true,
+    env: { STUB_MODE: 'slowwrite', AWR_INSPECTOR_WRITE_TIMEOUT_MS: '300' },
+  });
+  try {
+    const hit = () =>
+      fetch(`${b.base}/api/source/reindex`, { method: 'POST', headers: GUARD }).then((r) => r.json());
+
+    const first = [];
+    for (let i = 0; i < 4; i++) first.push(await hit());
+    for (const r of first) {
+      assert.equal(r.error.code, 'OutcomeUnknown', JSON.stringify(r));
+    }
+
+    // 四个子进程都还活着，第五个必须被挡下来。
+    const fifth = await hit();
+    assert.equal(fifth.error.code, 'BridgeBusy', JSON.stringify(fifth));
+  } finally {
+    await b.stop();
+  }
+});
+
+test('写命令输出溢出不被 SIGKILL，结果报为未知', async () => {
+  const b = await startBridge({
+    allowReindex: true,
+    env: { STUB_MODE: 'hugewrite' },
+  });
+  try {
+    const r = await (
+      await fetch(`${b.base}/api/source/reindex`, { method: 'POST', headers: GUARD })
+    ).json();
+    assert.equal(r.ok, false);
+    // 不是 OutputTooLarge：写命令没被终止，成没成是未知的。
+    assert.equal(r.error.code, 'OutcomeUnknown', JSON.stringify(r));
+    assert.ok(!/终端里直接跑|重试/.test(r.error.message) || /不要直接重试/.test(r.error.message),
+      '不该建议直接重跑一个结果未知的写操作');
+  } finally {
+    await b.stop();
+  }
+});
+
+test('只读命令输出溢出仍然是 OutputTooLarge', async () => {
+  const b = await startBridge({ env: { STUB_MODE: 'huge' } });
+  try {
+    const r = await (await fetch(`${b.base}/api/status`, { headers: GUARD })).json();
+    assert.equal(r.error.code, 'OutputTooLarge', JSON.stringify(r));
+  } finally {
+    await b.stop();
+  }
+});
+
+// ───────────── 7. 前端：详情响应的代际守卫 ─────────────
+
+test('迟到的详情响应不会覆盖当前选中项', () => {
+  const { createGenerationGuard } = require('../public/app.js');
+  const guard = createGenerationGuard();
+
+  const a = guard.begin('A');
+  const b = guard.begin('B');
+
+  // B 先回：它是最新的，应当落地。
+  assert.equal(guard.isCurrent(b), true);
+  // A 后回：已经过期，必须丢掉。
+  assert.equal(guard.isCurrent(a), false);
+});
+
+test('刷新会作废在途的详情请求', () => {
+  const { createGenerationGuard } = require('../public/app.js');
+  const guard = createGenerationGuard();
+
+  const inflight = guard.begin('A');
+  guard.invalidate();
+  assert.equal(guard.isCurrent(inflight), false, '刷新后旧请求不得落地');
+
+  // 同一个 key 的更早请求，在刷新后回来也不算数。
+  const fresh = guard.begin('A');
+  const older = { generation: fresh.generation - 1, key: 'A' };
+  assert.equal(guard.isCurrent(older), false);
+  assert.equal(guard.isCurrent(fresh), true);
+});

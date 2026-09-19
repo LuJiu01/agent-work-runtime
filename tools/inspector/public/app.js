@@ -195,6 +195,38 @@
   ];
   const queueMeta = (k) => QUEUES.find((q) => q.key === k) || { label: k || '—', dot: '', why: '' };
 
+  // ───────────────────────── 代际守卫 ─────────────────────────
+
+  /**
+   * 详情请求的代际守卫。
+   *
+   * 点了 A 再点 B，两个请求并发；如果 B 先回、A 后回，A 的响应会把 B 的面板覆盖掉，
+   * 于是标题显示 B、正文却是 A——更糟的是「为这一项编译上下文」会按 A 走。
+   *
+   * 每次发起给一个递增的 token，回来时只认最新的那个，并且当前选中项必须还是它。
+   * 刷新时调 invalidate()，让在途的旧请求全部作废。
+   */
+  function createGenerationGuard() {
+    let generation = 0;
+    let currentKey = null;
+    return {
+      begin(key) {
+        generation += 1;
+        currentKey = key;
+        return { generation, key };
+      },
+      isCurrent(token) {
+        return Boolean(token) && token.generation === generation && token.key === currentKey;
+      },
+      invalidate() {
+        generation += 1;
+        currentKey = null;
+      },
+    };
+  }
+
+  const detailGuard = createGenerationGuard();
+
   // ───────────────────────── API ─────────────────────────
 
   // 桥接要求状态变更请求带这个头。第三方页面发不出自定义头（会触发 CORS 预检，
@@ -832,6 +864,7 @@
   }
 
   async function renderWorkDetail(key) {
+    const token = detailGuard.begin(key);
     const box = $('workDetail');
     clear(box);
     setText('detailId', key || '详情');
@@ -842,11 +875,15 @@
       box.appendChild(el('div', 'skeleton'));
       if (state.mode === 'demo') {
         const raw = window.AWR_DEMO.workShow(key);
+        if (!detailGuard.isCurrent(token)) return;
         state.raw.work = { ok: true, data: raw, note: '演示数据' };
         showRaw('rawWorkBody', state.raw.work);
         detail = normWorkDetail(raw);
       } else {
         const res = await callApi('/api/work?key=' + encodeURIComponent(key));
+        // 回来晚了就整条丢掉：不写 state.raw.work、不画面板、不报错。
+        // 成功和失败一视同仁，否则一个迟到的失败会盖掉当前选中项的正常内容。
+        if (!detailGuard.isCurrent(token)) return;
         state.raw.work = res;
         showRaw('rawWorkBody', res);
         if (res.ok) {
@@ -859,6 +896,8 @@
       }
       if (detail) state.workDetail[key] = detail;
     }
+
+    if (!detailGuard.isCurrent(token)) return;
 
     clear(box);
     if (!detail) {
@@ -1284,6 +1323,7 @@
       return;
     }
     // 索引推进了 revision，所有缓存作废，整页重来。
+    detailGuard.invalidate();
     state.workDetail = {};
     state.compile = null;
     await loadAll();
@@ -1497,6 +1537,8 @@
     $('btnRefresh').addEventListener('click', async () => {
       const b = $('btnRefresh');
       b.classList.add('spin');
+      // 在途的详情请求全部作废，免得旧数据在刷新后落地。
+      detailGuard.invalidate();
       state.workDetail = {};
       await loadAll();
       b.classList.remove('spin');
@@ -1560,5 +1602,12 @@
     if (!seen) openTour(0);
   }
 
-  document.addEventListener('DOMContentLoaded', boot);
+  if (typeof document !== 'undefined') {
+    document.addEventListener('DOMContentLoaded', boot);
+  }
+
+  // 给测试用。浏览器里没有 module，这一段不执行。
+  if (typeof module !== 'undefined' && module.exports) {
+    module.exports = { createGenerationGuard };
+  }
 })();

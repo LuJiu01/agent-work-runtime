@@ -41,6 +41,33 @@ if (mode === 'stderrjson') {
   process.exit(3);
 }
 
+if (mode === 'slowwrite') {
+  // 活得比写超时更久。用来验证：槽位是按子进程释放的，不是按响应释放的。
+  setTimeout(() => process.exit(0), 30 * 1000);
+  setInterval(() => {}, 1000);
+  return;
+}
+
+if (mode === 'hugewrite') {
+  // 写命令的输出溢出。桥接不该杀它——先等一下再吐，好让超时分支也能覆盖到。
+  const delay = Number(process.env.STUB_WRITE_DELAY_MS || 0);
+  setTimeout(() => {
+    const block = Buffer.alloc(1024 * 1024, 0x61);
+    for (let i = 0; i < 12; i++) {
+      try {
+        fs.writeSync(1, block);
+      } catch (e) {
+        if (e.code === 'EPIPE') break;
+        throw e;
+      }
+    }
+    // 故意再多活一会儿，这样测试能观察到它没有被 SIGKILL。
+    setTimeout(() => process.exit(0), 3000);
+  }, delay);
+  setInterval(() => {}, 1000);
+  return;
+}
+
 if (mode === 'huge') {
   // 远超 stdout 上限。用 writeSync：process.stdout.write 是异步的，
   // 紧接着 process.exit() 会把还在管道缓冲里的数据丢掉。

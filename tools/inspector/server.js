@@ -21,13 +21,19 @@ const { spawn, execFile } = require('child_process');
 
 // ───────────────────────── 上限 ─────────────────────────
 
+/** 只给测试用的数值覆盖；没设就用默认。 */
+function envInt(name, fallback) {
+  const v = Number(process.env[name]);
+  return Number.isInteger(v) && v > 0 ? v : fallback;
+}
+
 const LIMITS = {
   stdoutBytes: 8 * 1024 * 1024,   // 单条命令的 stdout 上限
   stderrBytes: 1 * 1024 * 1024,
   requestBytes: 64 * 1024,        // 请求体上限
-  concurrent: 4,                  // 同时在跑的 awr 子进程数
-  readTimeoutMs: 60000,           // 只读命令的超时
-  writeTimeoutMs: 120000,         // 写命令（reindex）的超时
+  concurrent: envInt('AWR_INSPECTOR_CONCURRENT', 4),          // 同时在跑的 awr 子进程数
+  readTimeoutMs: envInt('AWR_INSPECTOR_READ_TIMEOUT_MS', 60000),   // 只读命令的超时
+  writeTimeoutMs: envInt('AWR_INSPECTOR_WRITE_TIMEOUT_MS', 120000), // 写命令（reindex）的超时
 };
 
 // ───────────────────────── 参数 ─────────────────────────
@@ -220,6 +226,17 @@ function execAwr(argv, opts) {
 
   return new Promise((resolve) => {
     const child = spawn('awr', argv, { shell: false });
+
+    // 槽位跟着子进程走，不跟着 HTTP 响应走。超时时我们会先回响应，
+    // 但子进程还活着——那个槽必须留到它真的退出为止，否则上限形同虚设。
+    runtime.running += 1;
+    let released = false;
+    const release = () => {
+      if (released) return;
+      released = true;
+      runtime.running -= 1;
+    };
+
     const out = [];
     const err = [];
     let outBytes = 0;
@@ -231,13 +248,13 @@ function execAwr(argv, opts) {
       if (settled) return;
       settled = true;
       clearTimeout(timer);
-      resolve(Object.assign({ truncated }, result));
+      resolve(Object.assign({ truncated, write }, result));
     };
 
     const timer = setTimeout(() => {
       if (write) {
         // 不杀。把子进程放掉，让它自己跑完；结果是未知的，如实说。
-        child.unref();
+        // 槽位不在这里释放——等 close 事件。
         finish({ code: null, timedOut: true, outcomeUnknown: true, stdout: '', stderr: '' });
       } else {
         // 只读命令：先礼后兵，SIGTERM 给 5 秒，再 SIGKILL。
@@ -247,12 +264,17 @@ function execAwr(argv, opts) {
         finish({ code: null, timedOut: true, outcomeUnknown: false, stdout: '', stderr: '' });
       }
     }, timeoutMs);
+    // 超时定时器不该拖住进程退出。
+    timer.unref();
 
     child.stdout.on('data', (chunk) => {
       outBytes += chunk.length;
       if (outBytes > LIMITS.stdoutBytes) {
         truncated = true;
-        child.kill('SIGKILL');
+        // 只读命令可以杀。写命令不行——杀掉一个正在改状态的 reindex
+        // 会留下不知道成没成的状态，而输出太大并不是终止它的理由。
+        // 继续读，只是把超出的部分丢掉。
+        if (!write) child.kill('SIGKILL');
         return;
       }
       out.push(chunk);
@@ -266,14 +288,18 @@ function execAwr(argv, opts) {
       err.push(chunk);
     });
 
-    child.on('error', (e) => finish({ code: -1, stdout: '', stderr: String(e.message) }));
-    child.on('close', (code) =>
+    child.on('error', (e) => {
+      release();
+      finish({ code: -1, stdout: '', stderr: String(e.message) });
+    });
+    child.on('close', (code) => {
+      release();
       finish({
         code,
         stdout: Buffer.concat(out).toString('utf8'),
         stderr: Buffer.concat(err).toString('utf8'),
-      })
-    );
+      });
+    });
   });
 }
 
@@ -284,16 +310,19 @@ function execAwr(argv, opts) {
 async function runCommand(commandKey, extra) {
   const spec = COMMANDS[commandKey];
 
+  // 槽位由 execAwr 按子进程生命周期占用与释放，这里只做准入判断。
   if (runtime.running >= LIMITS.concurrent) {
     return {
       ok: false,
       command: null,
-      error: { code: 'BridgeBusy', message: '同时在跑的 awr 命令太多，稍后再试。' },
+      error: {
+        code: 'BridgeBusy',
+        message: '同时在跑的 awr 子进程已达上限，等其中一个结束再试。',
+      },
     };
   }
 
-  runtime.running += 1;
-  try {
+  {
     let argv = buildArgv(commandKey, extra);
     let result = await execAwr(argv, spec);
 
@@ -333,14 +362,26 @@ async function runCommand(commandKey, extra) {
     }
 
     if (result.truncated) {
-      return {
-        ok: false,
-        command,
-        error: {
-          code: 'OutputTooLarge',
-          message: `awr 的输出超过了 ${LIMITS.stdoutBytes} 字节上限。请在终端里直接跑这条命令。`,
-        },
-      };
+      // 写命令没被终止，只是输出没收全——它成没成是未知的，别叫人直接重跑。
+      return spec.write
+        ? {
+            ok: false,
+            command,
+            error: {
+              code: 'OutcomeUnknown',
+              message:
+                `输出超过了 ${LIMITS.stdoutBytes} 字节上限，没有收全。命令本身没有被终止，` +
+                '可能已经生效。先用 awr 查一下当前状态再决定下一步，不要直接重试。',
+            },
+          }
+        : {
+            ok: false,
+            command,
+            error: {
+              code: 'OutputTooLarge',
+              message: `awr 的输出超过了 ${LIMITS.stdoutBytes} 字节上限。请在终端里直接跑这条命令。`,
+            },
+          };
     }
 
     const parsed = tryParseJson(result.stdout);
@@ -371,8 +412,6 @@ async function runCommand(commandKey, extra) {
     }
 
     return { ok: true, command, data: parsed };
-  } finally {
-    runtime.running -= 1;
   }
 }
 
@@ -590,8 +629,36 @@ function readBody(req) {
   });
 }
 
-const server = http.createServer(async (req, res) => {
-  const url = new URL(req.url, 'http://127.0.0.1');
+/**
+ * 每个请求都包在这里面。
+ *
+ * `new URL()` 在请求行畸形时会抛（比如 `GET // HTTP/1.1`），而这个回调是 async——
+ * 抛出去就是一个未处理的 Promise 拒绝，默认配置下整个进程会退出。
+ * 一个畸形请求不该把整个工具带走。
+ */
+const server = http.createServer((req, res) => {
+  handleRequest(req, res).catch((err) => {
+    try {
+      sendJson(res, 500, {
+        ok: false,
+        error: { code: 'BridgeError', message: String((err && err.message) || err) },
+      });
+    } catch (_) {
+      // 响应已经发出去了，只能放弃这一条；进程要活着。
+    }
+  });
+});
+
+async function handleRequest(req, res) {
+  let url;
+  try {
+    url = new URL(req.url, 'http://127.0.0.1');
+  } catch (_) {
+    return sendJson(res, 400, {
+      ok: false,
+      error: { code: 'BadRequestTarget', message: '无法解析的请求目标。' },
+    });
+  }
 
   if (url.pathname.startsWith('/api/')) {
     const denial = guardRequest(req);
@@ -635,7 +702,7 @@ const server = http.createServer(async (req, res) => {
   }
 
   serveStatic(req, res, url.pathname);
-});
+}
 
 // ───────────────────────── 启动 ─────────────────────────
 

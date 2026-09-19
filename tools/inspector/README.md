@@ -124,6 +124,10 @@ stdout / stderr / 请求体都有字节上限，并发子进程数有上限。
 - **只读命令**超时 60 秒：先 `SIGTERM`，5 秒后 `SIGKILL`，返回 `BridgeTimeout`。重试是安全的。
 - **`source reindex`** 超时 120 秒：**不终止子进程**，返回 `OutcomeUnknown`。
   它可能已经生效了。界面不会自动重试，会让你先去查 AWR 的真实状态。
+- 写命令的输出超过上限时也**不杀进程**，只丢弃多出来的部分，并同样报
+  `OutcomeUnknown`——输出收不全不是终止一个正在改状态的操作的理由。
+- 并发上限数的是**活着的子进程**，不是未完成的 HTTP 请求。超时先回响应、
+  子进程还在跑时，那个名额仍然被占着，直到它真的退出。
 
 ---
 
@@ -160,9 +164,14 @@ stdout / stderr / 请求体都有字节上限，并发子进程数有上限。
 node --test test/*.test.js
 ```
 
-21 个用例，零依赖，覆盖请求来源边界、命令构造、子进程输出、超时语义和演示模式。
-测试会起真实的 `server.js` 子进程并打真实 HTTP 请求，PATH 上放一个假 `awr`
-（`test/fixtures/stub-awr.js`）。CI 见 `.github/workflows/inspector.yml`。
+27 个用例，零依赖，覆盖请求来源边界、命令构造、子进程输出、超时与生命周期语义、
+详情响应的代际守卫，以及演示模式。测试会起真实的 `server.js` 子进程并打真实 HTTP
+请求，PATH 上放一个假 `awr`（`test/fixtures/stub-awr.js`）。CI 见
+`.github/workflows/inspector.yml`。
+
+超时相关的用例靠三个只给测试用的环境变量把等待时间压下来：
+`AWR_INSPECTOR_READ_TIMEOUT_MS`、`AWR_INSPECTOR_WRITE_TIMEOUT_MS`、
+`AWR_INSPECTOR_CONCURRENT`。不设就用默认值。
 
 ---
 
