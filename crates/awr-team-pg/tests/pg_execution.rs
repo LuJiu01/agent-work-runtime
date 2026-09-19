@@ -1336,7 +1336,7 @@ async fn runner_refuses_side_effects_with_corrupt_fence_ledger() {
     let base = std::env::temp_dir().join(format!("awr-p7-fencecorrupt-{}", std::process::id()));
     let _ = std::fs::remove_dir_all(&base);
     std::fs::create_dir_all(base.join("journal/fencing")).unwrap();
-    let key = awr_team_pg::encode_key("tenant-a|project-a|main|work-a");
+    let key = awr_team_pg::fence_key("tenant-a", "project-a", "main", "work-a");
     std::fs::write(
         base.join("journal/fencing").join(format!("ledger-{key}")),
         "not-a-number",
@@ -1365,7 +1365,7 @@ async fn runner_does_not_write_past_a_held_fence_lock() {
     let base = std::env::temp_dir().join(format!("awr-p7-fencelock-{}", std::process::id()));
     let _ = std::fs::remove_dir_all(&base);
     std::fs::create_dir_all(base.join("journal/fencing")).unwrap();
-    let key = awr_team_pg::encode_key("tenant-a|project-a|main|work-a");
+    let key = awr_team_pg::fence_key("tenant-a", "project-a", "main", "work-a");
     let lock_path = base.join("journal/fencing").join(format!("lock-{key}"));
     let holder = std::fs::OpenOptions::new()
         .read(true)
@@ -1589,4 +1589,123 @@ async fn runner_rejects_known_illegal_plan_before_any_write() {
         "a known-illegal plan still wrote the first file"
     );
     assert_eq!(std::fs::read_to_string(&sentinel).unwrap(), "original");
+}
+
+// CR #58 r5 P2: identities containing the separator character get distinct
+// ledgers (structured digest keys).
+#[tokio::test]
+async fn fence_keys_are_unambiguous_for_separator_bearing_identities() {
+    let base = std::env::temp_dir().join(format!("awr-p7-sepkey-{}", std::process::id()));
+    let _ = std::fs::remove_dir_all(&base);
+    let runner = ReferenceRunner::new(&base);
+    let mut a = delivery_on_work(
+        "exec-sep-a",
+        "task",
+        json!([{"path": "src/a.txt", "content": "a"}]),
+        &["src"],
+    );
+    a.scope_id = "main|aux".into();
+    a.fence = 7;
+    assert_eq!(
+        runner.handle_delivery(&a, CrashPoint::None).state,
+        "succeeded"
+    );
+    // ("main", "aux|task") must NOT share ("main|aux", "task")'s ledger.
+    let b = delivery_on_work(
+        "exec-sep-b",
+        "aux|task",
+        json!([{"path": "src/b.txt", "content": "b"}]),
+        &["src"],
+    );
+    let outcome = runner.handle_delivery(&b, CrashPoint::None);
+    assert_eq!(
+        outcome.state, "succeeded",
+        "separator identity collided: {outcome:?}"
+    );
+}
+
+// CR #58 r5 P2-3: legacy outbox rows (payload without tenant/project) get
+// the row's identity, landing in the SAME fencing namespace as new entries.
+#[tokio::test]
+async fn legacy_outbox_payload_keeps_row_identity() {
+    let (_lock, admin, store, leases, _, _db) = setup().await;
+    let (_session, claim) = claimed(&leases).await;
+    let execution = prepare_default(&store, &claim, "prep-legacy").await;
+    // Simulate a pre-upgrade row: strip the identity fields from the payload.
+    admin
+        .execute(
+            "UPDATE awr_team.outbox SET payload_json = payload_json - 'tenant_id' - 'project_id'
+             WHERE aggregate_id=$1",
+            &[&execution],
+        )
+        .await
+        .unwrap();
+    let delivery = store
+        .claim_dispatch(TENANT, PROJECT)
+        .await
+        .unwrap()
+        .unwrap();
+    assert_eq!(delivery.tenant_id, TENANT);
+    assert_eq!(delivery.project_id, PROJECT);
+}
+
+// CR #58 r5 P2: concurrent handlers creating the same fresh directory both
+// succeed (EEXIST on mkdirat reopens safely).
+#[tokio::test]
+async fn concurrent_directory_creation_both_succeed() {
+    let base = std::env::temp_dir().join(format!("awr-p7-mkdirrace-{}", std::process::id()));
+    let _ = std::fs::remove_dir_all(&base);
+    let base2 = base.clone();
+    let first = std::thread::spawn(move || {
+        let runner = ReferenceRunner::new(base);
+        runner.handle_delivery(
+            &delivery_on_work(
+                "exec-mkdir-a",
+                "work-a",
+                json!([{"path": "src/new/a.txt", "content": "a"}]),
+                &["src"],
+            ),
+            CrashPoint::None,
+        )
+    });
+    let second = std::thread::spawn(move || {
+        let runner = ReferenceRunner::new(base2);
+        runner.handle_delivery(
+            &delivery_on_work(
+                "exec-mkdir-b",
+                "work-b",
+                json!([{"path": "src/new/b.txt", "content": "b"}]),
+                &["src"],
+            ),
+            CrashPoint::None,
+        )
+    });
+    let (a, b) = (first.join().unwrap(), second.join().unwrap());
+    assert_eq!(a.state, "succeeded", "a failed: {a:?}");
+    assert_eq!(b.state, "succeeded", "b failed: {b:?}");
+}
+
+// CR #58 r5 P3: BeforeJournal means NO admission record was written; a
+// normal redelivery then proceeds to execute.
+#[tokio::test]
+async fn before_journal_crash_leaves_no_admission_record() {
+    let base = std::env::temp_dir().join(format!("awr-p7-beforejournal-{}", std::process::id()));
+    let _ = std::fs::remove_dir_all(&base);
+    let runner = ReferenceRunner::new(&base);
+    let delivery = delivery_named(
+        "exec-bj",
+        json!([{"path": "src/a.txt", "content": "x"}]),
+        &["src"],
+    );
+    let outcome = runner.handle_delivery(&delivery, CrashPoint::BeforeJournal);
+    assert_eq!(outcome.state, "prepared");
+    assert!(
+        !base.join("journal/exec-bj.json").exists(),
+        "BeforeJournal still wrote an admission record"
+    );
+    let outcome = runner.handle_delivery(&delivery, CrashPoint::None);
+    assert_eq!(
+        outcome.state, "succeeded",
+        "redelivery did not execute: {outcome:?}"
+    );
 }

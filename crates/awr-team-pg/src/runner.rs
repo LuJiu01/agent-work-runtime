@@ -98,10 +98,12 @@ impl ReferenceRunner {
     /// like "task.lock" cannot collide with another work's lock (CR #58 r4
     /// P2-3).
     fn fence_paths(&self, delivery: &OutboxDelivery) -> (PathBuf, PathBuf) {
-        let key = encode_key(&format!(
-            "{}|{}|{}|{}",
-            delivery.tenant_id, delivery.project_id, delivery.scope_id, delivery.work_id
-        ));
+        let key = fence_key(
+            &delivery.tenant_id,
+            &delivery.project_id,
+            &delivery.scope_id,
+            &delivery.work_id,
+        );
         (
             self.fencing_dir().join(format!("ledger-{key}")),
             self.fencing_dir().join(format!("lock-{key}")),
@@ -141,12 +143,29 @@ impl ReferenceRunner {
     fn acquire_fence(&self, delivery: &OutboxDelivery) -> Result<OsLock, String> {
         let (ledger, lock) = self.fence_paths(delivery);
         let guard = self.acquire_os_lock(&lock, "fence ledger")?;
+        let identity = json!([
+            delivery.tenant_id,
+            delivery.project_id,
+            delivery.scope_id,
+            delivery.work_id
+        ]);
         let current: Option<i64> = match fs::read_to_string(&ledger) {
-            Ok(raw) => Some(
-                raw.trim()
-                    .parse()
-                    .map_err(|_| "fence ledger is corrupt".to_string())?,
-            ),
+            Ok(raw) => {
+                // Structured content with the original identity recorded for
+                // audit; the digest file name alone is not the proof
+                // (CR #58 r5 P2).
+                let record: Value = serde_json::from_str(raw.trim())
+                    .map_err(|_| "fence ledger is corrupt".to_string())?;
+                if record.get("identity") != Some(&identity) {
+                    return Err("fence ledger identity mismatch".to_string());
+                }
+                let fence = record
+                    .get("fence")
+                    .and_then(Value::as_str)
+                    .and_then(|s| s.parse().ok())
+                    .ok_or_else(|| "fence ledger is corrupt".to_string())?;
+                Some(fence)
+            }
             Err(error) if error.kind() == ErrorKind::NotFound => None,
             Err(error) => return Err(format!("fence ledger unreadable: {error}")),
         };
@@ -168,7 +187,8 @@ impl ReferenceRunner {
                 .open(&ledger)
                 .map_err(|e| format!("fence ledger persist failed: {e}"))?;
             use std::io::Write;
-            file.write_all(delivery.fence.to_string().as_bytes())
+            let record = json!({"identity": identity, "fence": delivery.fence.to_string()});
+            file.write_all(record.to_string().as_bytes())
                 .map_err(|e| format!("fence ledger persist failed: {e}"))?;
             file.sync_all()
                 .map_err(|e| format!("fence ledger sync failed: {e}"))?;
@@ -254,6 +274,9 @@ impl ReferenceRunner {
                 return outcome;
             }
         };
+        if crash == CrashPoint::BeforeJournal {
+            return self.base_outcome(delivery, "prepared");
+        }
         // The ownership lock is held before touching the journal, so the
         // first handler cannot be shadowed mid-run (CR #58 r4 P2-4).
         if let Err(error) = self.persist_new(&self.base_outcome(delivery, "accepted")) {
@@ -280,9 +303,6 @@ impl ReferenceRunner {
                     return outcome;
                 }
             }
-        }
-        if crash == CrashPoint::BeforeJournal {
-            return self.base_outcome(delivery, "prepared");
         }
         if crash == CrashPoint::AfterJournalBeforeEffect {
             let mut outcome = self.base_outcome(delivery, "unknown");
@@ -501,18 +521,14 @@ impl ReferenceRunner {
     }
 }
 
-/// Percent-encode an identity segment so file names are unambiguous.
-/// Exposed to pg-tests for lock/ledger fixtures.
+/// Fixed-length digest of the STRUCTURED token identity — field boundaries
+/// are serialized before hashing, so identities containing separators never
+/// collide, and the file name never exceeds the filesystem limit
+/// (CR #58 r5 P2). Exposed to pg-tests for fixtures.
 #[doc(hidden)]
-pub fn encode_key(raw: &str) -> String {
-    let mut out = String::new();
-    for byte in raw.bytes() {
-        match byte {
-            b'a'..=b'z' | b'A'..=b'Z' | b'0'..=b'9' | b'-' | b'_' | b'.' => out.push(byte as char),
-            other => out.push_str(&format!("%{other:02X}")),
-        }
-    }
-    out
+pub fn fence_key(tenant: &str, project: &str, scope: &str, work: &str) -> String {
+    let structured = json!([tenant, project, scope, work]).to_string();
+    format!("{:x}", Sha256::digest(structured.as_bytes()))
 }
 
 /// Normalize a write path to a safe relative form; rejects absolute paths,
@@ -573,8 +589,14 @@ fn confined_write(root: &Path, rel: &str, content: &str) -> std::io::Result<()> 
         if next < 0 && std::io::Error::last_os_error().raw_os_error() == Some(libc::ENOENT) {
             if unsafe { libc::mkdirat(fd, name.as_ptr(), 0o755) } < 0 {
                 let error = std::io::Error::last_os_error();
-                unsafe { libc::close(fd) };
-                return Err(error);
+                // A concurrent handler may have created the directory between
+                // our openat and mkdirat: EEXIST is fine, reopen it with the
+                // same confined flags (symlinks still refused). Anything else
+                // is an error (CR #58 r5 P2).
+                if error.raw_os_error() != Some(libc::EEXIST) {
+                    unsafe { libc::close(fd) };
+                    return Err(error);
+                }
             }
             let opened = unsafe {
                 libc::openat(
@@ -615,12 +637,15 @@ fn confined_write(root: &Path, rel: &str, content: &str) -> std::io::Result<()> 
 }
 
 #[cfg(not(unix))]
-fn confined_write(root: &Path, rel: &str, content: &str) -> std::io::Result<()> {
-    let dest = root.join(rel);
-    if let Some(parent) = dest.parent() {
-        fs::create_dir_all(parent)?;
-    }
-    fs::write(dest, content)
+fn confined_write(_root: &Path, _rel: &str, _content: &str) -> std::io::Result<()> {
+    // Protected writes are only implemented where the runner can open with
+    // confined, no-follow resolution (unix). Degrading silently to a plain
+    // check-then-write on other platforms would leave the reported TOCTOU
+    // window open (CR #58 r5 P1).
+    Err(std::io::Error::new(
+        ErrorKind::Unsupported,
+        "confined writes are only supported on unix platforms",
+    ))
 }
 
 fn env_digest(worktree: &Path) -> String {

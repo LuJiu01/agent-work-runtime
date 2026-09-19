@@ -275,7 +275,7 @@ impl ExecutionStore {
                     FOR UPDATE OF o SKIP LOCKED
                     LIMIT 1
                  )
-                 RETURNING id, aggregate_id, payload_json, delivery_attempts",
+                 RETURNING id, aggregate_id, payload_json, delivery_attempts, tenant_id, project_id",
                 &[&tenant_id, &project_id, &new_id()],
             )
             .await?;
@@ -287,6 +287,11 @@ impl ExecutionStore {
         let execution_id: String = row.get(1);
         let payload: Value = row.get(2);
         let attempts: i32 = row.get(3);
+        // Tenant/project come from the ROW, not the payload: legacy outbox
+        // entries (written before the payload carried them) must land in the
+        // same fencing namespace as new ones (CR #58 r5 P2-3).
+        let tenant: String = row.get(4);
+        let project: String = row.get(5);
         tx.execute(
             "UPDATE awr_team.executions SET state='queued'
              WHERE tenant_id=$1 AND project_id=$2 AND id=$3 AND state='prepared'",
@@ -314,16 +319,8 @@ impl ExecutionStore {
                     .ok_or_else(|| PgError::Protocol("outbox payload has invalid fence".into()))?,
                 _ => return Err(PgError::Protocol("outbox payload missing fence".into())),
             },
-            tenant_id: payload
-                .get("tenant_id")
-                .and_then(Value::as_str)
-                .unwrap_or_default()
-                .to_owned(),
-            project_id: payload
-                .get("project_id")
-                .and_then(Value::as_str)
-                .unwrap_or_default()
-                .to_owned(),
+            tenant_id: tenant,
+            project_id: project,
             work_id: payload
                 .get("work_id")
                 .and_then(Value::as_str)
