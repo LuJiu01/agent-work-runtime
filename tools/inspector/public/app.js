@@ -869,36 +869,48 @@
     clear(box);
     setText('detailId', key || '详情');
 
-    let detail = state.workDetail[key];
+    // 缓存的是 { detail, raw } 一对，不是只有规范化后的详情。
+    // 只缓存详情的话，命中缓存时原始 JSON 面板还停在上一个工作项的响应上——
+    // 显示的是 A 的内容，配的却是 B 的响应。
+    let entry = state.workDetail[key];
 
-    if (!detail) {
+    if (!entry) {
       box.appendChild(el('div', 'skeleton'));
+      let raw = null;
+      let detail = null;
+
       if (state.mode === 'demo') {
-        const raw = window.AWR_DEMO.workShow(key);
+        raw = { ok: true, data: window.AWR_DEMO.workShow(key), note: '演示数据' };
         if (!detailGuard.isCurrent(token)) return;
-        state.raw.work = { ok: true, data: raw, note: '演示数据' };
-        showRaw('rawWorkBody', state.raw.work);
-        detail = normWorkDetail(raw);
+        detail = normWorkDetail(raw.data);
       } else {
         const res = await callApi('/api/work?key=' + encodeURIComponent(key));
         // 回来晚了就整条丢掉：不写 state.raw.work、不画面板、不报错。
         // 成功和失败一视同仁，否则一个迟到的失败会盖掉当前选中项的正常内容。
         if (!detailGuard.isCurrent(token)) return;
-        state.raw.work = res;
-        showRaw('rawWorkBody', res);
-        if (res.ok) {
-          detail = normWorkDetail(res.data);
-        } else {
+        if (!res.ok) {
+          // 失败不进缓存，但它的原始响应要显示出来——那正是排查用的东西。
+          state.raw.work = res;
+          showRaw('rawWorkBody', res);
           clear(box);
           box.appendChild(errorBlock(res.error, res.command));
           return;
         }
+        raw = res;
+        detail = normWorkDetail(res.data);
       }
-      if (detail) state.workDetail[key] = detail;
+
+      entry = { detail, raw };
+      if (detail) state.workDetail[key] = entry;
     }
 
     if (!detailGuard.isCurrent(token)) return;
 
+    // 命中缓存也要把原始响应一起恢复，两者始终配套。
+    state.raw.work = entry.raw;
+    showRaw('rawWorkBody', entry.raw);
+
+    const detail = entry.detail;
     clear(box);
     if (!detail) {
       box.appendChild(stateBlock('empty', '没有这个工作项的详情', '它可能只出现在队列里，源文件中没有完整定义。'));
@@ -1608,6 +1620,6 @@
 
   // 给测试用。浏览器里没有 module，这一段不执行。
   if (typeof module !== 'undefined' && module.exports) {
-    module.exports = { createGenerationGuard };
+    module.exports = { createGenerationGuard, state, detailGuard, renderWorkDetail };
   }
 })();

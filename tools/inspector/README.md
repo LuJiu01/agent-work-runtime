@@ -164,10 +164,16 @@ stdout / stderr / 请求体都有字节上限，并发子进程数有上限。
 node --test test/*.test.js
 ```
 
-27 个用例，零依赖，覆盖请求来源边界、命令构造、子进程输出、超时与生命周期语义、
-详情响应的代际守卫，以及演示模式。测试会起真实的 `server.js` 子进程并打真实 HTTP
-请求，PATH 上放一个假 `awr`（`test/fixtures/stub-awr.js`）。CI 见
-`.github/workflows/inspector.yml`。
+32 个用例，零依赖，分两档：
+
+- `test/bridge.test.js` —— 起真实的 `server.js` 子进程、打真实 HTTP 请求，PATH 上放一个
+  假 `awr`（`test/fixtures/stub-awr.js`）。覆盖请求来源边界、命令构造、子进程输出、
+  超时与生命周期语义、演示模式。
+- `test/detail.test.js` —— 在一个最小 DOM 替身（`test/fixtures/dom-stub.js`）上跑
+  `app.js` 里**真正的** `renderWorkDetail()`，不是抄一份副本来测。覆盖缓存命中时
+  详情与原始响应是否配套、迟到响应（成功与失败）的丢弃、刷新后旧响应的作废。
+
+CI 见 `.github/workflows/inspector.yml`。
 
 超时相关的用例靠三个只给测试用的环境变量把等待时间压下来：
 `AWR_INSPECTOR_READ_TIMEOUT_MS`、`AWR_INSPECTOR_WRITE_TIMEOUT_MS`、
