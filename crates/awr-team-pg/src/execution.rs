@@ -43,6 +43,13 @@ impl ExecutionStore {
         }
     }
 
+    /// Build from a validated `tokio_postgres::Config` (see PgPool::from_config).
+    pub fn from_config(config: tokio_postgres::Config) -> Self {
+        Self {
+            pool: crate::PgPool::from_config(config),
+        }
+    }
+
     async fn connect(&self) -> PgResult<crate::PgClient> {
         self.pool.get().await
     }
