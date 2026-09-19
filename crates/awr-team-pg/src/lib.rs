@@ -34,6 +34,8 @@ pub use read::{
     dispatch_query,
 };
 pub use review::{CompletionReceipt, EvidenceRecord, ReviewRound, ReviewStore};
+#[doc(hidden)]
+pub use runner::encode_key;
 pub use runner::{CrashPoint, ReferenceRunner, RunnerOutcome};
 pub use source::{CandidateRecord, CurrentSource, IngestRequest, SourceFile, SourceStore};
 pub use tx::{CommandOutcome, CommandRequest, TeamStore};
