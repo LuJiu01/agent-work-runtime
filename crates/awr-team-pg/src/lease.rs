@@ -1,8 +1,26 @@
 use crate::error::{PgError, PgResult};
 use crate::tx::{bind_scope, new_id};
-use serde::Serialize;
+use serde::{Deserialize, Serialize};
 use serde_json::{Value, json};
 use tokio_postgres::error::SqlState;
+
+/// fence / lease_version travel as decimal strings at the response and
+/// receipt boundary; i64 stays internal (CR #39 P2-6). Deserialization
+/// accepts legacy numeric receipts too.
+fn ser_i64_string<S: serde::Serializer>(value: &i64, serializer: S) -> Result<S::Ok, S::Error> {
+    serializer.serialize_str(&value.to_string())
+}
+fn de_i64_flex<'de, D: serde::Deserializer<'de>>(deserializer: D) -> Result<i64, D::Error> {
+    match Value::deserialize(deserializer)? {
+        Value::String(s) => s.parse().map_err(serde::de::Error::custom),
+        Value::Number(n) => n
+            .as_i64()
+            .ok_or_else(|| serde::de::Error::custom("invalid i64")),
+        other => Err(serde::de::Error::custom(format!(
+            "expected decimal string or number, got {other}"
+        ))),
+    }
+}
 
 #[derive(Clone, Debug, Serialize)]
 pub struct SessionRecord {
@@ -14,13 +32,15 @@ pub struct SessionRecord {
     pub state: String,
 }
 
-#[derive(Clone, Debug, Serialize)]
+#[derive(Clone, Debug, Serialize, Deserialize)]
 pub struct ClaimRecord {
     pub id: String,
     pub session_id: String,
     pub actor_id: String,
     pub work_id: String,
+    #[serde(serialize_with = "ser_i64_string", deserialize_with = "de_i64_flex")]
     pub fence: i64,
+    #[serde(serialize_with = "ser_i64_string", deserialize_with = "de_i64_flex")]
     pub lease_version: i64,
     pub expires_at: String,
     pub state: String,
@@ -35,6 +55,13 @@ impl LeaseStore {
     pub fn new(url: impl Into<String>) -> Self {
         Self {
             pool: crate::PgPool::new(url),
+        }
+    }
+
+    /// Build from a validated `tokio_postgres::Config` (see PgPool::from_config).
+    pub fn from_config(config: tokio_postgres::Config) -> Self {
+        Self {
+            pool: crate::PgPool::from_config(config),
         }
     }
 
@@ -99,9 +126,15 @@ impl LeaseStore {
         let tx = client.transaction().await?;
         bind_scope(&tx, tenant_id, project_id).await?;
         lock_project(&tx, tenant_id, project_id).await?;
+        let op = "claim.acquire";
+        let op_args = json!({"session_id": session_id, "ttl_seconds": ttl_seconds});
+        let request_hash = canonical_op_hash(op, request_id, &op_args)?;
         if let Some(existing) =
             load_operation(&tx, tenant_id, project_id, actor_id, client_id, request_id).await?
         {
+            if existing.0 != request_hash {
+                return Err(PgError::IdempotencyConflict);
+            }
             return replay_claim(&existing.1);
         }
         let session = tx
@@ -214,8 +247,8 @@ impl LeaseStore {
             "session_id": session_id,
             "actor_id": actor_id,
             "work_id": work_id,
-            "fence": fence,
-            "lease_version": 1,
+            "fence": fence.to_string(),
+            "lease_version": "1",
             "expires_at": expires_at,
             "state": "active",
         });
@@ -226,8 +259,27 @@ impl LeaseStore {
             actor_id,
             client_id,
             request_id,
-            "claim.acquire",
+            op,
+            &request_hash,
             &result,
+        )
+        .await?;
+        // Lease state changes are observable: revision and event commit in
+        // the SAME transaction (CR #39 P2-5). Replays return before any
+        // mutation, so they never duplicate events.
+        emit_event(
+            &tx,
+            tenant_id,
+            project_id,
+            actor_id,
+            &work_id,
+            "claim.acquired",
+            json!({
+                "claim_id": claim_id,
+                "session_id": session_id,
+                "scope_id": scope_id,
+                "fence": fence.to_string(),
+            }),
         )
         .await?;
         tx.commit().await?;
@@ -258,9 +310,15 @@ impl LeaseStore {
         let tx = client.transaction().await?;
         bind_scope(&tx, tenant_id, project_id).await?;
         lock_project(&tx, tenant_id, project_id).await?;
+        let op = "claim.renew";
+        let op_args = json!({"claim_id": claim_id, "ttl_seconds": ttl_seconds});
+        let request_hash = canonical_op_hash(op, request_id, &op_args)?;
         if let Some(existing) =
             load_operation(&tx, tenant_id, project_id, actor_id, client_id, request_id).await?
         {
+            if existing.0 != request_hash {
+                return Err(PgError::IdempotencyConflict);
+            }
             return replay_claim(&existing.1);
         }
         let row = tx
@@ -281,6 +339,23 @@ impl LeaseStore {
         let state: String = row.get(6);
         let scope_id: String = row.get(7);
         if holder != actor_id {
+            return Err(PgError::Forbidden);
+        }
+        // Renew must keep the session binding established at acquire time:
+        // same actor via a DIFFERENT client is not a renew, it is a takeover
+        // and must go through handoff (CR #39 P2-3).
+        let binding = tx
+            .query_opt(
+                "SELECT actor_id, client_id, state FROM awr_team.sessions
+                 WHERE tenant_id=$1 AND project_id=$2 AND id=$3",
+                &[&tenant_id, &project_id, &session_id],
+            )
+            .await?
+            .ok_or(PgError::SessionNotFound)?;
+        let bound_actor: String = binding.get(0);
+        let bound_client: String = binding.get(1);
+        let session_state: String = binding.get(2);
+        if bound_actor != actor_id || bound_client != client_id || session_state != "active" {
             return Err(PgError::Forbidden);
         }
         expire_due(&tx, tenant_id, project_id, &scope_id, &work_id).await?;
@@ -316,8 +391,8 @@ impl LeaseStore {
             "session_id": session_id,
             "actor_id": actor_id,
             "work_id": work_id,
-            "fence": fence,
-            "lease_version": next_version,
+            "fence": fence.to_string(),
+            "lease_version": next_version.to_string(),
             "expires_at": expires_at,
             "state": "active",
         });
@@ -328,7 +403,8 @@ impl LeaseStore {
             actor_id,
             client_id,
             request_id,
-            "claim.renew",
+            op,
+            &request_hash,
             &result,
         )
         .await?;
@@ -378,6 +454,23 @@ impl LeaseStore {
             "UPDATE awr_team.claims SET state='released'
              WHERE tenant_id=$1 AND project_id=$2 AND id=$3",
             &[&tenant_id, &project_id, &claim_id],
+        )
+        .await?;
+        let work_id: String = tx
+            .query_one(
+                "SELECT work_id FROM awr_team.claims WHERE tenant_id=$1 AND project_id=$2 AND id=$3",
+                &[&tenant_id, &project_id, &claim_id],
+            )
+            .await?
+            .get(0);
+        emit_event(
+            &tx,
+            tenant_id,
+            project_id,
+            actor_id,
+            &work_id,
+            "claim.released",
+            json!({"claim_id": claim_id}),
         )
         .await?;
         tx.commit().await?;
@@ -432,7 +525,17 @@ impl LeaseStore {
             return Err(PgError::Forbidden);
         }
         expire_due(&tx, tenant_id, project_id, &scope_id, &work_id).await?;
-        if state != "active" {
+        // The state cached before the expiry sweep is NOT authoritative:
+        // an active-looking row whose expires_at already passed was just
+        // flipped to 'expired'. Re-read after the sweep (CR #39 P2-2).
+        let still: String = tx
+            .query_one(
+                "SELECT state FROM awr_team.claims WHERE tenant_id=$1 AND project_id=$2 AND id=$3",
+                &[&tenant_id, &project_id, &claim_id],
+            )
+            .await?
+            .get(0);
+        if state != "active" || still != "active" {
             return Err(PgError::LeaseExpired);
         }
         tx.execute(
@@ -507,6 +610,23 @@ impl LeaseStore {
             )
             .await?
             .get(0);
+        emit_event(
+            &tx,
+            tenant_id,
+            project_id,
+            actor_id,
+            &work_id,
+            "claim.handed_off",
+            json!({
+                "old_claim_id": claim_id,
+                "new_claim_id": new_claim,
+                "from": actor_id,
+                "to": successor_actor_id,
+                "scope_id": scope_id,
+                "fence": fence.to_string(),
+            }),
+        )
+        .await?;
         tx.commit().await?;
         Ok(ClaimRecord {
             id: new_claim,
@@ -537,7 +657,8 @@ impl LeaseStore {
             .query_opt(
                 "SELECT id, expires_at::text FROM awr_team.claims
                  WHERE tenant_id=$1 AND project_id=$2 AND session_id=$3
-                   AND actor_id=$4 AND state='active'",
+                   AND actor_id=$4 AND state='active'
+                   AND expires_at > clock_timestamp()",
                 &[&tenant_id, &project_id, &session_id, &actor_id],
             )
             .await?
@@ -577,6 +698,16 @@ impl LeaseStore {
         if expires_after != expires_before {
             return Err(PgError::Protocol("wait must not renew the lease".into()));
         }
+        emit_event(
+            &tx,
+            tenant_id,
+            project_id,
+            actor_id,
+            &work_id,
+            "wait.opened",
+            json!({"wait_id": wait_id, "session_id": session_id}),
+        )
+        .await?;
         tx.commit().await?;
         Ok(wait_id)
     }
@@ -602,6 +733,24 @@ impl LeaseStore {
         if updated != 1 {
             return Err(PgError::Protocol("wait not open".into()));
         }
+        let wait_row = tx
+            .query_one(
+                "SELECT work_id, session_id FROM awr_team.wait_items
+                 WHERE tenant_id=$1 AND project_id=$2 AND id=$3",
+                &[&tenant_id, &project_id, &wait_id],
+            )
+            .await?;
+        let wait_work: (String, String) = (wait_row.get(0), wait_row.get(1));
+        emit_event(
+            &tx,
+            tenant_id,
+            project_id,
+            &wait_work.1,
+            &wait_work.0,
+            "wait.replied",
+            json!({"wait_id": wait_id}),
+        )
+        .await?;
         tx.commit().await?;
         Ok(())
     }
@@ -631,10 +780,20 @@ impl LeaseStore {
         Ok(())
     }
 
+    /// Check the fence of the caller's claim. The scope is explicit so two
+    /// legitimate claims in different scopes cannot produce a multi-row
+    /// error (CR #39 P2-4). Validity uses the database current time: a
+    /// claim past its expires_at is not valid even before the expiry sweep
+    /// runs (CR #39 P2-2).
+    ///
+    /// NOTE: calling this check and writing in a LATER transaction does not
+    /// guarantee no handoff happened in between; the real write gate must
+    /// live inside the writing transaction.
     pub async fn require_fence(
         &self,
         tenant_id: &str,
         project_id: &str,
+        scope_id: &str,
         work_id: &str,
         actor_id: &str,
         fence: i64,
@@ -645,8 +804,9 @@ impl LeaseStore {
         let row = tx
             .query_opt(
                 "SELECT fence, actor_id, state FROM awr_team.claims
-                 WHERE tenant_id=$1 AND project_id=$2 AND work_id=$3 AND state='active'",
-                &[&tenant_id, &project_id, &work_id],
+                 WHERE tenant_id=$1 AND project_id=$2 AND scope_id=$3 AND work_id=$4
+                   AND state='active' AND expires_at > clock_timestamp()",
+                &[&tenant_id, &project_id, &scope_id, &work_id],
             )
             .await?
             .ok_or(PgError::LeaseExpired)?;
@@ -710,6 +870,67 @@ async fn load_operation(
     Ok(row.map(|row| (row.get(0), row.get(1))))
 }
 
+/// Canonical request identity: op, request id AND the meaningful arguments
+/// (target session/claim, TTL). Two calls sharing the operation key but
+/// differing here are NOT replays (CR #39 P2-1). Receipts written by the
+/// pre-fix format never match this hash and fail closed as
+/// IdempotencyConflict instead of replaying an unchecked result.
+fn canonical_op_hash(op: &str, request_id: &str, args: &Value) -> PgResult<String> {
+    awr_team::request_hash(&json!({
+        "op": op,
+        "request_id": request_id,
+        "args": args,
+    }))
+    .map_err(|e| PgError::Protocol(e.to_string()))
+}
+
+/// Bump the project revision and append the event in the same transaction
+/// (the project row is already locked by lock_project). Replays return
+/// before mutations, so they never duplicate events (CR #39 P2-5).
+async fn emit_event(
+    tx: &tokio_postgres::Transaction<'_>,
+    tenant_id: &str,
+    project_id: &str,
+    actor_id: &str,
+    work_id: &str,
+    event_type: &str,
+    payload: Value,
+) -> PgResult<i64> {
+    let revision: i64 = tx
+        .query_one(
+            "SELECT project_revision FROM awr_team.projects WHERE tenant_id=$1 AND id=$2",
+            &[&tenant_id, &project_id],
+        )
+        .await?
+        .get(0);
+    let next = revision + 1;
+    tx.execute(
+        "UPDATE awr_team.projects SET project_revision=$1
+         WHERE tenant_id=$2 AND id=$3 AND project_revision=$4",
+        &[&next, &tenant_id, &project_id, &revision],
+    )
+    .await?;
+    let event_id = new_id();
+    tx.execute(
+        "INSERT INTO awr_team.events(
+            tenant_id, project_id, id, project_revision, event_index,
+            event_type, actor_id, work_id, payload_json)
+         VALUES ($1,$2,$3,$4,0,$5,$6,$7,$8)",
+        &[
+            &tenant_id,
+            &project_id,
+            &event_id,
+            &next,
+            &event_type,
+            &actor_id,
+            &work_id,
+            &payload,
+        ],
+    )
+    .await?;
+    Ok(next)
+}
+
 async fn store_operation(
     tx: &tokio_postgres::Transaction<'_>,
     tenant_id: &str,
@@ -718,10 +939,10 @@ async fn store_operation(
     client_id: &str,
     request_id: &str,
     op: &str,
+    request_hash: &str,
     result: &Value,
 ) -> PgResult<()> {
     let op_id = new_id();
-    let request_hash = format!("{op}:{request_id}");
     tx.execute(
         "INSERT INTO awr_team.operations(
             tenant_id, project_id, id, actor_id, client_id, request_id, op,
@@ -743,16 +964,39 @@ async fn store_operation(
     Ok(())
 }
 
+/// Strict replay: a stored receipt must contain every field; defaults are
+/// never invented (the old code fabricated an "active empty claim" from a
+/// foreign receipt — CR #39 P2-1). fence/lease_version accept the legacy
+/// numeric form and the current decimal-string form (CR #39 P2-6).
 fn replay_claim(result: &Value) -> PgResult<ClaimRecord> {
+    let required = |key: &str| -> PgResult<String> {
+        result
+            .get(key)
+            .and_then(Value::as_str)
+            .filter(|s| !s.is_empty())
+            .map(str::to_owned)
+            .ok_or_else(|| PgError::Protocol(format!("stored receipt missing {key}")))
+    };
+    let flex_i64 = |key: &str| -> PgResult<i64> {
+        match result.get(key) {
+            Some(Value::String(s)) => s
+                .parse()
+                .map_err(|_| PgError::Protocol(format!("stored receipt has invalid {key}"))),
+            Some(Value::Number(n)) => n
+                .as_i64()
+                .ok_or_else(|| PgError::Protocol(format!("stored receipt has invalid {key}"))),
+            _ => Err(PgError::Protocol(format!("stored receipt missing {key}"))),
+        }
+    };
     Ok(ClaimRecord {
-        id: result["id"].as_str().unwrap_or_default().into(),
-        session_id: result["session_id"].as_str().unwrap_or_default().into(),
-        actor_id: result["actor_id"].as_str().unwrap_or_default().into(),
-        work_id: result["work_id"].as_str().unwrap_or_default().into(),
-        fence: result["fence"].as_i64().unwrap_or(0),
-        lease_version: result["lease_version"].as_i64().unwrap_or(0),
-        expires_at: result["expires_at"].as_str().unwrap_or_default().into(),
-        state: result["state"].as_str().unwrap_or("active").into(),
+        id: required("id")?,
+        session_id: required("session_id")?,
+        actor_id: required("actor_id")?,
+        work_id: required("work_id")?,
+        fence: flex_i64("fence")?,
+        lease_version: flex_i64("lease_version")?,
+        expires_at: required("expires_at")?,
+        state: required("state")?,
         replayed: true,
     })
 }

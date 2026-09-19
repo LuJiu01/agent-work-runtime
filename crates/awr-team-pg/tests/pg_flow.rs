@@ -139,7 +139,7 @@ async fn two_actors_handoff_review_and_complete_with_independent_oracle() {
         .await
         .unwrap();
     let err = left
-        .require_fence(TENANT, PROJECT, "work-a", "actor-a", claim.fence)
+        .require_fence(TENANT, PROJECT, "main", "work-a", "actor-a", claim.fence)
         .await
         .unwrap_err();
     assert!(matches!(
@@ -147,7 +147,7 @@ async fn two_actors_handoff_review_and_complete_with_independent_oracle() {
         PgError::StaleFence | PgError::LeaseExpired | PgError::Forbidden
     ));
     right
-        .require_fence(TENANT, PROJECT, "work-a", "actor-b", handed.fence)
+        .require_fence(TENANT, PROJECT, "main", "work-a", "actor-b", handed.fence)
         .await
         .unwrap();
     let evidence = review
