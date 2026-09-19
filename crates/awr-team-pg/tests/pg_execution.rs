@@ -910,15 +910,29 @@ async fn runner_refuses_worktree_escapes_before_writing() {
     let outcome = runner.handle_delivery(&delivery, CrashPoint::None);
     assert_eq!(outcome.state, "failed");
     assert_eq!(std::fs::read_to_string(&sentinel).unwrap(), "original");
-    // positive control: an in-scope write still lands
-    let runner = ReferenceRunner::new(base.join("r4"));
-    let delivery = delivery_named(
-        "exec-ok",
-        json!([{"path": "src/ok.txt", "content": "ok"}]),
-        &["src"],
+}
+
+// Positive control for confined writes; real file effects are unix-only
+// (CR #58 r7).
+#[cfg(unix)]
+#[tokio::test]
+async fn runner_writes_in_scope_unix() {
+    let base = std::env::temp_dir().join(format!("awr-p7-inscope-{}", std::process::id()));
+    let _ = std::fs::remove_dir_all(&base);
+    let runner = ReferenceRunner::new(&base);
+    let outcome = runner.handle_delivery(
+        &delivery_named(
+            "exec-ok",
+            json!([{"path": "src/ok.txt", "content": "ok"}]),
+            &["src"],
+        ),
+        CrashPoint::None,
     );
-    let outcome = runner.handle_delivery(&delivery, CrashPoint::None);
     assert_eq!(outcome.state, "succeeded");
+    assert_eq!(
+        std::fs::read_to_string(base.join("worktree/src/ok.txt")).unwrap(),
+        "ok"
+    );
 }
 
 // Symlink escapes (directory-level AND file-level) are refused; the outside
@@ -1008,6 +1022,7 @@ async fn runner_treats_corrupt_journal_as_unknown_not_unexecuted() {
 
 // CR #58 P1: resource-end fencing — a stale delivery (older fence) must not
 // overwrite a newer result.
+#[cfg(unix)]
 #[tokio::test]
 async fn runner_rejects_stale_fencing_tokens() {
     let base = std::env::temp_dir().join(format!("awr-p7-fence-{}", std::process::id()));
@@ -1067,6 +1082,7 @@ async fn runner_recovers_crashed_journal_as_unknown() {
 
 // CR #58 P2-4: a mid-plan failure records complete writes, touched files,
 // and never reports the attempt as "not executed".
+#[cfg(unix)]
 #[tokio::test]
 async fn runner_records_partial_side_effects_honestly() {
     let base = std::env::temp_dir().join(format!("awr-p7-partial-{}", std::process::id()));
@@ -1284,6 +1300,7 @@ async fn nested_fences_are_decimal_strings() {
 
 // CR #58 r3 P2: the fence ledger is PER WORK — a lower fence on a different
 // work is fine, the same work's older fence is refused.
+#[cfg(unix)]
 #[tokio::test]
 async fn runner_fence_ledger_is_scoped_per_work() {
     let base = std::env::temp_dir().join(format!("awr-p7-fenceperwork-{}", std::process::id()));
@@ -1494,6 +1511,7 @@ async fn same_outcome_report_with_null_observed_facts_is_safe() {
 }
 
 // CR #58 r4 P2-3: same work, different scope = different counters.
+#[cfg(unix)]
 #[tokio::test]
 async fn runner_fence_ledger_distinguishes_scopes() {
     let base = std::env::temp_dir().join(format!("awr-p7-scopelock-{}", std::process::id()));
@@ -1527,6 +1545,7 @@ async fn runner_fence_ledger_distinguishes_scopes() {
 }
 
 // CR #58 r4 P2-3: raw-id/suffix collisions cannot collide ledgers and locks.
+#[cfg(unix)]
 #[tokio::test]
 async fn fence_files_never_collide_across_identities() {
     let base = std::env::temp_dir().join(format!("awr-p7-namecollide-{}", std::process::id()));
@@ -1804,7 +1823,9 @@ fn fence_keys_are_deterministic_and_collision_free() {
 }
 
 // CR #58 r6 P2-2: on non-unix the protected write is REFUSED and business
-// files stay untouched (verified on Windows CI; compiles everywhere).
+// files stay untouched. Compiles everywhere; runs when a Windows/CI lane
+// enables pg-tests (not covered by the default native verification lane,
+// which runs without the pg-tests feature).
 #[cfg(not(unix))]
 #[tokio::test]
 async fn non_unix_refuses_protected_writes_without_side_effects() {
