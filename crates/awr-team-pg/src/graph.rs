@@ -117,6 +117,16 @@ pub fn validate_required_graph(nodes: &[String], edges: &[DependencyEdge]) -> Pg
     Ok(())
 }
 
+/// Directional containment for scope authorization: `path` must be the
+/// granted file itself or inside a granted directory prefix, segment-wise.
+/// This is NOT the symmetric overlap used for reservation conflicts —
+/// `src` is NOT inside `src/foo` (CR #41 P2-10).
+pub fn path_within_scope(declared: &str, path: &str) -> bool {
+    let declared = canonicalize(declared);
+    let path = canonicalize(path);
+    path == declared || path.starts_with(&format!("{declared}/"))
+}
+
 pub fn require_main_scope(scope_id: &str) -> PgResult<()> {
     if scope_id != "main" {
         return Err(PgError::ScopeUnsupported);
