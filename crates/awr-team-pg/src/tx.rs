@@ -1,5 +1,77 @@
 use crate::error::{PgError, PgResult};
+use serde::{Deserialize, Serialize};
 use serde_json::{Value, json};
+
+/// i64 values that travel as decimal strings at response/receipt boundaries
+/// (fence, lease_version, revisions). Deserialization accepts legacy numeric
+/// receipts too. Shared by claim/execution records.
+pub(crate) fn ser_i64_string<S: serde::Serializer>(
+    value: &i64,
+    serializer: S,
+) -> Result<S::Ok, S::Error> {
+    serializer.serialize_str(&value.to_string())
+}
+
+pub(crate) fn de_i64_flex<'de, D: serde::Deserializer<'de>>(
+    deserializer: D,
+) -> Result<i64, D::Error> {
+    match Value::deserialize(deserializer)? {
+        Value::String(s) => s.parse().map_err(serde::de::Error::custom),
+        Value::Number(n) => n
+            .as_i64()
+            .ok_or_else(|| serde::de::Error::custom("invalid i64")),
+        other => Err(serde::de::Error::custom(format!(
+            "expected decimal string or number, got {other}"
+        ))),
+    }
+}
+
+/// Bump the project revision and append an event in the same transaction
+/// (the project row must already be locked by the caller). Replays return
+/// before mutations, so they never duplicate events.
+pub(crate) async fn emit_event(
+    tx: &tokio_postgres::Transaction<'_>,
+    tenant_id: &str,
+    project_id: &str,
+    actor_id: &str,
+    work_id: &str,
+    event_type: &str,
+    payload: Value,
+) -> PgResult<i64> {
+    let revision: i64 = tx
+        .query_one(
+            "SELECT project_revision FROM awr_team.projects WHERE tenant_id=$1 AND id=$2",
+            &[&tenant_id, &project_id],
+        )
+        .await?
+        .get(0);
+    let next = revision + 1;
+    tx.execute(
+        "UPDATE awr_team.projects SET project_revision=$1
+         WHERE tenant_id=$2 AND id=$3 AND project_revision=$4",
+        &[&next, &tenant_id, &project_id, &revision],
+    )
+    .await?;
+    let event_id = new_id();
+    tx.execute(
+        "INSERT INTO awr_team.events(
+            tenant_id, project_id, id, project_revision, event_index,
+            event_type, actor_id, work_id, payload_json)
+         VALUES ($1,$2,$3,$4,0,$5,$6,$7,$8)",
+        &[
+            &tenant_id,
+            &project_id,
+            &event_id,
+            &next,
+            &event_type,
+            &actor_id,
+            &work_id,
+            &payload,
+        ],
+    )
+    .await?;
+    Ok(next)
+}
 
 pub struct TeamStore {
     pool: crate::PgPool,
