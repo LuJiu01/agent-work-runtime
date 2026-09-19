@@ -4,12 +4,12 @@
 //! reads the runtime AWR_TEAM_DATABASE_URL and only cleans the database this
 //! process created.
 
-use awr_team_pg::{LeaseStore, PgError, ReadStore};
+use awr_team_pg::{CommandRequest, LeaseStore, PgError, ReadStore, TeamStore};
 use std::sync::MutexGuard;
 use tokio_postgres::Client;
 
 mod common;
-use common::{fresh_team_schema, test_config, with_app_role};
+use common::{fresh_team_schema, gate_db_name, test_config, with_app_role, with_db};
 
 const TENANT: &str = "tenant-a";
 const PROJECT: &str = "project-a";
@@ -555,4 +555,314 @@ async fn fence_and_lease_version_are_decimal_strings() {
         .unwrap();
     assert!(replay.replayed);
     assert_eq!(replay.fence, claim.fence);
+}
+// CR #56 P2-1: cross-store request-key collisions are conflicts in BOTH
+// directions, never a panic and never a phantom replay.
+#[tokio::test]
+async fn cross_store_request_key_collisions_conflict_safely() {
+    let (_lock, admin, store, db) = setup().await;
+    let session = store
+        .start_session(TENANT, PROJECT, ACTOR, CLIENT, "c", "main", "work-a")
+        .await
+        .unwrap();
+    store
+        .claim(
+            TENANT,
+            PROJECT,
+            &session.id,
+            ACTOR,
+            CLIENT,
+            "shared-key",
+            60,
+        )
+        .await
+        .unwrap();
+    let commands = TeamStore::from_config(with_app_role(&test_config(), &db));
+    let touch = |request_id: &str| CommandRequest {
+        tenant_id: TENANT.into(),
+        project_id: PROJECT.into(),
+        actor_id: ACTOR.into(),
+        client_id: CLIENT.into(),
+        request_id: request_id.into(),
+        op: "work.touch".into(),
+        args: serde_json::json!({"work_id": "work-a", "scope_id": "main"}),
+    };
+    // lease receipt (has committed revision after the fix) -> touch must conflict
+    let err = commands.execute(touch("shared-key")).await.unwrap_err();
+    assert!(matches!(err, PgError::IdempotencyConflict), "got {err}");
+    // touch receipt -> claim with the same key must also conflict
+    commands.execute(touch("touch-first")).await.unwrap();
+    let other = store
+        .start_session(TENANT, PROJECT, ACTOR, CLIENT, "c2", "main", "work-b")
+        .await
+        .unwrap();
+    let err = store
+        .claim(TENANT, PROJECT, &other.id, ACTOR, CLIENT, "touch-first", 60)
+        .await
+        .unwrap_err();
+    assert!(matches!(err, PgError::IdempotencyConflict), "got {err}");
+    // Legacy NULL-revision lease receipts must not panic either: they are
+    // plain conflicts now.
+    admin
+        .execute(
+            "UPDATE awr_team.operations SET committed_project_revision=NULL
+             WHERE request_id='shared-key'",
+            &[],
+        )
+        .await
+        .unwrap();
+    let err = commands.execute(touch("shared-key")).await.unwrap_err();
+    assert!(matches!(err, PgError::IdempotencyConflict), "got {err}");
+    let revision: i64 = admin
+        .query_one(
+            "SELECT project_revision FROM awr_team.projects WHERE id='project-a'",
+            &[],
+        )
+        .await
+        .unwrap()
+        .get(0);
+    assert_eq!(revision, 2, "conflicts must not advance state");
+}
+
+// CR #56 P2-2: the reply event records the actual replier, and the session
+// id is kept as its own field instead of impersonating an actor.
+#[tokio::test]
+async fn reply_event_records_the_actual_replier() {
+    let (_lock, admin, store, _db) = setup().await;
+    let session = store
+        .start_session(TENANT, PROJECT, ACTOR, CLIENT, "c", "main", "work-a")
+        .await
+        .unwrap();
+    store
+        .claim(TENANT, PROJECT, &session.id, ACTOR, CLIENT, "c1", 60)
+        .await
+        .unwrap();
+    let wait_id = store
+        .wait(TENANT, PROJECT, &session.id, ACTOR, "review?")
+        .await
+        .unwrap();
+    store
+        .reply(TENANT, PROJECT, &wait_id, OTHER, "looks good")
+        .await
+        .unwrap();
+    let event_row = admin
+        .query_one(
+            "SELECT actor_id, payload_json FROM awr_team.events WHERE event_type='wait.replied'",
+            &[],
+        )
+        .await
+        .unwrap();
+    let actor: String = event_row.get(0);
+    let payload: serde_json::Value = event_row.get(1);
+    assert_eq!(actor, OTHER, "event actor must be the replier");
+    assert_ne!(actor, session.id, "event actor must not be the session id");
+    assert_eq!(payload["session_id"], serde_json::json!(session.id));
+}
+
+// CR #56 P2-3: recovery-block transitions and the expiry sweep emit events;
+// a no-op sweep emits nothing.
+#[tokio::test]
+async fn recovery_block_and_expiry_emit_events() {
+    let (_lock, admin, store, _db) = setup().await;
+    store
+        .set_recovery_blocked(TENANT, PROJECT, "main", "work-b", true)
+        .await
+        .unwrap();
+    store
+        .set_recovery_blocked(TENANT, PROJECT, "main", "work-b", false)
+        .await
+        .unwrap();
+    let events: Vec<String> = admin
+        .query(
+            "SELECT event_type FROM awr_team.events WHERE project_id='project-a' ORDER BY project_revision",
+            &[],
+        )
+        .await
+        .unwrap()
+        .iter()
+        .map(|r| r.get(0))
+        .collect();
+    assert_eq!(
+        events,
+        vec![
+            "work.recovery_blocked".to_string(),
+            "work.recovery_unblocked".to_string()
+        ]
+    );
+    // Expiry sweep reports exactly the claims that transitioned.
+    let session = store
+        .start_session(TENANT, PROJECT, ACTOR, CLIENT, "c", "main", "work-a")
+        .await
+        .unwrap();
+    store
+        .claim(TENANT, PROJECT, &session.id, ACTOR, CLIENT, "short", 1)
+        .await
+        .unwrap();
+    tokio::time::sleep(std::time::Duration::from_millis(1200)).await;
+    let swept = store
+        .expire_due(TENANT, PROJECT, "main", "work-a")
+        .await
+        .unwrap();
+    assert_eq!(swept, 1);
+    let swept_again = store
+        .expire_due(TENANT, PROJECT, "main", "work-a")
+        .await
+        .unwrap();
+    assert_eq!(swept_again, 0);
+    let expired_events: i64 = admin
+        .query_one(
+            "SELECT count(*) FROM awr_team.events WHERE event_type='claim.expired'",
+            &[],
+        )
+        .await
+        .unwrap()
+        .get(0);
+    assert_eq!(expired_events, 1, "no-op sweep emitted a duplicate event");
+}
+
+// CR #56 (case 5): when the event insert fails, the whole claim rolls back.
+#[tokio::test]
+async fn failed_event_insert_rolls_back_the_claim() {
+    let (_lock, admin, store, _db) = setup().await;
+    admin
+        .batch_execute(
+            "CREATE OR REPLACE FUNCTION awr_team.fail_event_insert() RETURNS trigger
+             LANGUAGE plpgsql AS $$ BEGIN RAISE EXCEPTION 'injected event failure'; END; $$;
+             CREATE TRIGGER fail_event BEFORE INSERT ON awr_team.events
+             FOR EACH ROW EXECUTE FUNCTION awr_team.fail_event_insert();",
+        )
+        .await
+        .unwrap();
+    let session = store
+        .start_session(TENANT, PROJECT, ACTOR, CLIENT, "c", "main", "work-a")
+        .await
+        .unwrap();
+    let err = store
+        .claim(TENANT, PROJECT, &session.id, ACTOR, CLIENT, "c1", 60)
+        .await
+        .unwrap_err();
+    assert!(matches!(err, PgError::Db(_)), "got {err}");
+    admin
+        .batch_execute(
+            "DROP TRIGGER fail_event ON awr_team.events;
+             DROP FUNCTION awr_team.fail_event_insert();",
+        )
+        .await
+        .unwrap();
+    let claims: i64 = admin
+        .query_one("SELECT count(*) FROM awr_team.claims", &[])
+        .await
+        .unwrap()
+        .get(0);
+    assert_eq!(claims, 0, "failed event insert left a claim");
+    let revision: i64 = admin
+        .query_one(
+            "SELECT project_revision FROM awr_team.projects WHERE id='project-a'",
+            &[],
+        )
+        .await
+        .unwrap()
+        .get(0);
+    assert_eq!(revision, 0, "failed event insert bumped the revision");
+    let receipts: i64 = admin
+        .query_one("SELECT count(*) FROM awr_team.operations", &[])
+        .await
+        .unwrap()
+        .get(0);
+    assert_eq!(receipts, 0, "failed event insert left a receipt");
+}
+
+// CR #56 note: keep the concurrent preemption coverage alongside the
+// sequential ClaimHeld assertion.
+#[tokio::test]
+async fn concurrent_claims_exactly_one_wins() {
+    let (_lock, admin, store, _db) = setup().await;
+    let left = store
+        .start_session(TENANT, PROJECT, ACTOR, CLIENT, "ca", "main", "work-a")
+        .await
+        .unwrap();
+    let right = store
+        .start_session(TENANT, PROJECT, OTHER, CLIENT_B, "cb", "main", "work-a")
+        .await
+        .unwrap();
+    let (a, b) = tokio::join!(
+        store.claim(TENANT, PROJECT, &left.id, ACTOR, CLIENT, "ra", 60),
+        store.claim(TENANT, PROJECT, &right.id, OTHER, CLIENT_B, "rb", 60)
+    );
+    let wins = [a.is_ok(), b.is_ok()].iter().filter(|x| **x).count();
+    assert_eq!(
+        wins, 1,
+        "concurrent claims must settle on exactly one holder"
+    );
+    let active: i64 = admin
+        .query_one(
+            "SELECT count(*) FROM awr_team.claims WHERE work_id='work-a' AND state='active'",
+            &[],
+        )
+        .await
+        .unwrap()
+        .get(0);
+    assert_eq!(active, 1);
+}
+
+// CR #56 P2-4: the replay driver's actual stdout carries fence as a string.
+#[tokio::test]
+async fn replay_driver_stdout_has_decimal_string_fence() {
+    let (_lock, admin, _store, _db) = setup().await;
+    admin
+        .batch_execute(
+            "INSERT INTO awr_team.tenants(id,name,status) VALUES ('tenant-t13','T13','active');
+             INSERT INTO awr_team.actors(tenant_id,id,kind,display_name,status) VALUES
+                ('tenant-t13','kimi-cli','agent','Kimi CLI','active');
+             INSERT INTO awr_team.projects(tenant_id,id,key,mode,coordinator_epoch,status)
+                VALUES ('tenant-t13','project-tc003','tc003','team','epoch-tc003','active');
+             INSERT INTO awr_team.work_scopes(tenant_id,project_id,id,name,status)
+                VALUES ('tenant-t13','project-tc003','main','main','active');
+             INSERT INTO awr_team.work_items(tenant_id,project_id,id,external_key)
+                VALUES ('tenant-t13','project-tc003','work-tc003','TC003');",
+        )
+        .await
+        .unwrap();
+    let db = gate_db_name().await;
+    let mut url = String::new();
+    let config = with_db(&test_config(), &db);
+    // Build the admin URL from the validated config for the driver env.
+    url.push_str("postgres://postgres:awr-test@");
+    match &config.get_hosts()[0] {
+        tokio_postgres::config::Host::Tcp(h) => url.push_str(h),
+        #[cfg(unix)]
+        tokio_postgres::config::Host::Unix(p) => url.push_str(&p.display().to_string()),
+    }
+    url.push_str(&format!(
+        ":{}/{}",
+        config.get_ports().first().copied().unwrap_or(5432),
+        db
+    ));
+    let output = std::process::Command::new(concat!(
+        env!("CARGO_MANIFEST_DIR"),
+        "/../../target/debug/examples/tc_replay"
+    ))
+    .args([
+        "claim",
+        "project-tc003",
+        "work-tc003",
+        "kimi-cli",
+        "kimi",
+        "conv-1",
+    ])
+    .env("AWR_TEAM_DATABASE_URL", &url)
+    .output()
+    .expect(
+        "run tc_replay example (build it with: cargo build -p awr-team-pg --example tc_replay)",
+    );
+    assert!(
+        output.status.success(),
+        "driver failed: {}",
+        String::from_utf8_lossy(&output.stdout)
+    );
+    let stdout: serde_json::Value = serde_json::from_slice(&output.stdout).unwrap();
+    assert!(
+        stdout["fence"].is_string(),
+        "driver stdout fence must be a decimal string: {stdout}"
+    );
 }

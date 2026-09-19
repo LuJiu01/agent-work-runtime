@@ -63,12 +63,18 @@ impl TeamStore {
         };
         let revision: i64 = row.get(0);
         if let Some(existing) = load_operation(&tx, &request).await? {
+            // Validate the request identity FIRST; legacy receipts from other
+            // stores may carry a NULL committed revision and must still reach
+            // this comparison instead of panicking during parsing (CR #56 P2-1).
             if existing.0 != request_hash {
                 return Err(PgError::IdempotencyConflict);
             }
+            let committed = existing.1.ok_or_else(|| {
+                PgError::Protocol("legacy receipt has no committed revision".into())
+            })?;
             return Ok(CommandOutcome {
                 replayed: true,
-                committed_project_revision: existing.1.to_string(),
+                committed_project_revision: committed.to_string(),
                 result: existing.2,
             });
         }
@@ -171,7 +177,7 @@ pub(crate) async fn bind_scope(
 async fn load_operation(
     tx: &tokio_postgres::Transaction<'_>,
     request: &CommandRequest,
-) -> PgResult<Option<(String, i64, Value)>> {
+) -> PgResult<Option<(String, Option<i64>, Value)>> {
     let row = tx
         .query_opt(
             "SELECT request_hash, committed_project_revision, result_json

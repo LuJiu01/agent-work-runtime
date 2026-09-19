@@ -44,7 +44,7 @@ async fn main() {
             .await;
             match r {
                 Ok((s, cl)) => Ok(
-                    json!({"ok":true,"op":"claim","actor":a,"work":w,"session":s.id,"claim":cl.id,"fence":cl.fence}),
+                    json!({"ok":true,"op":"claim","actor":a,"work":w,"session":s.id,"claim":cl.id,"fence":cl.fence.to_string()}),
                 ),
                 Err(e) => Err(e),
             }
@@ -94,7 +94,7 @@ async fn main() {
             let leases = LeaseStore::new(app_url());
             match leases.handoff(TENANT, &p, &cl, &f, &t, &c, &v).await {
                 Ok(h) => Ok(
-                    json!({"ok":true,"op":"handoff","from":f,"to":t,"claim":h.id,"fence":h.fence,"session":h.session_id}),
+                    json!({"ok":true,"op":"handoff","from":f,"to":t,"claim":h.id,"fence":h.fence.to_string(),"session":h.session_id}),
                 ),
                 Err(e) => Err(e.to_string()),
             }
@@ -109,7 +109,7 @@ async fn main() {
                 .await
             {
                 Ok(()) => Ok(
-                    json!({"ok":true,"op":"check-fence","actor":a,"fence":fence,"accepted":true}),
+                    json!({"ok":true,"op":"check-fence","actor":a,"fence":fence.to_string(),"accepted":true}),
                 ),
                 Err(e) => Err(e.to_string()),
             }

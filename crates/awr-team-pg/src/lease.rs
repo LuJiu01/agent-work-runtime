@@ -252,22 +252,10 @@ impl LeaseStore {
             "expires_at": expires_at,
             "state": "active",
         });
-        store_operation(
-            &tx,
-            tenant_id,
-            project_id,
-            actor_id,
-            client_id,
-            request_id,
-            op,
-            &request_hash,
-            &result,
-        )
-        .await?;
         // Lease state changes are observable: revision and event commit in
         // the SAME transaction (CR #39 P2-5). Replays return before any
         // mutation, so they never duplicate events.
-        emit_event(
+        let committed_revision = emit_event(
             &tx,
             tenant_id,
             project_id,
@@ -280,6 +268,19 @@ impl LeaseStore {
                 "scope_id": scope_id,
                 "fence": fence.to_string(),
             }),
+        )
+        .await?;
+        store_operation(
+            &tx,
+            tenant_id,
+            project_id,
+            actor_id,
+            client_id,
+            request_id,
+            op,
+            &request_hash,
+            committed_revision,
+            &result,
         )
         .await?;
         tx.commit().await?;
@@ -396,6 +397,13 @@ impl LeaseStore {
             "expires_at": expires_at,
             "state": "active",
         });
+        let committed_revision: i64 = tx
+            .query_one(
+                "SELECT project_revision FROM awr_team.projects WHERE tenant_id=$1 AND id=$2",
+                &[&tenant_id, &project_id],
+            )
+            .await?
+            .get(0);
         store_operation(
             &tx,
             tenant_id,
@@ -405,6 +413,7 @@ impl LeaseStore {
             request_id,
             op,
             &request_hash,
+            committed_revision,
             &result,
         )
         .await?;
@@ -712,11 +721,15 @@ impl LeaseStore {
         Ok(wait_id)
     }
 
+    /// Record a reply. The replier identity comes from the trusted calling
+    /// context: the actor answering a wait is usually NOT the actor who
+    /// opened it, and the session id is not an actor (CR #56 P2-2).
     pub async fn reply(
         &self,
         tenant_id: &str,
         project_id: &str,
         wait_id: &str,
+        replier_actor_id: &str,
         reply: &str,
     ) -> PgResult<()> {
         let mut client = self.connect().await?;
@@ -745,10 +758,10 @@ impl LeaseStore {
             &tx,
             tenant_id,
             project_id,
-            &wait_work.1,
+            replier_actor_id,
             &wait_work.0,
             "wait.replied",
-            json!({"wait_id": wait_id}),
+            json!({"wait_id": wait_id, "session_id": wait_work.1}),
         )
         .await?;
         tx.commit().await?;
@@ -774,6 +787,22 @@ impl LeaseStore {
              ON CONFLICT (tenant_id, project_id, scope_id, work_id)
              DO UPDATE SET recovery_blocked=$5",
             &[&tenant_id, &project_id, &scope_id, &work_id, &blocked],
+        )
+        .await?;
+        // Changing whether a work may execute is an observable state
+        // transition (CR #56 P2-3).
+        emit_event(
+            &tx,
+            tenant_id,
+            project_id,
+            "system",
+            work_id,
+            if blocked {
+                "work.recovery_blocked"
+            } else {
+                "work.recovery_unblocked"
+            },
+            json!({"scope_id": scope_id, "blocked": blocked}),
         )
         .await?;
         tx.commit().await?;
@@ -834,6 +863,9 @@ async fn lock_project(
     Ok(())
 }
 
+/// Expire due claims. Every claim that actually transitions is returned
+/// AND reported as a claim.expired event in the same transaction; sweeps
+/// that change nothing emit nothing (CR #56 P2-3).
 async fn expire_due(
     tx: &tokio_postgres::Transaction<'_>,
     tenant_id: &str,
@@ -841,15 +873,29 @@ async fn expire_due(
     scope_id: &str,
     work_id: &str,
 ) -> PgResult<u64> {
-    let count = tx
-        .execute(
+    let expired = tx
+        .query(
             "UPDATE awr_team.claims SET state='expired'
              WHERE tenant_id=$1 AND project_id=$2 AND scope_id=$3 AND work_id=$4
-               AND state='active' AND expires_at <= clock_timestamp()",
+               AND state='active' AND expires_at <= clock_timestamp()
+             RETURNING id, actor_id",
             &[&tenant_id, &project_id, &scope_id, &work_id],
         )
         .await?;
-    Ok(count)
+    for row in &expired {
+        let claim_id: String = row.get(0);
+        emit_event(
+            tx,
+            tenant_id,
+            project_id,
+            "system",
+            work_id,
+            "claim.expired",
+            json!({"claim_id": claim_id, "scope_id": scope_id}),
+        )
+        .await?;
+    }
+    Ok(expired.len() as u64)
 }
 
 async fn load_operation(
@@ -940,14 +986,17 @@ async fn store_operation(
     request_id: &str,
     op: &str,
     request_hash: &str,
+    committed_revision: i64,
     result: &Value,
 ) -> PgResult<()> {
+    // Receipts always carry the committed project revision: other stores
+    // sharing the operations table must never read a NULL here (CR #56 P2-1).
     let op_id = new_id();
     tx.execute(
         "INSERT INTO awr_team.operations(
             tenant_id, project_id, id, actor_id, client_id, request_id, op,
-            request_hash, state, result_json)
-         VALUES ($1,$2,$3,$4,$5,$6,$7,$8,'committed',$9)",
+            request_hash, state, committed_project_revision, result_json)
+         VALUES ($1,$2,$3,$4,$5,$6,$7,$8,'committed',$9,$10)",
         &[
             &tenant_id,
             &project_id,
@@ -957,6 +1006,7 @@ async fn store_operation(
             &request_id,
             &op,
             &request_hash,
+            &committed_revision,
             result,
         ],
     )
