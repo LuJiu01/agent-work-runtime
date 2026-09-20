@@ -1768,6 +1768,9 @@
 
   // 给测试用。浏览器里没有 module，这一段不执行。
   if (typeof module !== 'undefined' && module.exports) {
-    module.exports = { createGenerationGuard, state, detailGuard, renderWorkDetail };
+    module.exports = {
+      createGenerationGuard, state, detailGuard, renderWorkDetail,
+      renderContextChart, doCompile,
+    };
   }
 })();

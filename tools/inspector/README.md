@@ -186,7 +186,7 @@ stdout / stderr / 请求体都有字节上限，并发子进程数有上限。
 node --test test/*.test.js
 ```
 
-41 个用例，零依赖，分两档：
+47 个用例，零依赖，分三档：
 
 - `test/bridge.test.js` —— 起真实的 `server.js` 子进程、打真实 HTTP 请求，PATH 上放一个
   假 `awr`（`test/fixtures/stub-awr.js`）。覆盖请求来源边界、命令构造、子进程输出、
@@ -194,6 +194,9 @@ node --test test/*.test.js
 - `test/detail.test.js` —— 在一个最小 DOM 替身（`test/fixtures/dom-stub.js`）上跑
   `app.js` 里**真正的** `renderWorkDetail()`，不是抄一份副本来测。覆盖缓存命中时
   详情与原始响应是否配套、迟到响应（成功与失败）的丢弃、刷新后旧响应的作废。
+- `test/overview-chart.test.js` —— 同样在替身上跑真正的 `renderContextChart()` 和
+  `doCompile()`。覆盖编译后概览那张图会不会填上、三条数字是否原样取自 AWR、
+  空态有没有承诺做不到的事，以及演示模式那条路径没被改坏。
 
 CI 见 `.github/workflows/inspector.yml`。
 
@@ -219,6 +222,7 @@ public/
 test/
   bridge.test.js        桥接测试
   detail.test.js        详情面板的前端回归
+  overview-chart.test.js 概览上下文体积图的回归
   fixtures/stub-awr.js  假的 awr，用来制造边界情况
   fixtures/dom-stub.js  最小 DOM 替身，让 app.js 能在 Node 里跑
 ```
