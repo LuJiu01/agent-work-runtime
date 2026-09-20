@@ -159,3 +159,47 @@ pub async fn fresh_team_schema() -> (MutexGuard<'static, ()>, Client, String) {
 pub async fn app_client(db: &str) -> Client {
     connect_config(&with_app_role(&test_config(), db)).await
 }
+
+/// Build the example through Cargo itself and locate the executable from
+/// the compiler-artifact JSON, so CARGO_TARGET_DIR, --target-dir and release
+/// profiles all resolve to THIS build's output. Fails loudly if the
+/// artifact cannot be produced or found.
+pub fn build_example_and_locate(example: &str) -> String {
+    let manifest_dir = env!("CARGO_MANIFEST_DIR");
+    let output =
+        std::process::Command::new(std::env::var("CARGO").unwrap_or_else(|_| "cargo".into()))
+            .args([
+                "build",
+                "-p",
+                "awr-team-pg",
+                "--example",
+                example,
+                "--message-format=json",
+            ])
+            .current_dir(format!("{manifest_dir}/../.."))
+            .output()
+            .expect("invoke cargo build for the example");
+    assert!(
+        output.status.success(),
+        "cargo build --example {example} failed: {}",
+        String::from_utf8_lossy(&output.stderr)
+    );
+    for line in String::from_utf8_lossy(&output.stdout).lines() {
+        let Ok(message) = serde_json::from_str::<serde_json::Value>(line) else {
+            continue;
+        };
+        if message["reason"] != "compiler-artifact" {
+            continue;
+        }
+        let is_example = message["target"]["kind"]
+            .as_array()
+            .map(|k| k.iter().any(|v| v == "example"))
+            .unwrap_or(false);
+        if is_example && message["target"]["name"] == example {
+            if let Some(executable) = message["executable"].as_str() {
+                return executable.to_string();
+            }
+        }
+    }
+    panic!("cargo did not report an executable for example {example}");
+}
