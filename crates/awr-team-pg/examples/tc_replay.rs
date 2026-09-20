@@ -177,7 +177,7 @@ async fn main() {
             }
         }
         "evidence" => {
-            // evidence <project> <work> <actor> <hash> <summary> [bytes] [dirty]
+            // evidence <project> <work> <actor> <hash> <summary> [bytes] [dirty] [input] [execution]
             let (p, w, a, h, s) = (
                 arg(&args, 2),
                 arg(&args, 3),
@@ -190,12 +190,12 @@ async fn main() {
                 .filter(|b| b.as_str() != "NONE")
                 .map(|b| b.clone().into_bytes());
             let dirty = args.get(8).map(|v| v == "true").unwrap_or(false);
-            let input: Option<&str> = if args.get(9).map(|v| v.as_str() == "NONE").unwrap_or(false)
-            {
-                None
-            } else {
-                Some("cli-in")
-            };
+            // Input digest binding: an explicit string is used as-is;
+            // NONE/absent means no input binding (CR #59 P2-5).
+            let input: Option<String> = args.get(9).filter(|v| v.as_str() != "NONE").cloned();
+            // Optional execution binding for the strict completion policy
+            // (CR #59 P2-5).
+            let execution: Option<String> = args.get(10).filter(|e| e.as_str() != "NONE").cloned();
             let review = reviews();
             match review
                 .record_evidence(
@@ -207,9 +207,9 @@ async fn main() {
                     None,
                     &json!({"log": s}),
                     bytes.as_deref(),
-                    input,
+                    input.as_deref(),
                     dirty,
-                    None,
+                    execution.as_deref(),
                 )
                 .await
             {
@@ -249,13 +249,19 @@ async fn main() {
             let policy = args.get(6).cloned();
             let ctx = args.get(7).map(|v| v == "true").unwrap_or(true);
             let review = reviews();
+            // A stable per-intent request id: same intent retries replay,
+            // new intents use new ids (CR #59 P2-4).
+            let request_id = args
+                .get(8)
+                .cloned()
+                .unwrap_or_else(|| format!("complete-{ev}"));
             match review
                 .complete(
                     TENANT,
                     &p,
                     &a,
                     "cli",
-                    "cli-complete",
+                    &request_id,
                     &w,
                     "main",
                     &ev,
@@ -389,14 +395,16 @@ async fn main() {
             }).await
         }
         "report" => {
-            // report <project> <execution> <outcome> <paths_csv>
+            // report <project> <execution> <outcome> <paths_csv> [output_digest]
             let (p, e, o, paths) = (arg(&args, 2), arg(&args, 3), arg(&args, 4), arg(&args, 5));
+            let explicit_digest = args.get(6).cloned();
             let observed: Vec<String> = if paths.is_empty() {
                 vec![]
             } else {
                 paths.split(',').map(|s| s.trim().to_string()).collect()
             };
             let exec = executions();
+            let digest = explicit_digest.unwrap_or_else(|| format!("out-{o}"));
             match exec
                 .report(
                     TENANT,
@@ -405,7 +413,7 @@ async fn main() {
                     "trusted_executor",
                     &e,
                     &o,
-                    json!({"output_digest": format!("out-{o}")}),
+                    json!({"output_digest": digest}),
                     &observed,
                 )
                 .await

@@ -2,6 +2,7 @@
 
 use awr_team_pg::{Bootstrap, ExecutionStore, LeaseStore, PgError, ReviewStore, migrate};
 use serde_json::json;
+use sha2::Digest as _;
 use std::sync::{Mutex, MutexGuard};
 use tokio_postgres::{Client, NoTls};
 
@@ -129,7 +130,7 @@ async fn two_actors_handoff_review_and_complete_with_independent_oracle() {
         "trusted_executor",
         &prepared.id,
         "succeeded",
-        json!({"output_digest": "deadbeef", "environment_digest": "env"}),
+        json!({"output_digest": format!("{:x}", sha2::Sha256::digest(b"oracle-bytes")), "environment_digest": "env"}),
         &["src/foo/a.rs".into()],
     )
     .await

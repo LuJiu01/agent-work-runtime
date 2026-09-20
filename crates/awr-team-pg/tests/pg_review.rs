@@ -420,7 +420,19 @@ async fn round_and_decision_stay_pinned() {
         .unwrap();
     // The latest round R2 (author REVIEWER, approver REVIEWER_C) is a valid
     // independent review; the older round's later decision must not poison it.
-    complete(&store, &ev.id, "c-rounds").await.unwrap();
+    let receipt = complete(&store, &ev.id, "c-rounds").await.unwrap();
+    // CR #59 P2-3: the receipt records the approver from the SAME pinned
+    // round, never the other round's (later) decision.
+    let approved_by: serde_json::Value = admin
+        .query_one(
+            "SELECT approved_by_json FROM awr_team.completion_receipts WHERE id=$1",
+            &[&receipt.id],
+        )
+        .await
+        .unwrap()
+        .get(0);
+    assert_eq!(approved_by["approved_by"], json!(REVIEWER_C));
+    assert_eq!(approved_by["submitted_by"], json!(REVIEWER));
     let _ = r1;
 }
 
@@ -764,4 +776,484 @@ async fn review_lifecycle_emits_events_atomically() {
         ],
         "unexpected event stream: {events:?}"
     );
+}
+// CR #59 P2-1: strict policy requires a bound TRUSTED receipt — human
+// material (AuthorizedReview grade) with an independent approval must NOT
+// complete, even when everything else matches.
+#[tokio::test]
+async fn strict_policy_rejects_human_grade_material() {
+    let (_lock, _, store) = setup("trusted_execution_and_review").await;
+    let ev = store
+        .record_evidence(
+            TENANT,
+            PROJECT,
+            REVIEWER,
+            "work-a",
+            "hash-a",
+            None,
+            &json!({"log": "human judged"}),
+            Some(b"bytes"),
+            Some("in-1"),
+            false,
+            None,
+        )
+        .await
+        .unwrap();
+    assert_eq!(ev.trust_basis, "human_review");
+    approve(&store, &ev.id).await;
+    let err = complete(&store, &ev.id, "c-human").await.unwrap_err();
+    assert!(matches!(err, PgError::EvidenceInvalid), "got {err}");
+}
+
+// CR #59 P2-1: the full trusted chain via REAL execution stores — executor,
+// scope, contract, input and output all bind. Wrong executor or scope is
+// refused.
+#[tokio::test]
+async fn strict_chain_binds_executor_scope_input_and_output() {
+    let (_lock, admin, store) = setup("trusted_execution_and_review").await;
+    let leases = awr_team_pg::LeaseStore::from_config(with_app_role(
+        &test_config(),
+        &common::gate_db_name().await,
+    ));
+    let execs = awr_team_pg::ExecutionStore::from_config(with_app_role(
+        &test_config(),
+        &common::gate_db_name().await,
+    ));
+    let session = leases
+        .start_session(
+            TENANT, PROJECT, AUTHOR, "client-a", "conv", "main", "work-a",
+        )
+        .await
+        .unwrap();
+    let claim = leases
+        .claim(
+            TENANT,
+            PROJECT,
+            &session.id,
+            AUTHOR,
+            "client-a",
+            "claim-1",
+            3600,
+        )
+        .await
+        .unwrap();
+    let prepared = execs
+        .prepare(
+            TENANT,
+            PROJECT,
+            AUTHOR,
+            "client-a",
+            "prep-1",
+            &claim.id,
+            RUNNER,
+            "hash-a",
+            "in-1",
+            "hard_fence",
+            &["src".into()],
+            &serde_json::json!([{"path": "src/out.txt", "content": "x"}]),
+        )
+        .await
+        .unwrap();
+    execs
+        .accept(TENANT, PROJECT, &prepared.id, claim.fence)
+        .await
+        .unwrap();
+    execs
+        .start(TENANT, PROJECT, &prepared.id, claim.fence)
+        .await
+        .unwrap();
+    let digest = {
+        use sha2::{Digest, Sha256};
+        format!("{:x}", Sha256::digest(b"report-bytes"))
+    };
+    execs
+        .report(
+            TENANT,
+            PROJECT,
+            RUNNER,
+            "trusted_executor",
+            &prepared.id,
+            "succeeded",
+            serde_json::json!({"output_digest": digest}),
+            &["src/out.txt".into()],
+        )
+        .await
+        .unwrap();
+    let ev = store
+        .record_evidence(
+            TENANT,
+            PROJECT,
+            RUNNER,
+            "work-a",
+            "hash-a",
+            None,
+            &json!({"log": "executed"}),
+            Some(b"report-bytes"),
+            Some("in-1"),
+            false,
+            Some(&prepared.id),
+        )
+        .await
+        .unwrap();
+    approve(&store, &ev.id).await;
+    complete(&store, &ev.id, "c-chain").await.unwrap();
+    // Negative: an execution whose executor is NOT the evidence submitter.
+    let ev2 = store
+        .record_evidence(
+            TENANT,
+            PROJECT,
+            RUNNER,
+            "work-a",
+            "hash-a",
+            None,
+            &json!({"log": "other"}),
+            Some(b"report-bytes"),
+            Some("in-1"),
+            false,
+            Some(&prepared.id),
+        )
+        .await
+        .unwrap();
+    admin
+        .execute(
+            "UPDATE awr_team.evidence SET created_by='runner-b' WHERE id=$1",
+            &[&ev2.id],
+        )
+        .await
+        .unwrap();
+    approve(&store, &ev2.id).await;
+    let err = complete(&store, &ev2.id, "c-chain-2").await.unwrap_err();
+    assert!(matches!(err, PgError::EvidenceInvalid), "got {err}");
+    // Negative: execution input differs from evidence input.
+    let ev3 = store
+        .record_evidence(
+            TENANT,
+            PROJECT,
+            RUNNER,
+            "work-a",
+            "hash-a",
+            None,
+            &json!({"log": "third"}),
+            Some(b"report-bytes"),
+            Some("in-OTHER"),
+            false,
+            Some(&prepared.id),
+        )
+        .await
+        .unwrap();
+    approve(&store, &ev3.id).await;
+    let err = complete(&store, &ev3.id, "c-chain-3").await.unwrap_err();
+    assert!(matches!(err, PgError::EvidenceInvalid), "got {err}");
+}
+
+// CR #59 P2-2: dependency resolution is scope-bound — a receipt from
+// another scope is not coverage, and two completed scopes do not error.
+#[tokio::test]
+async fn dependencies_are_resolved_in_the_same_scope() {
+    let (_lock, admin, store) = setup("trusted_execution_and_review").await;
+    admin
+        .batch_execute(
+            "INSERT INTO awr_team.work_scopes(tenant_id,project_id,id,name,status)
+             VALUES ('tenant-a','project-a','review','review','active');
+             UPDATE awr_team.work_contracts
+             SET contract_json = contract_json || '{\"required_dependencies\":[\"work-b\"]}'::jsonb
+             WHERE work_id='work-a';
+             INSERT INTO awr_team.work_runtime(
+                tenant_id, project_id, scope_id, work_id, state, work_version, last_fence)
+             VALUES ('tenant-a','project-a','review','work-b','active',1,0);",
+        )
+        .await
+        .unwrap();
+    // Complete work-b in REVIEW scope only: must NOT cover main.
+    let ev_b = store
+        .record_evidence(
+            TENANT,
+            PROJECT,
+            RUNNER,
+            "work-b",
+            "hash-b",
+            None,
+            &json!({"log": "b"}),
+            Some(b"bytes-b"),
+            Some("in-b"),
+            false,
+            Some("exec-b"),
+        )
+        .await
+        .unwrap();
+    succeeded_execution_scoped(&admin, "exec-b", "work-b", "hash-b", "in-b", "review").await;
+    // The review-scope contract row for work-b (its main row stays 'main').
+    admin
+        .execute(
+            "INSERT INTO awr_team.work_contracts(
+                tenant_id, project_id, snapshot_id, scope_id, work_id, contract_hash,
+                definition_state, title, contract_json)
+             SELECT tenant_id, project_id, snapshot_id, 'review', work_id, contract_hash,
+                    definition_state, title, contract_json
+             FROM awr_team.work_contracts WHERE work_id='work-b'",
+            &[],
+        )
+        .await
+        .unwrap();
+    let round_b = store
+        .open_review(TENANT, PROJECT, AUTHOR, "work-b", &ev_b.id)
+        .await
+        .unwrap();
+    store
+        .decide_review(TENANT, PROJECT, REVIEWER, &round_b.id, "approve", "ok")
+        .await
+        .unwrap();
+    store
+        .complete(
+            TENANT,
+            PROJECT,
+            REVIEWER,
+            "client-b",
+            "c-b-review",
+            "work-b",
+            "review",
+            &ev_b.id,
+            None,
+            true,
+        )
+        .await
+        .unwrap();
+    let ev_a = store
+        .record_evidence(
+            TENANT,
+            PROJECT,
+            RUNNER,
+            "work-a",
+            "hash-a",
+            None,
+            &json!({"log": "a"}),
+            Some(b"bytes-a"),
+            Some("in-1"),
+            false,
+            Some("exec-a"),
+        )
+        .await
+        .unwrap();
+    succeeded_execution_for(&admin, "exec-a", "work-a", "hash-a", "in-1").await;
+    approve(&store, &ev_a.id).await;
+    let err = complete(&store, &ev_a.id, "c-a-main").await.unwrap_err();
+    assert!(
+        matches!(err, PgError::CompletionRejected),
+        "cross-scope coverage leaked: {err}"
+    );
+    // Complete work-b in MAIN too (own execution+evidence scoped main):
+    // now coverage is exact, and both scopes existing must not error.
+    let ev_b_main = store
+        .record_evidence(
+            TENANT,
+            PROJECT,
+            RUNNER,
+            "work-b",
+            "hash-b",
+            None,
+            &json!({"log": "b-main"}),
+            Some(b"bytes-b"),
+            Some("in-b"),
+            false,
+            Some("exec-b-main"),
+        )
+        .await
+        .unwrap();
+    succeeded_execution_scoped(&admin, "exec-b-main", "work-b", "hash-b", "in-b", "main").await;
+    let round_b_main = store
+        .open_review(TENANT, PROJECT, AUTHOR, "work-b", &ev_b_main.id)
+        .await
+        .unwrap();
+    store
+        .decide_review(TENANT, PROJECT, REVIEWER, &round_b_main.id, "approve", "ok")
+        .await
+        .unwrap();
+    store
+        .complete(
+            TENANT,
+            PROJECT,
+            REVIEWER,
+            "client-b",
+            "c-b-main",
+            "work-b",
+            "main",
+            &ev_b_main.id,
+            None,
+            true,
+        )
+        .await
+        .unwrap();
+    let receipt = complete(&store, &ev_a.id, "c-a-main").await.unwrap();
+    let linked: Option<String> = admin
+        .query_opt(
+            "SELECT predecessor_completion_id FROM awr_team.completion_dependencies
+             WHERE completion_id=$1 AND predecessor_work_id='work-b'",
+            &[&receipt.id],
+        )
+        .await
+        .unwrap()
+        .map(|row| row.get(0));
+    assert!(linked.is_some(), "dependency mapping not written");
+}
+
+async fn succeeded_execution_for(
+    admin: &Client,
+    id: &str,
+    work: &str,
+    contract_hash: &str,
+    input: &str,
+) {
+    succeeded_execution_scoped(admin, id, work, contract_hash, input, "main").await
+}
+
+async fn succeeded_execution_scoped(
+    admin: &Client,
+    id: &str,
+    work: &str,
+    contract_hash: &str,
+    input: &str,
+    scope: &str,
+) {
+    admin
+        .execute(
+            "INSERT INTO awr_team.executions(
+                tenant_id, project_id, id, work_id, session_id, claim_id, fence,
+                contract_hash, input_digest, executor_actor_id, state, effect_key,
+                fencing_class, declared_scope_json, scope_id)
+             VALUES ('tenant-a','project-a',$1,$2,NULL,NULL,1,$3,$4,'runner-a','succeeded',$1,'hard_fence','[]',$5)",
+            &[&id, &work, &contract_hash, &input, &scope],
+        )
+        .await
+        .unwrap();
+}
+
+// CR #59 P2-4/P2-5: the REAL replay driver completes the full strict chain
+// (claim → prepare → report → evidence(exec) → review → complete), retries
+// replay the same receipt, and two independent works complete without
+// request-id collisions.
+#[tokio::test]
+async fn driver_strict_chain_end_to_end() {
+    let (_lock, admin, _store) = setup("trusted_execution_and_review").await;
+    admin
+        .batch_execute(
+            "INSERT INTO awr_team.tenants(id,name,status) VALUES ('tenant-t13','T13','active');
+             INSERT INTO awr_team.actors(tenant_id,id,kind,display_name,status) VALUES
+                ('tenant-t13','kimi-cli','agent','Kimi CLI','active'),
+                ('tenant-t13','reviewer-human','human','Reviewer','active'),
+                ('tenant-t13','runner-t13','system','Runner','active');
+             INSERT INTO awr_team.projects(tenant_id,id,key,mode,coordinator_epoch,status)
+                VALUES ('tenant-t13','project-tc003','tc003','team','epoch-tc003','active');
+             INSERT INTO awr_team.project_memberships(tenant_id,project_id,actor_id,role)
+                VALUES ('tenant-t13','project-tc003','reviewer-human','reviewer');
+             INSERT INTO awr_team.work_scopes(tenant_id,project_id,id,name,status)
+                VALUES ('tenant-t13','project-tc003','main','main','active');
+             INSERT INTO awr_team.work_items(tenant_id,project_id,id,external_key)
+                VALUES ('tenant-t13','project-tc003','work-tc003','A'),('tenant-t13','project-tc003','work-tc003b','B');
+             INSERT INTO awr_team.source_snapshots(
+                tenant_id, project_id, id, manifest_digest, source_ref_json, parser_version, created_by)
+                VALUES ('tenant-t13','project-tc003','snap-tc003','live','{}','t13','kimi-cli');
+             UPDATE awr_team.projects SET active_snapshot_id='snap-tc003' WHERE id='project-tc003';
+             INSERT INTO awr_team.work_contracts(
+                tenant_id, project_id, snapshot_id, scope_id, work_id, contract_hash,
+                definition_state, title, contract_json)
+             VALUES
+                ('tenant-t13','project-tc003','snap-tc003','main','work-tc003','hash-tc003','enabled','A',
+                 '{\"completion_policy\":\"trusted_execution_and_review\",\"acceptance\":[\"oracle pass\"]}'),
+                ('tenant-t13','project-tc003','snap-tc003','main','work-tc003b','hash-tc003','enabled','B',
+                 '{\"completion_policy\":\"trusted_execution_and_review\",\"acceptance\":[\"oracle pass\"]}');",
+        )
+        .await
+        .unwrap();
+    let executable = common::build_example_and_locate("tc_replay");
+    let db = common::gate_db_name().await;
+    let digest = {
+        use sha2::{Digest, Sha256};
+        format!("{:x}", Sha256::digest(b"cli-bytes"))
+    };
+    let run = |args: &[&str]| -> serde_json::Value {
+        let output = std::process::Command::new(&executable)
+            .args(args)
+            .env("AWR_TEAM_DATABASE_URL", common::test_database_url_raw())
+            .env("TC_DB", &db)
+            .output()
+            .expect("run tc_replay");
+        let stdout: serde_json::Value =
+            serde_json::from_slice(&output.stdout).unwrap_or_else(|_| {
+                panic!(
+                    "driver output not json: {}",
+                    String::from_utf8_lossy(&output.stdout)
+                )
+            });
+        assert_eq!(stdout["ok"], true, "driver step {args:?} failed: {stdout}");
+        stdout
+    };
+    let chain = |work: &str, req: &str| -> (String, String) {
+        let claim = run(&[
+            "claim",
+            "project-tc003",
+            work,
+            "runner-t13",
+            "runner",
+            &format!("conv-{req}"),
+        ]);
+        let claim_id = claim["claim"].as_str().unwrap().to_string();
+        let exec = run(&[
+            "prepare",
+            "project-tc003",
+            work,
+            "runner-t13",
+            "runner",
+            req,
+            &claim_id,
+            "hash-tc003",
+            "src/foo",
+            "[{\"path\":\"src/foo\",\"content\":\"x\"}]",
+        ]);
+        let exec_id = exec["execution"].as_str().unwrap().to_string();
+        run(&[
+            "report",
+            "project-tc003",
+            &exec_id,
+            "succeeded",
+            "src/foo",
+            &digest,
+        ]);
+        let ev = run(&[
+            "evidence",
+            "project-tc003",
+            work,
+            "runner-t13",
+            "hash-tc003",
+            "验收通过",
+            "cli-bytes",
+            "false",
+            "in-t13",
+            &exec_id,
+        ]);
+        let ev_id = ev["evidence"].as_str().unwrap().to_string();
+        let round = run(&["open-review", "project-tc003", work, "kimi-cli", &ev_id]);
+        run(&[
+            "decide",
+            "project-tc003",
+            round["round"].as_str().unwrap(),
+            "reviewer-human",
+            "approve",
+            "ok",
+        ]);
+        let receipt = run(&["complete", "project-tc003", work, "reviewer-human", &ev_id]);
+        (receipt["receipt"].as_str().unwrap().to_string(), ev_id)
+    };
+    let (receipt_a, ev_a) = chain("work-tc003", "req-chain-a");
+    // Retry the same completion: replays the SAME receipt.
+    let replay = run(&[
+        "complete",
+        "project-tc003",
+        "work-tc003",
+        "reviewer-human",
+        &ev_a,
+    ]);
+    assert_eq!(replay["receipt"], receipt_a, "retry minted a new receipt");
+    // A second, independent work completes with its own request identity.
+    let (receipt_b, _) = chain("work-tc003b", "req-chain-b");
+    assert_ne!(receipt_a, receipt_b);
 }

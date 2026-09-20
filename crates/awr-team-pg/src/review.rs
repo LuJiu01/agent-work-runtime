@@ -497,9 +497,12 @@ impl ReviewStore {
             if kind != "human" {
                 return Err(PgError::Forbidden);
             }
-        } else if grade == EvidenceGrade::AgentSelfReport {
+        } else if grade != EvidenceGrade::TrustedExecutionReceipt {
+            // trusted_execution_and_review requires a bound trusted
+            // receipt — an AuthorizedReview grade (human material) must NOT
+            // satisfy it, and AgentSelfReport is never trusted (CR #59 P2-1).
             return Err(PgError::EvidenceInvalid);
-        } else if grade == EvidenceGrade::TrustedExecutionReceipt {
+        } else {
             // A trusted-execution grade must bind to a SUCCEEDED execution
             // of the same contract and input by the delegated executor —
             // actor kind alone proves nothing (CR #42 P2-1). A report that
@@ -513,7 +516,9 @@ impl ReviewStore {
                 .ok_or(PgError::EvidenceInvalid)?;
             let exec = tx
                 .query_opt(
-                    "SELECT state, contract_hash, input_digest FROM awr_team.executions
+                    "SELECT state, contract_hash, input_digest, executor_actor_id,
+                            scope_id, result_digest
+                     FROM awr_team.executions
                      WHERE tenant_id=$1 AND project_id=$2 AND id=$3",
                     &[&tenant_id, &project_id, &execution_id],
                 )
@@ -522,17 +527,41 @@ impl ReviewStore {
             let exec_state: String = exec.get(0);
             let exec_contract: String = exec.get(1);
             let exec_input: Option<String> = exec.get(2);
+            let exec_executor: String = exec.get(3);
+            let exec_scope: String = exec.get(4);
+            let exec_result: Option<String> = exec.get(5);
             if exec_state != "succeeded" || exec_contract != evidence.contract_hash {
                 return Err(PgError::EvidenceInvalid);
             }
-            if let Some(input) = &evidence.input_digest {
-                if exec_input.as_deref() != Some(input.as_str()) {
+            // The binding is complete: the evidence's submitter IS the
+            // delegated executor, the scope matches the completion scope,
+            // input digests are EQUAL on both sides (NULL does not skip),
+            // and a recorded execution result matches the evidence output
+            // (CR #59 P2-1).
+            if exec_executor != evidence.created_by || exec_scope != scope_id {
+                return Err(PgError::EvidenceInvalid);
+            }
+            if exec_input != evidence.input_digest {
+                return Err(PgError::EvidenceInvalid);
+            }
+            if let (Some(result), Some(output)) = (&exec_result, &evidence.output_digest) {
+                if result != output {
                     return Err(PgError::EvidenceInvalid);
                 }
             }
         }
         let (binding_valid, dependency_links) =
-            required_dependencies_covered(&tx, tenant_id, project_id, work_id, &contract).await?;
+            required_dependencies_covered(&tx, tenant_id, project_id, work_id, scope_id, &contract)
+                .await?;
+        let pinned_round: Option<String> = tx
+            .query_opt(
+                "SELECT id FROM awr_team.review_rounds
+                 WHERE tenant_id=$1 AND project_id=$2 AND work_id=$3 AND bundle_hash=$4
+                 ORDER BY round_index DESC LIMIT 1",
+                &[&tenant_id, &project_id, &work_id, &evidence.digest],
+            )
+            .await?
+            .map(|row| row.get(0));
         let mut review =
             current_review(&tx, tenant_id, project_id, work_id, &evidence.digest).await?;
         if policy == "ordinary_confirm" {
@@ -575,19 +604,21 @@ impl ReviewStore {
         }
         // The receipt records the ACTUAL approver (from the pinned round's
         // decision) separately from the submitter (CR #42 audit note).
-        let approver: Option<String> = tx
-            .query_opt(
-                "SELECT d.reviewer_actor_id FROM awr_team.review_decisions d
-                 JOIN awr_team.review_rounds r
-                   ON r.tenant_id=d.tenant_id AND r.project_id=d.project_id
-                  AND r.id=d.review_round_id
-                 WHERE d.tenant_id=$1 AND d.project_id=$2 AND r.work_id=$3
-                   AND r.bundle_hash=$4 AND d.decision='approve'
-                 ORDER BY d.created_at DESC LIMIT 1",
-                &[&tenant_id, &project_id, &work_id, &evidence.digest],
-            )
-            .await?
-            .map(|row| row.get(0));
+        // The approver comes from the SAME pinned round the gate consumed;
+        // never re-pick from other rounds at receipt time (CR #59 P2-3).
+        let approver: Option<String> = match &pinned_round {
+            Some(round) => tx
+                .query_opt(
+                    "SELECT reviewer_actor_id FROM awr_team.review_decisions
+                     WHERE tenant_id=$1 AND project_id=$2 AND review_round_id=$3
+                       AND decision='approve'
+                     ORDER BY created_at DESC LIMIT 1",
+                    &[&tenant_id, &project_id, round],
+                )
+                .await?
+                .map(|row| row.get(0)),
+            None => None,
+        };
         let approved_by = json!({"approved_by": approver, "submitted_by": actor_id});
         let dependency_binding_hash = sha256_hex(json!(dependency_links).to_string().as_bytes());
         let receipt_id = new_id();
@@ -648,7 +679,7 @@ impl ReviewStore {
             &[&tenant_id, &project_id, &scope_id, &work_id, &receipt_id],
         )
         .await?;
-        crate::tx::emit_event(
+        let committed_revision = crate::tx::emit_event(
             &tx,
             tenant_id,
             project_id,
@@ -662,6 +693,7 @@ impl ReviewStore {
             "receipt_id": receipt_id,
             "contract_hash": evidence.contract_hash,
             "policy": policy,
+            "committed_project_revision": committed_revision.to_string(),
         });
         store_operation(
             &tx,
@@ -672,6 +704,7 @@ impl ReviewStore {
             request_id,
             "work.complete",
             &request_hash,
+            committed_revision,
             &result,
         )
         .await?;
@@ -725,6 +758,7 @@ struct LoadedEvidence {
     output_digest: Option<String>,
     input_digest: Option<String>,
     execution_id: Option<String>,
+    created_by: String,
 }
 
 fn assigned_trust(actor_kind: &str, claimed: Option<&str>) -> String {
@@ -805,7 +839,7 @@ async fn load_evidence(
     let row = tx
         .query_opt(
             "SELECT work_id, contract_hash, digest, trust_basis, payload_json, artifact_id, output_digest,
-                    input_digest, execution_id
+                    input_digest, execution_id, created_by
              FROM awr_team.evidence
              WHERE tenant_id=$1 AND project_id=$2 AND id=$3",
             &[&tenant_id, &project_id, &evidence_id],
@@ -822,6 +856,7 @@ async fn load_evidence(
         output_digest: row.get(6),
         input_digest: row.get(7),
         execution_id: row.get(8),
+        created_by: row.get(9),
     })
 }
 
@@ -861,6 +896,7 @@ async fn required_dependencies_covered(
     tenant_id: &str,
     project_id: &str,
     work_id: &str,
+    scope_id: &str,
     contract: &Value,
 ) -> PgResult<(bool, Vec<(String, String)>)> {
     let invalid: i64 = tx
@@ -900,8 +936,9 @@ async fn required_dependencies_covered(
                  JOIN awr_team.projects p
                    ON p.tenant_id=c.tenant_id AND p.id=c.project_id
                   AND p.active_snapshot_id=c.snapshot_id
-                 WHERE r.tenant_id=$1 AND r.project_id=$2 AND r.work_id=$3",
-                &[&tenant_id, &project_id, upstream],
+                 WHERE r.tenant_id=$1 AND r.project_id=$2 AND r.work_id=$3
+                   AND r.scope_id=$4",
+                &[&tenant_id, &project_id, upstream, &scope_id],
             )
             .await?
             .map(|row| row.get(0));
@@ -940,13 +977,14 @@ async fn store_operation(
     request_id: &str,
     op: &str,
     request_hash: &str,
+    committed_revision: i64,
     result: &Value,
 ) -> PgResult<()> {
     tx.execute(
         "INSERT INTO awr_team.operations(
             tenant_id, project_id, id, actor_id, client_id, request_id, op,
-            request_hash, state, result_json)
-         VALUES ($1,$2,$3,$4,$5,$6,$7,$8,'committed',$9)",
+            request_hash, state, committed_project_revision, result_json)
+         VALUES ($1,$2,$3,$4,$5,$6,$7,$8,'committed',$9,$10)",
         &[
             &tenant_id,
             &project_id,
@@ -956,6 +994,7 @@ async fn store_operation(
             &request_id,
             &op,
             &request_hash,
+            &committed_revision,
             result,
         ],
     )
