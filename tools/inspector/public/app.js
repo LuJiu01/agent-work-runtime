@@ -180,6 +180,7 @@
     workDetail: {},        // key -> 详情
     sources: null,
     compile: null,
+    lastCompile: null,   // 概览那张图用：最近一次编译的实测值
     raw: {},               // 每个视图最近一次的原始 JSON
     queueTab: 'blocked',   // 概览里队列面板当前选的队列
     workFilter: 'all',
@@ -630,14 +631,26 @@
     const wrap = $('cmpChart');
     clear(wrap);
     const sample = s.contextSample;
+    const note = document.querySelector('[data-note="contextChart"]');
+
+    // 真实项目：用最近一次编译的实测值。
+    // 「读全量源码要多少 token」AWR 不报，浏览器里也没法分词，所以那个对比
+    // 只在演示数据里有（标注为公开 benchmark），真实项目不造这个数。
+    if (!sample && state.lastCompile) {
+      renderCompileGauge(wrap, state.lastCompile, note);
+      return;
+    }
 
     if (!sample) {
       setText('heroBig', '—');
       setText('heroCap', '还没有编译记录');
-      wrap.appendChild(stateBlock('empty', '还没有可对比的数据',
-        '去「上下文」页编译一次，这里就会显示这个项目自己的体积对比。'));
+      wrap.appendChild(stateBlock('empty', '还没有编译记录',
+        '去「上下文」页编译一次，这里就会显示那次编译的实测体积。'));
       setText('cmpNote', '');
       setText('cmpSub', '');
+      if (note) {
+        note.textContent = '编译一次之后，这里显示那个包实际占了多少 token、其中多少是必需内容、离预算上限还有多远。';
+      }
       return;
     }
 
@@ -671,6 +684,47 @@
     setText('heroCap', '上下文 token 对比全量源码');
     setText('cmpSub', sample.note ? '公开基准值' : '本项目实测');
     setText('cmpNote', sample.note || '');
+  }
+
+  /**
+   * 最近一次编译的实测值。三条都是 AWR 真给的数，不做任何推算：
+   * 必需内容 / 这次装进去的 / 预算上限。
+   */
+  function renderCompileGauge(wrap, last, note) {
+    const budget = last.budget || last.total || 1;
+    const rows = [
+      { label: '必需内容', tokens: last.required, lead: false },
+      { label: '这次编译装进去的', tokens: last.total, lead: true },
+      { label: '预算上限', tokens: last.budget, lead: false },
+    ].filter((r) => Number.isFinite(r.tokens));
+
+    for (const r of rows) {
+      const pct = Math.min(100, (r.tokens / budget) * 100);
+      const row = el('div', 'cmp-row' + (r.lead ? ' is-lead' : ''));
+      const label = el('div', 'cmp-label');
+      label.appendChild(document.createTextNode(r.label + ' '));
+      label.appendChild(el('span', 'num', group(r.tokens) + ' tokens'));
+      row.appendChild(label);
+      const track = el('div', 'cmp-track');
+      const fill = el('div', 'cmp-fill');
+      fill.style.width = pct.toFixed(1) + '%';
+      track.appendChild(fill);
+      row.appendChild(track);
+      wrap.appendChild(row);
+    }
+
+    setText('heroBig', group(last.total));
+    setText('heroCap', 'tokens · ' + last.work);
+    setText('cmpSub', '本项目实测');
+    setText('cmpNote', last.omitted
+      ? `最近一次编译（${last.work}），因预算省略了 ${last.omitted} 块。`
+      : `最近一次编译（${last.work}），没有内容被省略。`);
+    if (note) {
+      note.textContent =
+        'agent 每开一个新会话都要先搞清楚项目状态。这三条是最近一次编译的实测：'
+        + '必需内容是不能省的部分，装进去的是 agent 实际会读到的量，预算上限是你设的硬线。'
+        + '装进去的贴近上限时，说明有东西被挤出去了。';
+    }
   }
 
   function renderQueueTabs() {
@@ -1141,6 +1195,18 @@
     }
 
     renderCompile();
+
+    // 记下这次编译，概览页那张图靠它显示本项目的实测体积。
+    if (ctx && ctx.total != null) {
+      state.lastCompile = {
+        work,
+        total: ctx.total,
+        required: ctx.requiredTokens,
+        budget: ctx.budget,
+        omitted: ctx.omissions.length,
+      };
+      if (state.status) renderContextChart(state.status);
+    }
 
     if (failure) {
       // 报告有，只是 AWR 判定它不完整——把它的原话放在完整性面板顶上。
