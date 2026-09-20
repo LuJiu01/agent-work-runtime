@@ -130,7 +130,9 @@ async fn two_actors_handoff_review_and_complete_with_independent_oracle() {
         "trusted_executor",
         &prepared.id,
         "succeeded",
-        json!({"output_digest": format!("{:x}", sha2::Sha256::digest(b"oracle-bytes")), "environment_digest": "env"}),
+        // The execution RESULT digest is a different contract from the
+        // artifact bytes digest below (CR #59 r3 P2-2).
+        json!({"output_digest": format!("{:x}", sha2::Sha256::digest(b"exec-result-flow")), "environment_digest": "env"}),
         &["src/foo/a.rs".into()],
     )
     .await
@@ -161,7 +163,7 @@ async fn two_actors_handoff_review_and_complete_with_independent_oracle() {
             "work-a",
             "hash-a",
             None,
-            &json!({"log": "tested"}),
+            &json!({"log": "tested", "output_digest": format!("{:x}", sha2::Sha256::digest(b"exec-result-flow"))}),
             Some(b"oracle-bytes"),
             Some("in-1"),
             false,

@@ -177,7 +177,7 @@ async fn main() {
             }
         }
         "evidence" => {
-            // evidence <project> <work> <actor> <hash> <summary> [bytes] [dirty] [input] [execution]
+            // evidence <project> <work> <actor> <hash> <summary> [bytes] [dirty] [input] [execution] [result_digest]
             let (p, w, a, h, s) = (
                 arg(&args, 2),
                 arg(&args, 3),
@@ -196,6 +196,18 @@ async fn main() {
             // Optional execution binding for the strict completion policy
             // (CR #59 P2-5).
             let execution: Option<String> = args.get(10).filter(|e| e.as_str() != "NONE").cloned();
+            // Optional declared execution RESULT digest (payload
+            // "output_digest") — the strict gate requires it to match the
+            // bound execution's recorded result digest; it is a different
+            // contract from the artifact bytes digest (CR #59 r3 P2-1/P2-2).
+            let result_digest: Option<String> =
+                args.get(11).filter(|d| d.as_str() != "NONE").cloned();
+            let mut payload = json!({"log": s});
+            if let Some(digest) = &result_digest {
+                payload
+                    .as_object_mut()
+                    .map(|map| map.insert("output_digest".into(), json!(digest)));
+            }
             let review = reviews();
             match review
                 .record_evidence(
@@ -205,7 +217,7 @@ async fn main() {
                     &w,
                     &h,
                     None,
-                    &json!({"log": s}),
+                    &payload,
                     bytes.as_deref(),
                     input.as_deref(),
                     dirty,

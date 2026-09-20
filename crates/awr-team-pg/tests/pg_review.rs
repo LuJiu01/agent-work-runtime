@@ -16,6 +16,11 @@ const AUTHOR: &str = "actor-a";
 const REVIEWER: &str = "actor-b";
 const REVIEWER_C: &str = "actor-c";
 const RUNNER: &str = "runner-a";
+/// The execution RESULT digest shared by the fixture executions and the
+/// `evidence()` helper's declaration. It is deliberately NOT the sha256 of
+/// any artifact bytes used here: result digests and artifact digests are
+/// different contracts (CR #59 r3 P2-2).
+const RESULT_DIGEST: &str = "exec-result-digest-1";
 const DISABLED: &str = "actor-d";
 const READER: &str = "actor-e";
 
@@ -69,6 +74,14 @@ async fn evidence(
     bytes: Option<&[u8]>,
     exec: Option<&str>,
 ) -> awr_team_pg::EvidenceRecord {
+    // Positive-path evidence declares the execution result digest it binds;
+    // the fixture executions record the same value (CR #59 r3 P2-1).
+    let mut payload = payload;
+    payload
+        .as_object_mut()
+        .expect("evidence payload object")
+        .entry("output_digest")
+        .or_insert_with(|| json!(RESULT_DIGEST));
     store
         .record_evidence(
             TENANT,
@@ -89,17 +102,7 @@ async fn evidence(
 
 /// Insert a succeeded execution row for trusted-executor evidence.
 async fn succeeded_execution(admin: &Client, id: &str, contract_hash: &str) {
-    admin
-        .execute(
-            "INSERT INTO awr_team.executions(
-                tenant_id, project_id, id, work_id, session_id, claim_id, fence,
-                contract_hash, input_digest, executor_actor_id, state, effect_key,
-                fencing_class, declared_scope_json, scope_id)
-             VALUES ('tenant-a','project-a',$1,'work-a',NULL,NULL,1,$2,'in-1','runner-a','succeeded',$1,'hard_fence','[]','main')",
-            &[&id, &contract_hash],
-        )
-        .await
-        .unwrap();
+    succeeded_execution_scoped(admin, id, "work-a", contract_hash, "in-1", "main").await
 }
 
 async fn approve(store: &ReviewStore, evidence_id: &str) {
@@ -862,10 +865,21 @@ async fn strict_chain_binds_executor_scope_input_and_output() {
         .start(TENANT, PROJECT, &prepared.id, claim.fence)
         .await
         .unwrap();
-    let digest = {
+    // The execution RESULT digest and the evidence ARTIFACT digest are
+    // different contracts (CR #59 r3 P2-2): this fixture deliberately keeps
+    // them distinct so the gate cannot pass by equating them.
+    let result_digest = {
+        use sha2::{Digest, Sha256};
+        format!("{:x}", Sha256::digest(b"exec-output-v1"))
+    };
+    let artifact_digest = {
         use sha2::{Digest, Sha256};
         format!("{:x}", Sha256::digest(b"report-bytes"))
     };
+    assert_ne!(
+        result_digest, artifact_digest,
+        "fixture must keep the two digest contracts distinct"
+    );
     execs
         .report(
             TENANT,
@@ -874,7 +888,7 @@ async fn strict_chain_binds_executor_scope_input_and_output() {
             "trusted_executor",
             &prepared.id,
             "succeeded",
-            serde_json::json!({"output_digest": digest}),
+            serde_json::json!({"output_digest": result_digest}),
             &["src/out.txt".into()],
         )
         .await
@@ -887,7 +901,7 @@ async fn strict_chain_binds_executor_scope_input_and_output() {
             "work-a",
             "hash-a",
             None,
-            &json!({"log": "executed"}),
+            &json!({"log": "executed", "output_digest": result_digest}),
             Some(b"report-bytes"),
             Some("in-1"),
             false,
@@ -906,7 +920,7 @@ async fn strict_chain_binds_executor_scope_input_and_output() {
             "work-a",
             "hash-a",
             None,
-            &json!({"log": "other"}),
+            &json!({"log": "other", "output_digest": result_digest}),
             Some(b"report-bytes"),
             Some("in-1"),
             false,
@@ -933,7 +947,7 @@ async fn strict_chain_binds_executor_scope_input_and_output() {
             "work-a",
             "hash-a",
             None,
-            &json!({"log": "third"}),
+            &json!({"log": "third", "output_digest": result_digest}),
             Some(b"report-bytes"),
             Some("in-OTHER"),
             false,
@@ -944,6 +958,248 @@ async fn strict_chain_binds_executor_scope_input_and_output() {
     approve(&store, &ev3.id).await;
     let err = complete(&store, &ev3.id, "c-chain-3").await.unwrap_err();
     assert!(matches!(err, PgError::EvidenceInvalid), "got {err}");
+}
+
+// CR #59 r3 P2-1: under the strict policy the output binding must be
+// PRESENT and CONSISTENT — a contradictory declaration, an execution
+// without a recorded result digest, and evidence without a declared result
+// digest all fail closed. None == None proves nothing.
+#[tokio::test]
+async fn strict_completion_rejects_missing_or_contradictory_output_binding() {
+    let (_lock, admin, store) = setup("trusted_execution_and_review").await;
+    // Contradictory declaration: the execution recorded RESULT_DIGEST while
+    // the evidence payload declares another digest (no artifact bytes — the
+    // declaration alone satisfies the passed-evidence record guard).
+    succeeded_execution(&admin, "exec-d1", "hash-a").await;
+    let ev = store
+        .record_evidence(
+            TENANT,
+            PROJECT,
+            RUNNER,
+            "work-a",
+            "hash-a",
+            None,
+            &json!({"log": "claimed", "output_digest": "different-digest"}),
+            None,
+            Some("in-1"),
+            false,
+            Some("exec-d1"),
+        )
+        .await
+        .unwrap();
+    approve(&store, &ev.id).await;
+    let err = complete(&store, &ev.id, "c-contra").await.unwrap_err();
+    assert!(
+        matches!(err, PgError::EvidenceInvalid),
+        "contradictory: {err}"
+    );
+    // Execution WITHOUT a recorded result digest (legacy-style row): the
+    // evidence declares one, but there is nothing trustworthy to bind to.
+    admin
+        .execute(
+            "INSERT INTO awr_team.executions(
+                tenant_id, project_id, id, work_id, session_id, claim_id, fence,
+                contract_hash, input_digest, executor_actor_id, state, effect_key,
+                fencing_class, declared_scope_json, scope_id)
+             VALUES ('tenant-a','project-a','exec-nodigest','work-a',NULL,NULL,1,'hash-a','in-1','runner-a','succeeded','exec-nodigest','hard_fence','[]','main')",
+            &[],
+        )
+        .await
+        .unwrap();
+    let ev = store
+        .record_evidence(
+            TENANT,
+            PROJECT,
+            RUNNER,
+            "work-a",
+            "hash-a",
+            None,
+            &json!({"log": "claimed", "output_digest": RESULT_DIGEST}),
+            None,
+            Some("in-1"),
+            false,
+            Some("exec-nodigest"),
+        )
+        .await
+        .unwrap();
+    approve(&store, &ev.id).await;
+    let err = complete(&store, &ev.id, "c-noexecdigest")
+        .await
+        .unwrap_err();
+    assert!(
+        matches!(err, PgError::EvidenceInvalid),
+        "execution digest missing: {err}"
+    );
+    // Evidence WITHOUT a declared result digest: artifact bytes alone do
+    // not bind the execution output.
+    succeeded_execution(&admin, "exec-d2", "hash-a").await;
+    let ev = store
+        .record_evidence(
+            TENANT,
+            PROJECT,
+            RUNNER,
+            "work-a",
+            "hash-a",
+            None,
+            &json!({"log": "bytes only"}),
+            Some(b"artifact-bytes"),
+            Some("in-1"),
+            false,
+            Some("exec-d2"),
+        )
+        .await
+        .unwrap();
+    approve(&store, &ev.id).await;
+    let err = complete(&store, &ev.id, "c-nodecl").await.unwrap_err();
+    assert!(
+        matches!(err, PgError::EvidenceInvalid),
+        "declaration missing: {err}"
+    );
+    // Positive control: declared == recorded completes.
+    let ev = evidence(
+        &store,
+        "hash-a",
+        json!({"log": "bound"}),
+        Some(b"artifact-bytes"),
+        Some("exec-d2"),
+    )
+    .await;
+    approve(&store, &ev.id).await;
+    complete(&store, &ev.id, "c-bound").await.unwrap();
+}
+
+// CR #59 r3 P2-2: the REAL reference-runner chain — the runner's reported
+// result digest (path+content pairs) is declared and bound AS-IS, while the
+// submitted artifact keeps its own digest. The two contracts differ and the
+// strict gate must not equate them. Real confined writes are unix-only.
+#[cfg(unix)]
+#[tokio::test]
+async fn reference_runner_chain_binds_result_digest_without_equating_artifact_digest() {
+    use awr_team_pg::{CrashPoint, ExecutionStore, LeaseStore, OutboxDelivery, ReferenceRunner};
+    let (_lock, _admin, store) = setup("trusted_execution_and_review").await;
+    let db = common::gate_db_name().await;
+    let leases = LeaseStore::from_config(with_app_role(&test_config(), &db));
+    let execs = ExecutionStore::from_config(with_app_role(&test_config(), &db));
+    let session = leases
+        .start_session(
+            TENANT, PROJECT, AUTHOR, "client-a", "conv", "main", "work-a",
+        )
+        .await
+        .unwrap();
+    let claim = leases
+        .claim(
+            TENANT,
+            PROJECT,
+            &session.id,
+            AUTHOR,
+            "client-a",
+            "claim-r",
+            3600,
+        )
+        .await
+        .unwrap();
+    let writes = json!([{"path": "src/out.txt", "content": "x"}]);
+    let prepared = execs
+        .prepare(
+            TENANT,
+            PROJECT,
+            AUTHOR,
+            "client-a",
+            "prep-r",
+            &claim.id,
+            RUNNER,
+            "hash-a",
+            "in-1",
+            "hard_fence",
+            &["src".into()],
+            &writes,
+        )
+        .await
+        .unwrap();
+    execs
+        .accept(TENANT, PROJECT, &prepared.id, claim.fence)
+        .await
+        .unwrap();
+    execs
+        .start(TENANT, PROJECT, &prepared.id, claim.fence)
+        .await
+        .unwrap();
+    // The REAL runner executes the delivery in its own confined worktree.
+    let base = std::env::temp_dir().join(format!("awr-p8-runner-{}", std::process::id()));
+    let _ = std::fs::remove_dir_all(&base);
+    let runner = ReferenceRunner::new(&base);
+    let delivery = OutboxDelivery {
+        outbox_id: format!("ob-{}", prepared.id),
+        execution_id: prepared.id.clone(),
+        effect_key: prepared.id.clone(),
+        tenant_id: TENANT.into(),
+        project_id: PROJECT.into(),
+        work_id: "work-a".into(),
+        scope_id: "main".into(),
+        fence: claim.fence,
+        fencing_class: "hard_fence".into(),
+        declared_scope: json!(["src"]),
+        payload: json!({"writes": writes, "effect_key": prepared.id}),
+        delivery_attempts: 1,
+    };
+    let outcome = runner.handle_delivery(&delivery, CrashPoint::None);
+    assert_eq!(
+        outcome.state, "succeeded",
+        "runner failed: {:?}",
+        outcome.error
+    );
+    let result_digest = outcome
+        .output_digest
+        .clone()
+        .expect("a succeeded runner reports a result digest");
+    // The runner digest hashes path+content pairs; the output FILE's own
+    // digest is a different value — the fixture proves they differ so the
+    // gate cannot pass by equating them.
+    let output_bytes = std::fs::read(base.join("worktree/src/out.txt")).unwrap();
+    assert_eq!(output_bytes, b"x");
+    let artifact_digest = {
+        use sha2::{Digest, Sha256};
+        format!("{:x}", Sha256::digest(&output_bytes))
+    };
+    assert_ne!(
+        result_digest, artifact_digest,
+        "runner result digest and artifact digest must stay distinct"
+    );
+    // Report the runner outcome AS-IS (no digest rewriting).
+    execs
+        .report(
+            TENANT,
+            PROJECT,
+            RUNNER,
+            "trusted_executor",
+            &prepared.id,
+            "succeeded",
+            json!({"output_digest": result_digest, "environment_digest": outcome.environment_digest}),
+            &outcome.observed_paths,
+        )
+        .await
+        .unwrap();
+    // Evidence declares the runner's result digest AND submits the real
+    // output bytes as the artifact — two bindings, two digests.
+    let ev = store
+        .record_evidence(
+            TENANT,
+            PROJECT,
+            RUNNER,
+            "work-a",
+            "hash-a",
+            None,
+            &json!({"log": "executed", "output_digest": result_digest}),
+            Some(&output_bytes),
+            Some("in-1"),
+            false,
+            Some(&prepared.id),
+        )
+        .await
+        .unwrap();
+    approve(&store, &ev.id).await;
+    complete(&store, &ev.id, "c-runner").await.unwrap();
+    let _ = std::fs::remove_dir_all(&base);
 }
 
 // CR #59 P2-2: dependency resolution is scope-bound — a receipt from
@@ -973,7 +1229,7 @@ async fn dependencies_are_resolved_in_the_same_scope() {
             "work-b",
             "hash-b",
             None,
-            &json!({"log": "b"}),
+            &json!({"log": "b", "output_digest": RESULT_DIGEST}),
             Some(b"bytes-b"),
             Some("in-b"),
             false,
@@ -1026,7 +1282,7 @@ async fn dependencies_are_resolved_in_the_same_scope() {
             "work-a",
             "hash-a",
             None,
-            &json!({"log": "a"}),
+            &json!({"log": "a", "output_digest": RESULT_DIGEST}),
             Some(b"bytes-a"),
             Some("in-1"),
             false,
@@ -1051,7 +1307,7 @@ async fn dependencies_are_resolved_in_the_same_scope() {
             "work-b",
             "hash-b",
             None,
-            &json!({"log": "b-main"}),
+            &json!({"log": "b-main", "output_digest": RESULT_DIGEST}),
             Some(b"bytes-b"),
             Some("in-b"),
             false,
@@ -1119,9 +1375,9 @@ async fn succeeded_execution_scoped(
             "INSERT INTO awr_team.executions(
                 tenant_id, project_id, id, work_id, session_id, claim_id, fence,
                 contract_hash, input_digest, executor_actor_id, state, effect_key,
-                fencing_class, declared_scope_json, scope_id)
-             VALUES ('tenant-a','project-a',$1,$2,NULL,NULL,1,$3,$4,'runner-a','succeeded',$1,'hard_fence','[]',$5)",
-            &[&id, &work, &contract_hash, &input, &scope],
+                fencing_class, declared_scope_json, scope_id, result_digest)
+             VALUES ('tenant-a','project-a',$1,$2,NULL,NULL,1,$3,$4,'runner-a','succeeded',$1,'hard_fence','[]',$5,$6)",
+            &[&id, &work, &contract_hash, &input, &scope, &RESULT_DIGEST],
         )
         .await
         .unwrap();
@@ -1166,10 +1422,20 @@ async fn driver_strict_chain_end_to_end() {
         .unwrap();
     let executable = common::build_example_and_locate("tc_replay");
     let db = common::gate_db_name().await;
-    let digest = {
+    // Distinct contracts (CR #59 r3 P2-2): the reported/declared execution
+    // RESULT digest is NOT the sha256 of the submitted artifact bytes.
+    let result_digest = {
+        use sha2::{Digest, Sha256};
+        format!("{:x}", Sha256::digest(b"exec-result-t13"))
+    };
+    let artifact_digest = {
         use sha2::{Digest, Sha256};
         format!("{:x}", Sha256::digest(b"cli-bytes"))
     };
+    assert_ne!(
+        result_digest, artifact_digest,
+        "driver chain must keep the two digest contracts distinct"
+    );
     let run = |args: &[&str]| -> serde_json::Value {
         let output = std::process::Command::new(&executable)
             .args(args)
@@ -1216,7 +1482,7 @@ async fn driver_strict_chain_end_to_end() {
             &exec_id,
             "succeeded",
             "src/foo",
-            &digest,
+            &result_digest,
         ]);
         let ev = run(&[
             "evidence",
@@ -1229,6 +1495,7 @@ async fn driver_strict_chain_end_to_end() {
             "false",
             "in-t13",
             &exec_id,
+            &result_digest,
         ]);
         let ev_id = ev["evidence"].as_str().unwrap().to_string();
         let round = run(&["open-review", "project-tc003", work, "kimi-cli", &ev_id]);

@@ -83,28 +83,38 @@ impl ReviewStore {
         if dirty_tree && input_digest.is_none() && artifact_bytes.is_none() {
             return Err(PgError::EvidenceInvalid);
         }
-        let mut payload = payload.clone();
+        let payload = payload.clone();
         if payload.get("passed").and_then(Value::as_bool) == Some(true)
             && artifact_bytes.is_none()
             && payload.get("output_digest").is_none()
         {
             return Err(PgError::EvidenceInvalid);
         }
+        // Two DIFFERENT digest contracts live on one evidence row
+        // (CR #59 r3 P2-2):
+        // - `output_digest` (artifact digest): sha256 of the submitted
+        //   artifact bytes, verified against the persisted artifact.
+        // - `execution_result_digest`: the executor-reported result digest
+        //   the evidence declares to bind (payload "output_digest"),
+        //   verified against the executions row at completion. The runner's
+        //   result digest hashes path+content pairs, so it is NEVER equal
+        //   to a single artifact's digest and must not be overwritten by it
+        //   (CR #59 r3 P2-1).
         let output_digest = artifact_bytes.map(|bytes| sha256_hex(bytes));
-        if let Some(digest) = &output_digest {
-            payload
-                .as_object_mut()
-                .map(|map| map.insert("output_digest".into(), json!(digest)));
-        }
+        let execution_result_digest = payload
+            .get("output_digest")
+            .and_then(Value::as_str)
+            .map(ToOwned::to_owned);
         // The evidence digest binds the FULL context — work, contract,
-        // input and artifact identity — so an approval for one contract can
-        // never be reused by re-recording the same payload under another
-        // contract (CR #42 P2-3).
+        // input, artifact identity and the declared execution result — so
+        // an approval for one contract can never be reused by re-recording
+        // the same payload under another contract (CR #42 P2-3).
         let digest = evidence_digest(
             work_id,
             contract_hash,
             input_digest,
             output_digest.as_deref(),
+            execution_result_digest.as_deref(),
             &payload,
         )?;
         let mut artifact_id: Option<String> = None;
@@ -136,9 +146,9 @@ impl ReviewStore {
         tx.execute(
             "INSERT INTO awr_team.evidence(
                 tenant_id, project_id, id, work_id, execution_id, artifact_id,
-                contract_hash, input_digest, output_digest, evidence_kind,
-                trust_basis, digest, payload_json, created_by)
-             VALUES ($1,$2,$3,$4,$5,$6,$7,$8,$9,'report',$10,$11,$12,$13)",
+                contract_hash, input_digest, output_digest, execution_result_digest,
+                evidence_kind, trust_basis, digest, payload_json, created_by)
+             VALUES ($1,$2,$3,$4,$5,$6,$7,$8,$9,$10,'report',$11,$12,$13,$14)",
             &[
                 &tenant_id,
                 &project_id,
@@ -149,6 +159,7 @@ impl ReviewStore {
                 &contract_hash,
                 &input_digest.map(ToOwned::to_owned),
                 &output_digest,
+                &execution_result_digest,
                 &trust_basis,
                 &digest,
                 &payload,
@@ -536,18 +547,29 @@ impl ReviewStore {
             // The binding is complete: the evidence's submitter IS the
             // delegated executor, the scope matches the completion scope,
             // input digests are EQUAL on both sides (NULL does not skip),
-            // and a recorded execution result matches the evidence output
-            // (CR #59 P2-1).
+            // and the declared execution result digest is present and equal
+            // on both sides (CR #59 P2-1, CR #59 r3 P2-1).
             if exec_executor != evidence.created_by || exec_scope != scope_id {
                 return Err(PgError::EvidenceInvalid);
             }
             if exec_input != evidence.input_digest {
                 return Err(PgError::EvidenceInvalid);
             }
-            if let (Some(result), Some(output)) = (&exec_result, &evidence.output_digest) {
-                if result != output {
-                    return Err(PgError::EvidenceInvalid);
-                }
+            // Output binding under the strict policy: the execution must
+            // carry a recorded result digest AND the evidence must declare
+            // the SAME digest. A missing value on either side proves
+            // nothing and fails closed — None == None is not evidence of
+            // output identity (CR #59 r3 P2-1). This binds the EXECUTION
+            // RESULT digest; the artifact digest was verified against the
+            // persisted artifact bytes above and is a separate contract
+            // (CR #59 r3 P2-2).
+            let declared_result = evidence
+                .execution_result_digest
+                .as_deref()
+                .ok_or(PgError::EvidenceInvalid)?;
+            let recorded_result = exec_result.as_deref().ok_or(PgError::EvidenceInvalid)?;
+            if declared_result != recorded_result {
+                return Err(PgError::EvidenceInvalid);
             }
         }
         let (binding_valid, dependency_links) =
@@ -756,6 +778,7 @@ struct LoadedEvidence {
     payload: Value,
     artifact_id: Option<String>,
     output_digest: Option<String>,
+    execution_result_digest: Option<String>,
     input_digest: Option<String>,
     execution_id: Option<String>,
     created_by: String,
@@ -784,6 +807,7 @@ fn evidence_digest(
     contract_hash: &str,
     input_digest: Option<&str>,
     output_digest: Option<&str>,
+    execution_result_digest: Option<&str>,
     payload: &Value,
 ) -> PgResult<String> {
     let canonical = awr_team::canonical_json(&json!({
@@ -791,6 +815,7 @@ fn evidence_digest(
         "contract_hash": contract_hash,
         "input_digest": input_digest,
         "output_digest": output_digest,
+        "execution_result_digest": execution_result_digest,
         "payload": payload,
     }))
     .map_err(|e| PgError::Protocol(e.to_string()))?;
@@ -803,6 +828,7 @@ fn evidence_bytes_changed(evidence: &LoadedEvidence) -> PgResult<bool> {
         &evidence.contract_hash,
         evidence.input_digest.as_deref(),
         evidence.output_digest.as_deref(),
+        evidence.execution_result_digest.as_deref(),
         &evidence.payload,
     )?;
     Ok(expected != evidence.digest)
@@ -839,7 +865,7 @@ async fn load_evidence(
     let row = tx
         .query_opt(
             "SELECT work_id, contract_hash, digest, trust_basis, payload_json, artifact_id, output_digest,
-                    input_digest, execution_id, created_by
+                    execution_result_digest, input_digest, execution_id, created_by
              FROM awr_team.evidence
              WHERE tenant_id=$1 AND project_id=$2 AND id=$3",
             &[&tenant_id, &project_id, &evidence_id],
@@ -854,9 +880,10 @@ async fn load_evidence(
         payload: row.get(4),
         artifact_id: row.get(5),
         output_digest: row.get(6),
-        input_digest: row.get(7),
-        execution_id: row.get(8),
-        created_by: row.get(9),
+        execution_result_digest: row.get(7),
+        input_digest: row.get(8),
+        execution_id: row.get(9),
+        created_by: row.get(10),
     })
 }
 
