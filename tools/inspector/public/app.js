@@ -439,8 +439,13 @@
 
     const omissions = (pick(raw, M.omissions, []) || []).map((o) =>
       typeof o === 'string'
-        ? { detail: o }
-        : { detail: [o.key, o.section].filter((x) => x != null).join(' · ') || JSON.stringify(o), reason: o.reason }
+        ? { detail: o, key: o, section: null, reason: null }
+        : {
+            key: o.key || null,
+            section: o.section != null ? String(o.section) : null,
+            reason: o.reason || null,
+            detail: [o.key, o.section].filter((x) => x != null).join(' · ') || JSON.stringify(o),
+          }
     );
 
     // 完整性的各个维度。AWR 给的是一组布尔，缺哪一维要能一眼看到。
@@ -521,6 +526,21 @@
     box.appendChild(t);
     box.appendChild(el('div', 'msg', msg));
     if (advice) box.appendChild(el('div', 'msg', advice));
+
+    // AWR 会在 details 里给出实际需要多少 token，直接做成一个按钮，省得人自己算。
+    const required = error && error.details && Number(error.details.required);
+    if (code === 'BudgetExceeded' && Number.isFinite(required)) {
+      const target = Math.min(200000, Math.ceil((required * 1.1) / 500) * 500);
+      const act = el('div', 'actions');
+      const bump = el('button', 'btn', `把 budget 调到 ${group(target)} 并重编译`);
+      bump.addEventListener('click', () => {
+        $('fBudget').value = String(target);
+        updateCliMirror();
+        doCompile();
+      });
+      act.appendChild(bump);
+      box.appendChild(act);
+    }
     if (command) {
       const cmd = el('div', 'cmd');
       cmd.appendChild(el('span', 'prompt', '$'));
@@ -1093,14 +1113,23 @@
       });
       state.raw.context = res;
       showRaw('rawContextBody', res);
-      if (res.ok) ctx = normContext(res.data);
-      else failure = res;
+      if (res.ok) {
+        ctx = normContext(res.data);
+      } else if (res.data) {
+        // 上下文不完整时 AWR 会退出 1，但报告是完整给出来的。
+        // 这正是要看完整性面板的时候——照常渲染，同时把诊断显示出来。
+        ctx = normContext(res.data);
+        failure = res;
+      } else {
+        failure = res;
+      }
     }
 
     btn.disabled = false;
     state.compile = ctx;
 
-    if (failure) {
+    // 拿不到任何报告才算真失败。
+    if (failure && !ctx) {
       clear($('breakdown'));
       $('breakdown').appendChild(errorBlock(failure.error, failure.command));
       clear($('completeBody'));
@@ -1112,6 +1141,20 @@
     }
 
     renderCompile();
+
+    if (failure) {
+      // 报告有，只是 AWR 判定它不完整——把它的原话放在完整性面板顶上。
+      const cb = $('completeBody');
+      const note = el('div', 'state err');
+      note.style.padding = '12px 0 0';
+      const t = el('div', 'title');
+      t.appendChild(el('span', 'errcode', (failure.error && failure.error.code) || 'Error'));
+      note.appendChild(t);
+      note.appendChild(el('div', 'msg', (failure.error && failure.error.message) || ''));
+      cb.appendChild(note);
+      setText('compileHint', 'AWR 判定这份上下文不完整，下面写明了缺什么。');
+      return;
+    }
     setText('compileHint', ctx.revision != null
       ? `revision ${ctx.revision} · 不写权威源，可能刷新投影`
       : '不写权威源，可能刷新投影');
@@ -1122,6 +1165,8 @@
     const bd = $('breakdown');
     clear(bd);
     if (!ctx) {
+      const ob = $('omittedBox');
+      if (ob) ob.hidden = true;
       bd.appendChild(stateBlock('empty', '还没有编译', '在上面选好参数，点「编译」。'));
       clear($('completeBody'));
       $('completeBody').appendChild(stateBlock('empty', '—', '编译之后这里会显示有没有内容被省略。'));
@@ -1216,21 +1261,58 @@
       cb.appendChild(ul);
     }
 
-    if (ctx.omissions.length) {
-      const ul = el('ul', 'crit-list');
-      ul.style.marginTop = '14px';
-      for (const o of ctx.omissions) {
-        const item = el('li');
-        item.appendChild(el('span', 'box', '—'));
-        item.appendChild(el('span', null, o.reason ? `${o.detail}（${o.reason}）` : o.detail));
-        ul.appendChild(item);
-      }
-      cb.appendChild(ul);
-      const tip = el('p', 'figure-note', '把 budget 调大再编译一次，就能把这些装回去。');
-      cb.appendChild(tip);
-    }
+    renderOmissions(ctx, cb);
 
     setText('packetPreview', ctx.rendered || '（这次编译没有返回渲染文本）');
+  }
+
+  /**
+   * 被省略的块。
+   *
+   * 这里的 key 形如 `change:01M2Z...:01M2Z...`——内部 ULID，对人没有任何信息量。
+   * 逐条列出来只会把真正要看的东西（缺哪一维、少什么证据）挤到屏幕外。
+   * 所以先按 section 归并给出数量，原始 id 收进折叠区，需要的人再展开。
+   */
+  function renderOmissions(ctx, cb) {
+    const box = $('omittedBox');
+    if (!ctx.omissions.length) {
+      if (box) box.hidden = true;
+      return;
+    }
+
+    const bySection = new Map();
+    const reasons = new Set();
+    for (const o of ctx.omissions) {
+      const name = o.section || '未分段';
+      bySection.set(name, (bySection.get(name) || 0) + 1);
+      if (o.reason) reasons.add(o.reason);
+    }
+
+    const line = el('p', 'figure-note');
+    line.style.marginTop = '14px';
+    const parts = [...bySection.entries()]
+      .sort((a, b) => b[1] - a[1])
+      .map(([name, n]) => `${name} ${n}`);
+    line.appendChild(el('b', null, `因预算省略 ${ctx.omissions.length} 块`));
+    line.appendChild(document.createTextNode('：' + parts.join(' · ')));
+    if (reasons.size) {
+      line.appendChild(document.createTextNode('。原因：' + [...reasons].join('、')));
+    }
+    cb.appendChild(line);
+
+    const tip = el('p', 'figure-note', '把 budget 调大再编译一次，就能把这些装回去。');
+    tip.style.marginTop = '4px';
+    cb.appendChild(tip);
+
+    if (box) {
+      box.hidden = false;
+      box.open = false;
+      setText('omittedSummary', `展开这 ${ctx.omissions.length} 块的内部 id`);
+      setText(
+        'omittedList',
+        ctx.omissions.map((o) => `${o.section || '—'}\t${o.key || o.detail}`).join('\n')
+      );
+    }
   }
 
   // ───────────────────────── 索引源 ─────────────────────────

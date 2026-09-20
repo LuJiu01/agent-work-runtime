@@ -84,12 +84,90 @@ const runtime = {
   // 别的参数报错不能动这个开关（那会让一次坏请求污染整个进程）。
   jsonFlagPosition: 'global',
   running: 0,
+  // 实际要 spawn 的文件，以及垫在参数前面的部分（Windows 上是 awr.cjs 的路径）。
+  awrFile: 'awr',
+  awrPrefix: [],
 };
+
+// ───────────────────────── 定位 awr 可执行文件 ─────────────────────────
+
+/**
+ * 找出该怎么调用 awr，返回 { file, prefix }：真正 spawn 的是
+ * `file` 加上 `prefix.concat(参数)`。
+ *
+ * 为什么不能只写 spawn('awr')：Windows 上用 npm 全局安装时，装出来的是
+ * `awr.cmd`（一个批处理包装器），`shell: false` 的 spawn 认不出来，直接 ENOENT。
+ *
+ * 为什么不用 `shell: true` 绕过去：那会把参数交给 cmd.exe 解析，而我们要传
+ * 搜索词和 intent 这类自由文本，里面的 `&` `|` `^` `>` 会变成命令分隔符。
+ * 这个工具从一开始就是「参数数组 + 不走 shell」，不能为了兼容性把这条放掉。
+ *
+ * 所以在 Windows 上按 PATH × PATHEXT 自己找：
+ *   - 找到 .exe / .com → 直接 spawn，和其它平台一样。
+ *   - 找到 .cmd / .bat → 那是 npm 的包装器，它背后是 bin/awr.cjs。
+ *     直接用当前的 node 去跑那个 .cjs，全程不经 shell。
+ */
+function resolveAwr(env) {
+  const {
+    platform = process.platform,
+    PATH = process.env.PATH || '',
+    PATHEXT = process.env.PATHEXT || '.COM;.EXE;.BAT;.CMD',
+    node = process.execPath,
+    sep = path.delimiter,
+    join = path.join,
+    isFile = (f) => {
+      try {
+        return fs.statSync(f).isFile();
+      } catch (_) {
+        return false;
+      }
+    },
+  } = env || {};
+
+  if (platform !== 'win32') return { file: 'awr', prefix: [] };
+
+  const exts = PATHEXT.split(';').filter(Boolean).map((e) => e.toLowerCase());
+  const dirs = PATH.split(sep).filter(Boolean);
+
+  for (const dir of dirs) {
+    for (const ext of exts) {
+      const candidate = join(dir, 'awr' + ext);
+      if (!isFile(candidate)) continue;
+
+      if (ext === '.exe' || ext === '.com') {
+        return { file: candidate, prefix: [] };
+      }
+      if (ext === '.cmd' || ext === '.bat') {
+        const entry = join(
+          dir, 'node_modules', '@originoneai', 'agent-work-runtime', 'bin', 'awr.cjs'
+        );
+        if (isFile(entry)) return { file: node, prefix: [entry] };
+        // 找不到 .cjs 就别硬来：宁可退到演示模式，也不打开 shell 这条路。
+        return {
+          file: null,
+          prefix: [],
+          reason: `找到了 ${candidate}，但定位不到它背后的 awr.cjs。`,
+        };
+      }
+    }
+  }
+  return { file: null, prefix: [], reason: '在 PATH 里没有找到 awr。' };
+}
 
 function detectAwr() {
   return new Promise((resolve) => {
     if (ARGS.demo) return resolve();
-    execFile('awr', ['--version'], { timeout: 8000 }, (err, stdout) => {
+
+    const resolved = resolveAwr();
+    if (!resolved.file) {
+      runtime.mode = 'demo';
+      runtime.reason = (resolved.reason || '没有找到 awr 命令。') + '装好之后重启本进程即可看到真实数据。';
+      return resolve();
+    }
+    runtime.awrFile = resolved.file;
+    runtime.awrPrefix = resolved.prefix;
+
+    execFile(resolved.file, resolved.prefix.concat(['--version']), { timeout: 8000 }, (err, stdout) => {
       if (err) {
         runtime.mode = 'demo';
         runtime.reason = '没有找到 awr 命令。装好之后重启本进程即可看到真实数据。';
@@ -225,7 +303,8 @@ function execAwr(argv, opts) {
   const timeoutMs = write ? LIMITS.writeTimeoutMs : LIMITS.readTimeoutMs;
 
   return new Promise((resolve) => {
-    const child = spawn('awr', argv, { shell: false });
+    // 始终 shell: false —— 参数按数组传，自由文本里的 shell 元字符没有意义。
+    const child = spawn(runtime.awrFile, runtime.awrPrefix.concat(argv), { shell: false });
 
     // 槽位跟着子进程走，不跟着 HTTP 响应走。超时时我们会先回响应，
     // 但子进程还活着——那个槽必须留到它真的退出为止，否则上限形同虚设。
@@ -391,6 +470,13 @@ async function runCommand(commandKey, extra) {
       const errJson =
         (parsed && (parsed.code || parsed.error) ? parsed : null) || tryParseJson(result.stderr);
       const domain = errJson && (errJson.error || errJson);
+
+      // 退出码非 0 不等于「没有结果」。
+      // 比如 `context compile` 在上下文不完整时会退出 1，但 stdout 上照样给出
+      // 完整的报告——完整性的各个维度、issues、证据缺口全在里面，那正是这时候
+      // 最需要看的东西。能解析出真正的载荷就一并带上，让界面自己决定怎么呈现。
+      const payload = carriesPayload(parsed) ? parsed : null;
+
       return {
         ok: false,
         command,
@@ -398,6 +484,7 @@ async function runCommand(commandKey, extra) {
         error: domain && domain.code
           ? domain
           : { code: 'CommandFailed', message: (result.stderr || result.stdout || '').trim() },
+        data: payload,
         raw: errJson || null,
       };
     }
@@ -413,6 +500,16 @@ async function runCommand(commandKey, extra) {
 
     return { ok: true, command, data: parsed };
   }
+}
+
+/**
+ * 判断一个解析出来的 JSON 是不是真的载荷，而不只是一个错误壳子。
+ * 只有 code / message / error / details 这类字段的，是错误本身，不是结果。
+ */
+function carriesPayload(value) {
+  if (!value || typeof value !== 'object' || Array.isArray(value)) return false;
+  const shell = ['code', 'message', 'error', 'details', 'ok'];
+  return Object.keys(value).some((k) => shell.indexOf(k) < 0);
 }
 
 /** 只认「不认识 --json」这一种情况，别的参数报错不算。 */
@@ -753,4 +850,4 @@ if (require.main === module) {
   );
 }
 
-module.exports = { server, start, runtime, LIMITS, GUARD_HEADER, ARGS };
+module.exports = { server, start, runtime, LIMITS, GUARD_HEADER, ARGS, resolveAwr };

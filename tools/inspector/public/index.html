@@ -280,14 +280,19 @@
               </div>
               <div class="field">
                 <label for="fBudget">budget（token 上限）</label>
-                <select id="fBudget">
-                  <option value="4000">4,000</option>
-                  <option value="5000">5,000</option>
-                  <option value="6000" selected>6,000</option>
-                  <option value="8000">8,000</option>
-                  <option value="16000">16,000</option>
-                </select>
-                <span class="help">只约束渲染出来的那段正文，不约束整个 JSON 响应。</span>
+                <input id="fBudget" type="number" list="budgetPresets" value="6000"
+                       min="500" max="200000" step="500" inputmode="numeric">
+                <datalist id="budgetPresets">
+                  <option value="4000"></option>
+                  <option value="6000"></option>
+                  <option value="8000"></option>
+                  <option value="16000"></option>
+                  <option value="32000"></option>
+                  <option value="64000"></option>
+                  <option value="120000"></option>
+                  <option value="200000"></option>
+                </datalist>
+                <span class="help">500 到 200,000 之间任填，不限于预设值。只约束渲染出来的那段正文，不约束整个 JSON 响应。</span>
               </div>
               <div class="field">
                 <label for="fIntent">intent（可选）</label>
@@ -334,6 +339,10 @@
               如果这里报了「不完整」，说明 agent 拿到的信息是缺的——把 budget 调大再编译一次。
             </p>
             <div class="body" id="completeBody"></div>
+            <details class="rawbox" id="omittedBox" hidden>
+              <summary id="omittedSummary"></summary>
+              <div class="body"><pre class="packet" id="omittedList"></pre></div>
+            </details>
           </div>
         </div>
 

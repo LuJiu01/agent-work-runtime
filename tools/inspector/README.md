@@ -73,8 +73,8 @@ node server.js --project /你的/项目路径
 
 ### 拿不到的两项
 
-`awr session list` 和 `awr event history` 在**发布版 0.4.0 和当前源码树里都返回
-`Unsupported`**（`operation is not implemented`），所以：
+`awr session list` 和 `awr event history` 到 **0.5.0 为止仍返回 `Unsupported`**
+（`operation is not implemented`），所以：
 
 - 最近 checkpoint / open loop 列表
 - 事件时间线
@@ -95,6 +95,25 @@ node server.js --project /你的/项目路径
 - **重新索引是一次显式的维护操作**，默认关闭，要 `--allow-reindex` 才开，界面上还要再确认一次。
 
 需要严格的运行时只读时，用 AWR 自己的 `--cached` 模式（代价是看到的是上次记录的事实，不是最新的）。
+
+---
+
+## 它怎么找到 awr
+
+macOS 和 Linux 上直接 spawn `awr`，PATH 解析交给系统。
+
+Windows 上不行：npm 全局安装装出来的是 `awr.cmd`（批处理包装器），
+`shell: false` 的 spawn 认不出它，会 `ENOENT`。所以按 `PATH × PATHEXT` 自己找：
+
+| 找到什么 | 怎么跑 |
+| --- | --- |
+| `awr.exe` / `awr.com` | 直接 spawn，和其它平台一样 |
+| `awr.cmd` / `awr.bat` | 它背后是 npm 包里的 `bin/awr.cjs`，用当前的 node 去跑那个文件 |
+| 只有 `.cmd`、定位不到 `.cjs` | 退回演示模式并说明原因 |
+
+**为什么不用 `shell: true` 一了百了：** 那会把参数交给 cmd.exe 解析，
+而搜索词和 intent 是自由文本，里面的 `&` `|` `^` `>` 会变成命令分隔符。
+这个工具从一开始就是「参数数组 + 不走 shell」，不为兼容性放掉这条。
 
 ---
 
@@ -133,20 +152,22 @@ stdout / stderr / 请求体都有字节上限，并发子进程数有上限。
 
 ## 界面上的数字对不上？
 
-四条命令的映射都跑过真实的 `awr 0.4.0`（`examples/basic` 初始化出来的项目）核对过。
+四条命令的映射在真实的 `awr 0.4.0` 和 `0.5.0` 上都核对过。
 
 ### 版本差异
 
-已发布的 0.4.0 和当前源码树的 `status` 输出**不是同一个形状**，本工具两种都认：
+0.4.0 和 0.5.0 的 `status` 输出**不是同一个形状**，本工具两种都认：
 
-| | 发布版 0.4.0 | 当前源码树 |
+| | 0.4.0 | 0.5.0 及以后 |
 | --- | --- | --- |
 | `status` 的队列 | 只有 `current` 数组 | `current`/`ready`/`waiting`/`blocked` 四个数组 |
 | ready 列表从哪来 | 另跑 `awr ready` | `status` 自带 |
 | waiting 队列 | **没有** | 有 |
 | 截断条数 | `ready_total` 减列表长度 | `omissions.<队列>` |
+| `pending_operations` | 没有 | 有 |
 
-发布版没有的队列，界面显示「—」并说明原因，不拿 0 冒充「没有」。
+版本里没有的队列，界面显示「—」并说明原因，不拿 0 冒充「没有」；
+`pending_operations` 缺失时整块面板隐藏。0.5.0 发布后本工具未改一行代码即适配。
 
 遇到某一格显示「—」：
 
@@ -164,11 +185,11 @@ stdout / stderr / 请求体都有字节上限，并发子进程数有上限。
 node --test test/*.test.js
 ```
 
-32 个用例，零依赖，分两档：
+41 个用例，零依赖，分两档：
 
 - `test/bridge.test.js` —— 起真实的 `server.js` 子进程、打真实 HTTP 请求，PATH 上放一个
   假 `awr`（`test/fixtures/stub-awr.js`）。覆盖请求来源边界、命令构造、子进程输出、
-  超时与生命周期语义、演示模式。
+  超时与生命周期语义、演示模式，以及 Windows 上定位 `awr` 的解析逻辑。
 - `test/detail.test.js` —— 在一个最小 DOM 替身（`test/fixtures/dom-stub.js`）上跑
   `app.js` 里**真正的** `renderWorkDetail()`，不是抄一份副本来测。覆盖缓存命中时
   详情与原始响应是否配套、迟到响应（成功与失败）的丢弃、刷新后旧响应的作废。
@@ -195,8 +216,10 @@ public/
   app.js             字段映射、渲染、新手引导
   demo-data.js       演示数据（结构与真实 JSON 一致）
 test/
-  bridge.test.js     桥接测试
+  bridge.test.js        桥接测试
+  detail.test.js        详情面板的前端回归
   fixtures/stub-awr.js  假的 awr，用来制造边界情况
+  fixtures/dom-stub.js  最小 DOM 替身，让 app.js 能在 Node 里跑
 ```
 
 ---

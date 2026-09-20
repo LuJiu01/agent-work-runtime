@@ -426,3 +426,109 @@ test('刷新会作废在途的详情请求', () => {
   assert.equal(guard.isCurrent(older), false);
   assert.equal(guard.isCurrent(fresh), true);
 });
+
+test('退出码非 0 但带完整报告时，报告仍然交给前端', async () => {
+  // `context compile` 判定上下文不完整时会退出 1，可 stdout 上的报告是完整的——
+  // 那份诊断正是这时候最该看的东西，不能因为退出码就丢掉。
+  const b = await startBridge({ env: { STUB_MODE: 'incomplete' } });
+  try {
+    const r = await (
+      await fetch(`${b.base}/api/context/compile`, {
+        method: 'POST',
+        headers: Object.assign({ 'content-type': 'application/json' }, GUARD),
+        body: JSON.stringify({ work: 'RECON-020', budget: 8000 }),
+      })
+    ).json();
+
+    assert.equal(r.ok, false, '退出码非 0，如实报为失败');
+    assert.equal(r.error.code, 'ContextIncomplete');
+    assert.ok(r.data, '报告必须一并带上，否则完整性面板什么也显示不了');
+    assert.equal(r.data.completeness.status, 'CONTEXT INCOMPLETE');
+    assert.equal(r.data.completeness.rules_complete, false);
+    assert.ok(r.data.work_context.rendered_context.length > 0);
+  } finally {
+    await b.stop();
+  }
+});
+
+test('纯错误响应不会被误当成报告', async () => {
+  // 只有 code/message 的错误壳子不算载荷。
+  const b = await startBridge({ env: { STUB_MODE: 'stderrjson' } });
+  try {
+    const r = await (await fetch(`${b.base}/api/status`, { headers: GUARD })).json();
+    assert.equal(r.ok, false);
+    assert.equal(r.error.code, 'SourceStale');
+    assert.ok(!r.data, '错误壳子不该被当成数据交给前端');
+  } finally {
+    await b.stop();
+  }
+});
+
+// ───────────── 8. issue #63：Windows 上定位 awr ─────────────
+
+const { resolveAwr } = require('../server.js');
+
+/** 造一个假的 Windows 环境：给定存在哪些文件，看解析结果。 */
+function winEnv(files) {
+  const set = new Set(files.map((f) => f.toLowerCase()));
+  return {
+    platform: 'win32',
+    PATH: 'C:\\Users\\me\\AppData\\Roaming\\npm;C:\\Windows\\System32',
+    PATHEXT: '.COM;.EXE;.BAT;.CMD',
+    node: 'C:\\Program Files\\nodejs\\node.exe',
+    sep: ';',
+    join: (...parts) => parts.join('\\'),
+    isFile: (f) => set.has(String(f).toLowerCase()),
+  };
+}
+
+const NPM_BIN = 'C:\\Users\\me\\AppData\\Roaming\\npm';
+
+test('非 Windows 上直接用 awr', () => {
+  const r = resolveAwr({ platform: 'darwin' });
+  assert.equal(r.file, 'awr');
+  assert.deepEqual(r.prefix, []);
+});
+
+test('Windows：npm 装出来的 awr.cmd 走 node 跑 awr.cjs，不开 shell', () => {
+  const cjs = `${NPM_BIN}\\node_modules\\@originoneai\\agent-work-runtime\\bin\\awr.cjs`;
+  const r = resolveAwr(winEnv([`${NPM_BIN}\\awr.cmd`, cjs]));
+  assert.equal(r.file, 'C:\\Program Files\\nodejs\\node.exe', '应该用 node 去跑');
+  assert.deepEqual(r.prefix, [cjs]);
+});
+
+test('Windows：真正的 awr.exe 直接 spawn', () => {
+  const r = resolveAwr(winEnv([`${NPM_BIN}\\awr.exe`]));
+  assert.equal(r.file, `${NPM_BIN}\\awr.exe`);
+  assert.deepEqual(r.prefix, []);
+});
+
+test('Windows：只有 .cmd 却找不到 .cjs 时，宁可不跑也不开 shell', () => {
+  const r = resolveAwr(winEnv([`${NPM_BIN}\\awr.cmd`]));
+  assert.equal(r.file, null, '定位不到入口就不该硬跑');
+  assert.ok(/awr\.cjs/.test(r.reason), `原因要说清楚: ${r.reason}`);
+});
+
+test('Windows：PATH 里没有 awr', () => {
+  const r = resolveAwr(winEnv([]));
+  assert.equal(r.file, null);
+  assert.ok(/PATH/.test(r.reason));
+});
+
+test('Windows：.exe 优先于 .cmd（PATHEXT 顺序）', () => {
+  const cjs = `${NPM_BIN}\\node_modules\\@originoneai\\agent-work-runtime\\bin\\awr.cjs`;
+  const r = resolveAwr(winEnv([`${NPM_BIN}\\awr.exe`, `${NPM_BIN}\\awr.cmd`, cjs]));
+  assert.equal(r.file, `${NPM_BIN}\\awr.exe`);
+});
+
+test('budget 上限仍是 200000，界面不该再卡在 16000', async () => {
+  // issue #63 第 1 条：下拉框封顶 16000，而桥接本来就收到 200000。
+  const r = await (
+    await fetch(`${bridge.base}/api/context/compile`, {
+      method: 'POST',
+      headers: Object.assign({ 'content-type': 'application/json' }, GUARD),
+      body: JSON.stringify({ work: 'RECON-001', budget: 120000 }),
+    })
+  ).json();
+  assert.ok(r.command.includes('--budget 120000'), `预算没透传: ${r.command}`);
+});
