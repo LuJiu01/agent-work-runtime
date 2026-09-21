@@ -51,6 +51,8 @@ function pageResponse(offset, total = 17, queue = "ready") {
 function pagination() {
   app.state.mode="live"; app.state.workPagination=true; app.state.workFilter="ready";
   app.state.workPageSize=10; app.state.workOffset=0; app.state.status=app.normStatus(...fixture());
+  app.state.workPage=null; app.state.workPageLoading=false; app.state.workPageError=null;
+  app.state.selectedWork=null; app.state.overviewWork=null; app.state.workDetail={};
 }
 test("server pages show ten then seven rows, not a slice of the summary", async () => {
   pagination(); const urls=[];
@@ -86,3 +88,183 @@ test("page failure clears old rows and does not pretend the queue is empty", asy
   assert.equal(document.getElementById("workRows").children.length,0);
   assert.match(document.getElementById("workEmpty").textContent,/Disconnected/);
 });
+
+for (const offset of [0, 10]) {
+  test(`overview click loads the selected queue from cached ready offset ${offset}`, async () => {
+    pagination();
+    app.state.workOffset = offset;
+    app.state.workPage = pageResponse(offset).data.page;
+    app.state.selectedWork = `R${offset}`;
+    app.state.queueTab = 'blocked';
+    app.renderQueueList();
+    const urls = [];
+    global.fetch = async url => {
+      urls.push(url);
+      const response = pageResponse(0, 1, 'blocked');
+      response.data.page.items = [{key: 'B1', queue: 'blocked'}];
+      return {json: async () => url.startsWith('/api/work-page') ? response : {
+        ok: true, data: {work: {external_key: 'B1', title: 'Blocked task', status: 'blocked'}}
+      }};
+    };
+    await document.getElementById('queueList').children[0].click();
+    await new Promise(resolve => setImmediate(resolve));
+    assert.ok(urls.includes('/api/work-page?queue=blocked&offset=0&limit=10'));
+    assert.equal(app.state.workFilter, 'blocked');
+    assert.equal(app.state.selectedWork, 'B1');
+    assert.equal(document.getElementById('detailId').textContent, 'B1');
+    assert.match(document.getElementById('workRows').textContent, /B1/);
+  });
+}
+
+test('second-page detail keeps its context selection through refresh and submits its key', async () => {
+  pagination();
+  app.state.status = app.normStatus(fixture()[0], null);
+  app.state.workPage = pageResponse(10).data.page;
+  app.state.workDetail = {};
+  app.fillWorkSelect();
+  const select = document.getElementById('fWork');
+  select.value = 'NOT-AN-OPTION';
+  assert.equal(select.value, '', 'select must reject values absent from its options');
+  global.fetch = async () => ({json: async () => ({ok: true, data: {
+    work: {external_key: 'R10', title: 'Ready 10', status: 'ready'}
+  }})});
+  await app.renderWorkDetail('R10');
+  const button = document.getElementById('workDetail').find(el =>
+    el.tagName === 'BUTTON' && el.textContent.includes('为这一项编译上下文'));
+  await button.click();
+  assert.equal(select.value, 'R10');
+  assert.match(document.getElementById('cliMirror').textContent, /--work R10/);
+  app.state.workPage = pageResponse(0).data.page;
+  app.fillWorkSelect();
+  assert.equal(select.value, 'R10', 'refresh must preserve the chosen context target');
+  assert.equal(select.children.filter(option => option.value === 'R10').length, 1);
+  let payload;
+  global.fetch = async (url, options) => {
+    assert.equal(url, '/api/context/compile');
+    payload = JSON.parse(options.body);
+    return {json: async () => ({ok: false, error: {code: 'fixture', message: 'fixture'}})};
+  };
+  await app.doCompile();
+  assert.equal(payload.work, 'R10');
+});
+
+function overviewTarget() {
+  pagination();
+  app.state.queueTab = 'blocked';
+  app.renderQueueList();
+  return document.getElementById('queueList').children[0];
+}
+function changedQueue(kind = 'moved') {
+  const response = pageResponse(0, 17, 'blocked');
+  const blocked = kind === 'later-page'
+    ? [...Array.from({length: 10}, (_, i) => ({key: `B${i + 2}`})), {key: 'B1'}]
+    : kind === 'empty' ? [] : [{key: 'B2'}];
+  const data = response.data;
+  data.project_revision = 8;
+  data.blocked = blocked.slice(0, 5);
+  data.blocked_count = blocked.length;
+  data.omissions.blocked = Math.max(0, blocked.length - 5);
+  if (kind === 'moved' || kind === 'empty') {
+    data.current.push({key: 'B1'});
+    data.current_total++;
+  }
+  data.page = {queue: 'blocked', offset: 0, limit: 10, total: blocked.length,
+    has_more: blocked.length > 10, items: blocked.slice(0, 10).map(w => ({...w, queue: 'blocked'}))};
+  return response;
+}
+function workResponse(key) {
+  return {ok: true, data: {work: {external_key: key, title: `Task ${key}`, status: 'ready'}}};
+}
+const settle = () => new Promise(resolve => setImmediate(resolve));
+
+for (const kind of ['moved', 'later-page', 'empty', 'page-error', 'removed']) {
+  test(`overview target survives changed queue: ${kind}`, async () => {
+    const target = overviewTarget();
+    const requests = [];
+    global.fetch = async url => {
+      requests.push(url);
+      let response;
+      if (url.startsWith('/api/work-page')) {
+        response = kind === 'page-error'
+          ? {ok: false, error: {code: 'Offline', message: 'Queue unavailable'}}
+          : changedQueue(kind);
+      } else {
+        const key = new URL(url, 'http://local').searchParams.get('key');
+        response = kind === 'removed' && key === 'B1'
+          ? {ok: false, error: {code: 'NotFound', message: 'Work B1 no longer exists'}}
+          : workResponse(key);
+      }
+      return {json: async () => response};
+    };
+    await target.click();
+    await settle();
+    assert.equal(app.state.selectedWork, 'B1');
+    assert.equal(document.getElementById('detailId').textContent, 'B1');
+    assert.ok(requests.includes('/api/work?key=B1'));
+    assert.ok(!requests.includes('/api/work?key=B2'));
+    const box = document.getElementById('workDetail');
+    if (kind === 'removed') {
+      assert.match(box.textContent, /Work B1 no longer exists/);
+      assert.match(box.textContent, /工作项不存在或已移除/);
+      assert.equal(box.find(el => el.tagName === 'BUTTON' && el.textContent.includes('为这一项编译上下文')), null);
+    } else {
+      assert.match(box.textContent, /Task B1/);
+      const compile = box.find(el => el.tagName === 'BUTTON' && el.textContent.includes('为这一项编译上下文'));
+      await compile.click();
+      assert.equal(document.getElementById('fWork').value, 'B1');
+    }
+  });
+}
+
+test('a late overview detail cannot override an explicit row selection', async () => {
+  const target = overviewTarget();
+  let finishOldDetail;
+  global.fetch = async url => {
+    if (url.startsWith('/api/work-page')) return {json: async () => changedQueue()};
+    if (url === '/api/work?key=B1') return new Promise(resolve => {
+      finishOldDetail = () => resolve({json: async () => workResponse('B1')});
+    });
+    return {json: async () => workResponse('B2')};
+  };
+  const oldClick = target.click();
+  await settle();
+  assert.equal(typeof finishOldDetail, 'function');
+  await document.getElementById('workRows').children[0].click();
+  await settle();
+  finishOldDetail();
+  await oldClick;
+  await settle();
+  assert.equal(app.state.selectedWork, 'B2');
+  assert.match(document.getElementById('workDetail').textContent, /Task B2/);
+  assert.equal(app.state.raw.work.data.work.external_key, 'B2');
+});
+
+for (const navigation of ['filter', 'next-page', 'page-size']) {
+  test(`explicit ${navigation} navigation releases the overview target`, async () => {
+    const target = overviewTarget();
+    global.fetch = async url => ({json: async () => url.startsWith('/api/work-page')
+      ? changedQueue('later-page') : workResponse(new URL(url, 'http://local').searchParams.get('key'))});
+    await target.click();
+    await settle();
+    assert.equal(app.state.selectedWork, 'B1');
+    global.fetch = async url => ({json: async () => {
+      if (!url.startsWith('/api/work-page')) return workResponse(new URL(url, 'http://local').searchParams.get('key'));
+      const params = new URL(url, 'http://local').searchParams;
+      const queue = params.get('queue'), offset = Number(params.get('offset'));
+      const response = changedQueue();
+      response.data.page = {queue, offset, limit: Number(params.get('limit')), total: 11,
+        has_more: false, items: [{key: 'B9', queue}]};
+      return response;
+    }});
+    if (navigation === 'filter') await document.getElementById('workFilters').children[2].click();
+    else if (navigation === 'next-page') await document.getElementById('workPagination').children[2].click();
+    else {
+      const size = document.getElementById('workPagination').children[3];
+      size.value = '20';
+      size.listeners.change[0]();
+    }
+    await settle();
+    assert.equal(app.state.selectedWork, 'B9');
+    assert.match(document.getElementById('workDetail').textContent, /Task B9/);
+  });
+}

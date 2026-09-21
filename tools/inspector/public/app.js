@@ -190,6 +190,7 @@
     queueTab: 'blocked',   // 概览里队列面板当前选的队列
     workFilter: 'all',
     selectedWork: null,
+    overviewWork: null,    // 概览明确选择的任务，不随当前页的成员变化而替换
     view: 'overview',
   };
 
@@ -235,6 +236,7 @@
   }
 
   const detailGuard = createGenerationGuard();
+  let sourceGeneration = 0;
 
   // ───────────────────────── API ─────────────────────────
 
@@ -770,8 +772,11 @@
       li.style.cursor = 'pointer';
       li.addEventListener('click', () => {
         state.selectedWork = w.key;
-        state.workFilter = 'all';
+        state.overviewWork = w.key;
+        state.workFilter = w.queue;
+        state.workOffset = 0;
         go('work');
+        if (state.workPagination) return loadWorkPage();
         renderWork();
       });
       list.appendChild(li);
@@ -842,6 +847,7 @@
   async function loadWorkPage() {
     const generation = ++workPageGeneration;
     detailGuard.invalidate();
+    state.workDetail = {};
     state.workPageLoading = true;
     state.workPage = null;
     state.workPageError = null;
@@ -859,14 +865,13 @@
         return loadWorkPage();
       }
       detailGuard.invalidate();
-      state.workDetail = {};
       state.status = normStatus(response.data, null);
       state.workPage = page;
       state.raw.overview = { status: response };
       renderOverview();
       showRaw('rawOverviewBody', state.raw.overview);
     }
-    renderWork();
+    return renderWork();
   }
 
   function renderWork() {
@@ -885,6 +890,7 @@
       chip.appendChild(document.createTextNode(o.label + ' '));
       chip.appendChild(el('b', null, String(o.count)));
       chip.addEventListener('click', () => {
+        state.overviewWork = null;
         state.workFilter = o.key;
         state.workOffset = 0;
         if (state.workPagination) loadWorkPage();
@@ -904,12 +910,20 @@
       const pages = Math.max(1, Math.ceil(total / state.workPageSize));
       const previous = el('button', 'chip', '上一页');
       previous.disabled = state.workPageLoading || !page || state.workOffset === 0;
-      previous.addEventListener('click', () => { state.workOffset = Math.max(0, state.workOffset - state.workPageSize); loadWorkPage(); });
+      previous.addEventListener('click', () => {
+        state.overviewWork = null;
+        state.workOffset = Math.max(0, state.workOffset - state.workPageSize);
+        return loadWorkPage();
+      });
       pager.appendChild(previous);
       pager.appendChild(el('span', 'sub', page ? `第 ${Math.floor(state.workOffset / state.workPageSize) + 1} / ${pages} 页，共 ${total} 项` : state.workPageError ? '查询失败' : '正在查询'));
       const next = el('button', 'chip', '下一页');
       next.disabled = state.workPageLoading || !page || !page.has_more;
-      next.addEventListener('click', () => { state.workOffset += state.workPageSize; loadWorkPage(); });
+      next.addEventListener('click', () => {
+        state.overviewWork = null;
+        state.workOffset += state.workPageSize;
+        return loadWorkPage();
+      });
       pager.appendChild(next);
       const size = el('select');
       size.setAttribute('aria-label', '每页条数');
@@ -918,7 +932,12 @@
       }
       size.value = String(state.workPageSize);
       size.disabled = state.workPageLoading;
-      size.addEventListener('change', () => { state.workPageSize = Number(size.value); state.workOffset = 0; loadWorkPage(); });
+      size.addEventListener('change', () => {
+        state.overviewWork = null;
+        state.workPageSize = Number(size.value);
+        state.workOffset = 0;
+        return loadWorkPage();
+      });
       pager.appendChild(size);
     }
 
@@ -934,19 +953,30 @@
         '队列计数包含未加载的任务；请通过 AWR CLI 查询其余条目。'));
     }
 
-    if (state.workPagination && (state.workPageLoading || state.workPageError)) {
+    if (state.workPagination && state.workPageLoading) {
       clear($('workDetail'));
-      if (state.workPageError) $('workEmpty').appendChild(errorBlock(state.workPageError));
-      else $('workEmpty').appendChild(stateBlock('loading', '正在加载任务', ''));
+      setText('detailId', state.overviewWork || '详情');
+      setText('detailStatus', '—');
+      $('workEmpty').appendChild(stateBlock('loading', '正在加载任务', ''));
       return;
     }
-    if (!rows.length) {
-      clear($('workDetail'));
+    if (state.workPagination && state.workPageError) {
+      $('workEmpty').appendChild(errorBlock(state.workPageError));
+    } else if (!rows.length) {
       $('workEmpty').appendChild(stateBlock('empty', '这个筛选下没有工作项', '换一个筛选看看。'));
-      return;
     }
-
-    if (!state.selectedWork || !rows.some((w) => w.key === state.selectedWork)) {
+    if (state.overviewWork) {
+      state.selectedWork = state.overviewWork;
+      if (!rows.some((w) => w.key === state.overviewWork) && !state.workPageError) {
+        $('workEmpty').appendChild(stateBlock('warning', '概览中选择的任务不在当前页',
+          `下方仍按你选择的 ${state.overviewWork} 查询详情。`));
+      }
+    } else if (!rows.length) {
+      clear($('workDetail'));
+      setText('detailId', '详情');
+      setText('detailStatus', '—');
+      return;
+    } else if (!state.selectedWork || !rows.some((w) => w.key === state.selectedWork)) {
       state.selectedWork = rows[0].key;
     }
 
@@ -974,13 +1004,14 @@
       tr.appendChild(el('td', 'num', w.revision != null ? String(w.revision) : '—'));
 
       tr.addEventListener('click', () => {
+        state.overviewWork = null;
         state.selectedWork = w.key;
-        renderWork();
+        return renderWork();
       });
       tbody.appendChild(tr);
     }
 
-    renderWorkDetail(state.selectedWork);
+    return renderWorkDetail(state.selectedWork);
   }
 
   async function renderWorkDetail(key) {
@@ -988,6 +1019,7 @@
     const box = $('workDetail');
     clear(box);
     setText('detailId', key || '详情');
+    setText('detailStatus', '—');
 
     // 缓存的是 { detail, raw } 一对，不是只有规范化后的详情。
     // 只缓存详情的话，命中缓存时原始 JSON 面板还停在上一个工作项的响应上——
@@ -1013,6 +1045,9 @@
           state.raw.work = res;
           showRaw('rawWorkBody', res);
           clear(box);
+          if (res.error && res.error.code === 'NotFound') {
+            box.appendChild(stateBlock('empty', '工作项不存在或已移除', `未找到 ${key}，请刷新概览确认。`));
+          }
           box.appendChild(errorBlock(res.error, res.command));
           return;
         }
@@ -1147,6 +1182,7 @@
     const act = el('div', 'actions');
     const btn = el('button', 'btn', '为这一项编译上下文');
     btn.addEventListener('click', () => {
+      fillWorkSelect(detail);
       $('fWork').value = detail.key;
       if (detail.goal) {
         const m = String(detail.goal).match(/goal#[\w.-]+/);
@@ -1162,15 +1198,21 @@
 
   // ───────────────────────── 上下文 ─────────────────────────
 
-  function fillWorkSelect() {
+  function fillWorkSelect(selectedWork = null) {
     const sel = $('fWork');
     const keep = sel.value;
+    const previous = Array.from(sel.children).find(option => option.value === keep);
+    const works = new Map((state.status ? state.status.works : []).map(w => [w.key, w]));
+    for (const w of state.workPage ? state.workPage.items : []) works.set(w.key, w);
+    if (selectedWork) works.set(selectedWork.key, selectedWork);
     clear(sel);
-    for (const w of state.status ? state.status.works : []) {
+    for (const w of works.values()) {
       const o = el('option', null, `${w.key} — ${w.title}`);
       o.value = w.key;
       sel.appendChild(o);
     }
+    // Preserve a context target even after its page is no longer displayed.
+    if (previous && !works.has(keep)) sel.appendChild(previous);
     if (keep) sel.value = keep;
     updateCliMirror();
   }
@@ -1188,6 +1230,7 @@
   }
 
   async function doCompile() {
+    const generation = sourceGeneration;
     const btn = $('compileBtn');
     btn.disabled = true;
     setText('compileHint', '编译中…');
@@ -1202,6 +1245,7 @@
 
     if (state.mode === 'demo') {
       await new Promise((r) => setTimeout(r, 260));
+      if (generation !== sourceGeneration) return;
       const raw = window.AWR_DEMO.compile(work, budget);
       state.raw.context = { ok: true, data: raw };
       showRaw('rawContextBody', state.raw.context);
@@ -1211,6 +1255,7 @@
         method: 'POST',
         body: JSON.stringify({ work, goal, budget, intent }),
       });
+      if (generation !== sourceGeneration) return;
       state.raw.context = res;
       showRaw('rawContextBody', res);
       if (res.ok) {
@@ -1540,10 +1585,49 @@
 
   // ───────────────────────── 加载 ─────────────────────────
 
-  async function loadAll() {
+  function resetProjectData() {
+    // 任务 key、选项和缓存只属于原项目；演示数据也是独立的数据来源。
+    ++sourceGeneration;
     ++workPageGeneration;
+    detailGuard.invalidate();
+    state.overviewWork = null;
+    state.selectedWork = null;
+    state.workFilter = 'all';
+    state.workOffset = 0;
+    state.workPage = null;
+    state.workPageLoading = false;
+    state.workPageError = null;
+    state.workDetail = {};
+    state.status = null;
+    state.sources = null;
+    state.compile = null;
+    state.raw = {};
+    for (const id of ['fWork', 'workRows', 'workFilters', 'workPagination', 'workEmpty', 'workDetail',
+      'statusStrip', 'queueList', 'queueTabs', 'cpList', 'pendingList',
+      'rawWorkBody', 'rawContextBody', 'rawOverviewBody', 'rawSourcesBody']) clear($(id));
+    for (const id of ['navWorkCount', 'navSourceCount', 'workSub', 'queueSub', 'gapSub', 'pendingSub',
+      'srcTitle', 'srcSub', 'srcCmd', 'compileHint']) setText(id, '');
+    $('fGoal').value = '';
+    $('fIntent').value = '';
+    $('compileBtn').disabled = false;
+    setText('detailId', '详情');
+    setText('detailStatus', '—');
+    renderSources();
+    renderCompile();
+    updateCliMirror();
+  }
+
+  let loadGeneration = 0;
+  async function loadAll() {
+    const generation = ++loadGeneration;
+    const previousMode = state.mode;
+    const previousProject = state.project;
+    ++workPageGeneration;
+    detailGuard.invalidate();
+    state.workDetail = {};
     state.workPage = null;
     const health = await callApi('/api/health');
+    if (generation !== loadGeneration) return;
     if (health.ok) {
       state.mode = health.data.mode;
       // 演示模式下显示样本项目名，而不是本工具自己所在的那个目录——
@@ -1557,6 +1641,7 @@
       state.project = '.local/demo';
     }
 
+    if (state.mode !== previousMode || state.project !== previousProject) resetProjectData();
     state.workPagination = state.mode !== 'demo';
     setText('projPath', state.project);
     renderModeUi();
@@ -1571,6 +1656,7 @@
       const [st, src] = await Promise.all([
         callApi('/api/status'), callApi('/api/sources'),
       ]);
+      if (generation !== loadGeneration) return;
       state.raw.overview = { status: st };
       state.raw.sources = src;
 
@@ -1594,7 +1680,8 @@
     if (state.status) {
       renderOverview();
       if (state.workPagination) await loadWorkPage();
-      else renderWork();
+      else await renderWork();
+      if (generation !== loadGeneration) return;
       fillWorkSelect();
     }
     if (state.sources) renderSources();
@@ -1751,9 +1838,6 @@
     $('btnRefresh').addEventListener('click', async () => {
       const b = $('btnRefresh');
       b.classList.add('spin');
-      // 在途的详情请求全部作废，免得旧数据在刷新后落地。
-      detailGuard.invalidate();
-      state.workDetail = {};
       await loadAll();
       b.classList.remove('spin');
     });
@@ -1824,7 +1908,7 @@
   if (typeof module !== 'undefined' && module.exports) {
     module.exports = {
       createGenerationGuard, state, detailGuard, renderWorkDetail, normStatus, renderWork, loadWorkPage,
-      renderPacketSize, doCompile,
+      renderPacketSize, doCompile, renderQueueList, fillWorkSelect, loadAll,
     };
   }
 })();
