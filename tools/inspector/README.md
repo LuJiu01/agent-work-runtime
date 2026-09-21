@@ -99,25 +99,6 @@ node server.js --project /你的/项目路径
 
 ---
 
-## 它怎么找到 awr
-
-macOS 和 Linux 上直接 spawn `awr`，PATH 解析交给系统。
-
-Windows 上不行：npm 全局安装装出来的是 `awr.cmd`（批处理包装器），
-`shell: false` 的 spawn 认不出它，会 `ENOENT`。所以按 `PATH × PATHEXT` 自己找：
-
-| 找到什么 | 怎么跑 |
-| --- | --- |
-| `awr.exe` / `awr.com` | 直接 spawn，和其它平台一样 |
-| `awr.cmd` / `awr.bat` | 它背后是 npm 包里的 `bin/awr.cjs`，用当前的 node 去跑那个文件 |
-| 只有 `.cmd`、定位不到 `.cjs` | 退回演示模式并说明原因 |
-
-**为什么不用 `shell: true` 一了百了：** 那会把参数交给 cmd.exe 解析，
-而搜索词和 intent 是自由文本，里面的 `&` `|` `^` `>` 会变成命令分隔符。
-这个工具从一开始就是「参数数组 + 不走 shell」，不为兼容性放掉这条。
-
----
-
 ## 本地边界
 
 绑定 `127.0.0.1` 并不够——浏览器里任何页面都能向回环地址发请求。所以 `/api/*` 还有一层检查：
@@ -193,11 +174,11 @@ o200k 分词器，这个数造不出来。仓库公开 benchmark 的那组对比
 node --test test/*.test.js
 ```
 
-50 个用例，零依赖，分三档：
+45 个用例，零依赖，分三档：
 
 - `test/bridge.test.js` —— 起真实的 `server.js` 子进程、打真实 HTTP 请求，PATH 上放一个
   假 `awr`（`test/fixtures/stub-awr.js`）。覆盖请求来源边界、命令构造、子进程输出、
-  超时与生命周期语义、演示模式，以及 Windows 上定位 `awr` 的解析逻辑。
+  超时与生命周期语义、演示模式。
 - `test/detail.test.js` —— 在一个最小 DOM 替身（`test/fixtures/dom-stub.js`）上跑
   `app.js` 里**真正的** `renderWorkDetail()`，不是抄一份副本来测。覆盖缓存命中时
   详情与原始响应是否配套、迟到响应（成功与失败）的丢弃、刷新后旧响应的作废。

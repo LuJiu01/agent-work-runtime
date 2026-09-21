@@ -274,7 +274,7 @@
               <div class="field">
                 <label for="fBudget">budget（token 上限）</label>
                 <input id="fBudget" type="number" list="budgetPresets" value="6000"
-                       min="500" max="200000" step="500" inputmode="numeric">
+                       min="500" max="100000" step="500" inputmode="numeric">
                 <datalist id="budgetPresets">
                   <option value="4000"></option>
                   <option value="6000"></option>
@@ -282,10 +282,9 @@
                   <option value="16000"></option>
                   <option value="32000"></option>
                   <option value="64000"></option>
-                  <option value="120000"></option>
-                  <option value="200000"></option>
+                  <option value="100000"></option>
                 </datalist>
-                <span class="help">500 到 200,000 之间任填，不限于预设值。只约束渲染出来的那段正文，不约束整个 JSON 响应。</span>
+                <span class="help">500 到 100,000 之间任填，不限于预设值——100,000 是 AWR 自己的上限。只约束渲染出来的那段正文，不约束整个 JSON 响应。</span>
               </div>
               <div class="field">
                 <label for="fIntent">intent（可选）</label>
