@@ -175,6 +175,12 @@
     mode: 'demo',          // 'live' | 'demo'
     project: '…',
     reason: null,
+    workPagination: false,
+    workPage: null,
+    workOffset: 0,
+    workPageSize: 10,
+    workPageError: null,
+    workPageLoading: false,
     status: null,          // 规范化后的 status
     works: [],             // 规范化后的工作项清单
     workDetail: {},        // key -> 详情
@@ -313,7 +319,7 @@
   /**
    * @param raw       `awr status` 的响应
    * @param readyRaw  `awr ready` 的响应；发布版 0.4.0 的 status 不带 ready/blocked 列表，
-   *                  得靠它补。源码树版本自带四个数组，这时它只是冗余。
+   *                  得靠它补。action 视图自带的数组是摘要；同修订的 ready 结果可以补齐可开工列表。
    */
   function normStatus(raw, readyRaw) {
     const M = FIELD_MAP.status;
@@ -332,7 +338,11 @@
       let omitted = pick(raw, FIELD_MAP.queueOmitted[q.key], 0) || 0;
       let source = 'status';
 
-      if (items == null && fallback[q.key] != null) {
+      if (fallback[q.key] != null && (items == null || (
+        q.key === 'ready' && omitted > 0 &&
+        raw.project_revision === readyRaw.project_revision &&
+        fallback.ready.length > items.length
+      ))) {
         items = fallback[q.key];
         source = 'ready';
         if (q.key === 'ready') {
@@ -632,7 +642,7 @@
     renderGaps(s);
     renderPending(s);
 
-    setText('navWorkCount', String(s.works.length || ''));
+    setText('navWorkCount', String(Object.values(s.queues).reduce((sum, q) => sum + (q.available ? q.total : 0), 0)));
     setText('mcpCmd', `awr-mcp --project ${state.project}`);
     setText('mcpSub', state.mode === 'live' ? '本工具走 CLI，agent 走 MCP' : '演示模式');
   }
@@ -828,6 +838,37 @@
 
   // ───────────────────────── 工作项 ─────────────────────────
 
+  let workPageGeneration = 0;
+  async function loadWorkPage() {
+    const generation = ++workPageGeneration;
+    detailGuard.invalidate();
+    state.workPageLoading = true;
+    state.workPage = null;
+    state.workPageError = null;
+    renderWork();
+    const response = await callApi(`/api/work-page?queue=${state.workFilter}&offset=${state.workOffset}&limit=${state.workPageSize}`);
+    if (generation !== workPageGeneration) return;
+    state.workPageLoading = false;
+    if (!response.ok || !response.data || !response.data.page) {
+      state.workPageError = response.error || { code: 'MissingPage', message: '未获得分页结果，请刷新重试。' };
+    } else {
+      const page = response.data.page;
+      // 删除/完成任务后，旧的最后一页可能已不存在。
+      if (state.workOffset > 0 && state.workOffset >= page.total) {
+        state.workOffset = Math.max(0, Math.ceil(page.total / state.workPageSize) - 1) * state.workPageSize;
+        return loadWorkPage();
+      }
+      detailGuard.invalidate();
+      state.workDetail = {};
+      state.status = normStatus(response.data, null);
+      state.workPage = page;
+      state.raw.overview = { status: response };
+      renderOverview();
+      showRaw('rawOverviewBody', state.raw.overview);
+    }
+    renderWork();
+  }
+
   function renderWork() {
     const s = state.status;
     if (!s) return;
@@ -835,7 +876,7 @@
     // 筛选芯片
     const filters = $('workFilters');
     clear(filters);
-    const options = [{ key: 'all', label: '全部', count: s.works.length }].concat(
+    const options = [{ key: 'all', label: '当前队列', count: Object.values(s.queues).reduce((sum, q) => sum + (q.available ? q.total : 0), 0) }].concat(
       QUEUES.map((q) => ({ key: q.key, label: q.label, count: s.queues[q.key].total }))
     );
     for (const o of options) {
@@ -845,21 +886,62 @@
       chip.appendChild(el('b', null, String(o.count)));
       chip.addEventListener('click', () => {
         state.workFilter = o.key;
-        renderWork();
+        state.workOffset = 0;
+        if (state.workPagination) loadWorkPage();
+        else renderWork();
       });
       filters.appendChild(chip);
     }
 
-    const rows = state.workFilter === 'all'
-      ? s.works
-      : s.works.filter((w) => w.queue === state.workFilter);
+    const rows = state.workPagination
+      ? (state.workPage ? state.workPage.items.map(normWorkBrief) : [])
+      : state.workFilter === 'all' ? s.works : s.works.filter((w) => w.queue === state.workFilter);
+    const pager = $('workPagination');
+    clear(pager);
+    if (state.workPagination) {
+      const page = state.workPage;
+      const total = page ? page.total : 0;
+      const pages = Math.max(1, Math.ceil(total / state.workPageSize));
+      const previous = el('button', 'chip', '上一页');
+      previous.disabled = state.workPageLoading || !page || state.workOffset === 0;
+      previous.addEventListener('click', () => { state.workOffset = Math.max(0, state.workOffset - state.workPageSize); loadWorkPage(); });
+      pager.appendChild(previous);
+      pager.appendChild(el('span', 'sub', page ? `第 ${Math.floor(state.workOffset / state.workPageSize) + 1} / ${pages} 页，共 ${total} 项` : state.workPageError ? '查询失败' : '正在查询'));
+      const next = el('button', 'chip', '下一页');
+      next.disabled = state.workPageLoading || !page || !page.has_more;
+      next.addEventListener('click', () => { state.workOffset += state.workPageSize; loadWorkPage(); });
+      pager.appendChild(next);
+      const size = el('select');
+      size.setAttribute('aria-label', '每页条数');
+      for (const n of [10, 20, 50, 100]) {
+        const option = el('option', null, `每页 ${n} 项`); option.value = String(n); size.appendChild(option);
+      }
+      size.value = String(state.workPageSize);
+      size.disabled = state.workPageLoading;
+      size.addEventListener('change', () => { state.workPageSize = Number(size.value); state.workOffset = 0; loadWorkPage(); });
+      pager.appendChild(size);
+    }
 
     const tbody = $('workRows');
     clear(tbody);
     clear($('workEmpty'));
-    setText('workSub', `${rows.length} 项`);
+    const selectedQueues = state.workFilter === 'all'
+      ? Object.values(s.queues) : [s.queues[state.workFilter]];
+    const omitted = state.workPagination ? 0 : selectedQueues.reduce((sum, q) => sum + q.omitted, 0);
+    setText('workSub', omitted ? `已显示 ${rows.length} 项，另有 ${omitted} 项未加载` : `${rows.length} 项`);
+    if (omitted) {
+      $('workEmpty').appendChild(stateBlock('warning', '当前列表尚未完整加载',
+        '队列计数包含未加载的任务；请通过 AWR CLI 查询其余条目。'));
+    }
 
+    if (state.workPagination && (state.workPageLoading || state.workPageError)) {
+      clear($('workDetail'));
+      if (state.workPageError) $('workEmpty').appendChild(errorBlock(state.workPageError));
+      else $('workEmpty').appendChild(stateBlock('loading', '正在加载任务', ''));
+      return;
+    }
     if (!rows.length) {
+      clear($('workDetail'));
       $('workEmpty').appendChild(stateBlock('empty', '这个筛选下没有工作项', '换一个筛选看看。'));
       return;
     }
@@ -1459,6 +1541,8 @@
   // ───────────────────────── 加载 ─────────────────────────
 
   async function loadAll() {
+    ++workPageGeneration;
+    state.workPage = null;
     const health = await callApi('/api/health');
     if (health.ok) {
       state.mode = health.data.mode;
@@ -1473,6 +1557,7 @@
       state.project = '.local/demo';
     }
 
+    state.workPagination = state.mode !== 'demo';
     setText('projPath', state.project);
     renderModeUi();
 
@@ -1482,15 +1567,15 @@
       state.raw.overview = { ok: true, data: window.AWR_DEMO.status, note: '演示数据' };
       state.raw.sources = { ok: true, data: window.AWR_DEMO.sources, note: '演示数据' };
     } else {
-      // 发布版 0.4.0 的 status 不带 ready/blocked 列表，所以两条一起拉。
-      const [st, rdy, src] = await Promise.all([
-        callApi('/api/status'), callApi('/api/ready'), callApi('/api/sources'),
+      // 概览使用摘要，工作项通过独立分页接口按需加载。
+      const [st, src] = await Promise.all([
+        callApi('/api/status'), callApi('/api/sources'),
       ]);
-      state.raw.overview = { status: st, ready: rdy };
+      state.raw.overview = { status: st };
       state.raw.sources = src;
 
       if (st.ok) {
-        state.status = normStatus(st.data, rdy.ok ? rdy.data : null);
+        state.status = normStatus(st.data, null);
       } else {
         state.status = null;
         clear($('statusStrip'));
@@ -1508,7 +1593,8 @@
 
     if (state.status) {
       renderOverview();
-      renderWork();
+      if (state.workPagination) await loadWorkPage();
+      else renderWork();
       fillWorkSelect();
     }
     if (state.sources) renderSources();
@@ -1737,7 +1823,7 @@
   // 给测试用。浏览器里没有 module，这一段不执行。
   if (typeof module !== 'undefined' && module.exports) {
     module.exports = {
-      createGenerationGuard, state, detailGuard, renderWorkDetail,
+      createGenerationGuard, state, detailGuard, renderWorkDetail, normStatus, renderWork, loadWorkPage,
       renderPacketSize, doCompile,
     };
   }
