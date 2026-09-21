@@ -126,3 +126,37 @@ test('换一次编译，数字跟着换', async () => {
   assert.ok(chartText().includes('4,000 tokens'));
   assert.ok(!chartText().includes('16,000 tokens'), '上一次的预算不该还在');
 });
+
+// ───────────── 页面自身的一致性 ─────────────
+
+const fs = require('node:fs');
+const path = require('node:path');
+
+test('每个 ? 按钮都有对应的说明段落', () => {
+  // 一个 data-why 找不到同名的 data-note，点了就什么也不会发生——
+  // 这种「按钮是死的」只能靠这条断言发现，界面上看不出来。
+  const html = fs.readFileSync(path.join(__dirname, '..', 'public', 'index.html'), 'utf8');
+  const whys = [...html.matchAll(/data-why="([^"]+)"/g)].map((m) => m[1]);
+  const notes = new Set([...html.matchAll(/data-note="([^"]+)"/g)].map((m) => m[1]));
+
+  assert.ok(whys.length > 0, '没找到任何 ? 按钮，选择器是不是改了？');
+  const orphans = whys.filter((w) => !notes.has(w));
+  assert.deepEqual(orphans, [], `这些 ? 按钮点了没反应: ${orphans.join(', ')}`);
+});
+
+test('没有说明段落是孤立的', () => {
+  const html = fs.readFileSync(path.join(__dirname, '..', 'public', 'index.html'), 'utf8');
+  const whys = new Set([...html.matchAll(/data-why="([^"]+)"/g)].map((m) => m[1]));
+  const notes = [...html.matchAll(/data-note="([^"]+)"/g)].map((m) => m[1]);
+
+  const unreachable = notes.filter((n) => !whys.has(n));
+  assert.deepEqual(unreachable, [], `这些说明没有按钮能打开: ${unreachable.join(', ')}`);
+});
+
+test('主区不设固定宽度上限', () => {
+  // 之前 main 被钉在 1120px，宽屏上右边一大片空白。
+  const css = fs.readFileSync(path.join(__dirname, '..', 'public', 'styles.css'), 'utf8');
+  const mainRule = css.match(/\nmain \{[^}]*\}/);
+  assert.ok(mainRule, '没找到 main 的样式规则');
+  assert.ok(!/max-width/.test(mainRule[0]), `main 不该再有宽度上限: ${mainRule[0].trim()}`);
+});

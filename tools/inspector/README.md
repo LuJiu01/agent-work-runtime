@@ -193,7 +193,7 @@ o200k 分词器，这个数造不出来。仓库公开 benchmark 的那组对比
 node --test test/*.test.js
 ```
 
-47 个用例，零依赖，分三档：
+50 个用例，零依赖，分三档：
 
 - `test/bridge.test.js` —— 起真实的 `server.js` 子进程、打真实 HTTP 请求，PATH 上放一个
   假 `awr`（`test/fixtures/stub-awr.js`）。覆盖请求来源边界、命令构造、子进程输出、
@@ -203,7 +203,9 @@ node --test test/*.test.js
   详情与原始响应是否配套、迟到响应（成功与失败）的丢弃、刷新后旧响应的作废。
 - `test/packet-size.test.js` —— 同样在替身上跑真正的 `renderPacketSize()` 和
   `doCompile()`。覆盖编译后体积面板会不会填上、三条数字是否原样取自 AWR、
-  空态有没有承诺做不到的事、换一次编译旧数字会不会残留。
+  空态有没有承诺做不到的事、换一次编译旧数字会不会残留。另外三条查页面自身的一致性：
+  每个 `?` 都有对应的说明段落（点了没反应的按钮界面上看不出来）、没有打不开的说明、
+  主区不再有固定宽度上限。
 
 CI 见 `.github/workflows/inspector.yml`。
 

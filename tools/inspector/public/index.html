@@ -250,12 +250,19 @@
         <div class="panel lift">
           <header>
             <h2>参数</h2>
+            <button class="why" data-why="params" aria-label="这是什么">?</button>
             <span class="sub">与 CLI 一一对应</span>
           </header>
+          <p class="why-note" data-note="params" hidden>
+            这四个参数和 <code>awr context compile</code> 的选项一一对应，下面那条命令就是实时拼出来的。
+            <b>work</b> 是要给哪件活准备上下文；<b>goal</b> 是它服务于哪个目标，留空用项目默认；
+            <b>budget</b> 是渲染文本的 token 上限，它比必需内容还小时 AWR 会直接拒绝编译；
+            <b>intent</b> 是一句话说明这次要干什么，帮它挑内容。
+          </p>
           <div class="body">
             <div class="form">
               <div class="field">
-                <label for="fWork">work <button class="why" data-why="fWork" aria-label="这是什么">?</button></label>
+                <label for="fWork">work</label>
                 <select id="fWork"></select>
                 <span class="help">要为哪个工作项准备上下文。</span>
               </div>
