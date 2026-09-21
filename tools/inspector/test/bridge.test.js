@@ -480,7 +480,7 @@ test('budget 放得到 AWR 的上限，界面不该再卡在 16000', async () =>
   assert.ok(r.command.includes('--budget 100000'), `预算没透传: ${r.command}`);
 });
 
-test('超过 AWR 上限的 budget 不往下传', async () => {
+test('超过 AWR 上限的 budget 直接拒绝，不悄悄换成默认值', async () => {
   const r = await (
     await fetch(`${bridge.base}/api/context/compile`, {
       method: 'POST',
@@ -488,6 +488,10 @@ test('超过 AWR 上限的 budget 不往下传', async () => {
       body: JSON.stringify({ work: 'RECON-001', budget: 100001 }),
     })
   ).json();
-  // 超限就不带 --budget，让 AWR 用默认值，而不是跑一趟拿回 InvalidInput
-  assert.ok(!r.command.includes('--budget'), `不该透传超限的预算: ${r.command}`);
+  // 之前是不带 --budget 让 AWR 用默认 5000——一个 105000 的请求会以 5000 跑一遍再失败。
+  // 现在明确拒，错误里写清范围。
+  assert.equal(r.ok, false);
+  assert.equal(r.error.code, 'BadRequest');
+  assert.ok(/100000/.test(r.error.message), `错误信息要给出范围: ${r.error.message}`);
+  assert.ok(!r.command, '不该起子进程');
 });

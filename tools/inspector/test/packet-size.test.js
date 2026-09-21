@@ -160,3 +160,97 @@ test('主区不设固定宽度上限', () => {
   assert.ok(mainRule, '没找到 main 的样式规则');
   assert.ok(!/max-width/.test(mainRule[0]), `main 不该再有宽度上限: ${mainRule[0].trim()}`);
 });
+
+// ───────────── 复核提出的两个 P2 ─────────────
+
+/** BudgetExceeded 的真实形状：没有报告，只有 details.required。 */
+function budgetExceeded(required, budget) {
+  return {
+    ok: false,
+    command: `awr context compile --work RECON-040 --budget ${budget}`,
+    error: {
+      code: 'BudgetExceeded',
+      message: `context budget exceeded: required ${required}, budget ${budget}`,
+      details: { required, budget },
+    },
+  };
+}
+
+test('重试按钮的预算不会超过 AWR 的上限（required = 95,000）', async () => {
+  const budgets = [];
+  global.fetch = async (url, opts) => {
+    const body = JSON.parse(opts.body);
+    budgets.push(body.budget);
+    // 第一次：超预算；第二次（按钮触发）：成功
+    return {
+      json: async () => (budgets.length === 1
+        ? budgetExceeded(95000, 16000)
+        : compileResponse({ total: 96000, required: 95000, budget: 100000 })),
+    };
+  };
+
+  await app.doCompile();
+
+  const btn = $('breakdown').find(
+    (el) => el.tagName === 'BUTTON' && el.textContent.includes('并重编译')
+  );
+  assert.ok(btn, '95,000 在上限之内，应该给重试按钮');
+  // 1.1 倍余量算出来是 104,500，但桥接和 AWR 都是 100,000 封顶——按钮不能超
+  assert.ok(btn.textContent.includes('100,000'), `按钮文案: ${btn.textContent}`);
+
+  btn.click();
+  await new Promise((r) => setTimeout(r, 0));
+  // 让 doCompile 跑完
+  await new Promise((r) => setTimeout(r, 0));
+
+  assert.equal(budgets[1], 100000, `重试时实际发出的预算: ${budgets[1]}`);
+  assert.equal($('ctxBig').textContent, '96,000', '重试之后应当成功并显示新结果');
+});
+
+test('必需内容超过上限时，不给一个必然失败的按钮', async () => {
+  global.fetch = async () => ({ json: async () => budgetExceeded(120000, 100000) });
+  await app.doCompile();
+
+  const box = $('breakdown');
+  const btn = box.find((el) => el.tagName === 'BUTTON' && el.textContent.includes('并重编译'));
+  assert.equal(btn, null, '120,000 超过上限，任何预算都编不出来，不该有重试按钮');
+  assert.ok(box.textContent.includes('超过 AWR 的上限'), box.textContent);
+  assert.ok(box.textContent.includes('120,000'), '要把必需量说出来');
+});
+
+test('先成功再失败，上一次的体积和省略不能留在页面上', async () => {
+  // 第一次：WORK-A 成功，带一块被省略的内容
+  global.fetch = async () => ({
+    json: async () => compileResponse({
+      total: 1234,
+      required: 900,
+      budget: 4000,
+      omitted: [{ key: 'change:AAA:BBB', section: 'delta', reason: 'insufficient_budget_for_whole_chunk' }],
+    }),
+  });
+  await app.doCompile();
+  assert.equal($('ctxBig').textContent, '1,234');
+  assert.equal($('omittedBox').hidden, false);
+  assert.ok($('omittedList').textContent.includes('change:AAA:BBB'));
+
+  // 第二次：WORK-B 失败，且没有报告可渲染
+  $('fWork').value = 'RECON-013';
+  global.fetch = async () => ({
+    json: async () => ({
+      ok: false,
+      command: 'awr context compile --work RECON-013',
+      error: { code: 'BudgetExceeded', message: 'context budget exceeded: required 120000, budget 4000', details: { required: 120000, budget: 4000 } },
+    }),
+  });
+  await app.doCompile();
+
+  // 大数字、体积图、省略折叠区、头部计数、预览——全部不能是 A 的
+  assert.equal($('ctxBig').textContent, '—', '大数字还停在上一次的 1,234');
+  assert.ok(!chartText().includes('1,234'), `体积图还留着上一次的数: ${chartText()}`);
+  assert.equal($('omittedBox').hidden, true, '省略折叠区应当隐藏');
+  assert.ok(!$('omittedList').textContent.includes('change:AAA:BBB'), '上一次的省略 id 还在');
+  assert.equal($('packetTotal').textContent, '', '头部的 token 计数还留着');
+  assert.equal($('packetPreview').textContent, '', '上一次的渲染文本还留着');
+  // 错误本身要显示出来
+  assert.ok($('breakdown').textContent.includes('BudgetExceeded'));
+});

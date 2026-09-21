@@ -174,7 +174,7 @@ o200k 分词器，这个数造不出来。仓库公开 benchmark 的那组对比
 node --test test/*.test.js
 ```
 
-45 个用例，零依赖，分三档：
+48 个用例，零依赖，分三档：
 
 - `test/bridge.test.js` —— 起真实的 `server.js` 子进程、打真实 HTTP 请求，PATH 上放一个
   假 `awr`（`test/fixtures/stub-awr.js`）。覆盖请求来源边界、命令构造、子进程输出、
@@ -186,7 +186,8 @@ node --test test/*.test.js
   `doCompile()`。覆盖编译后体积面板会不会填上、三条数字是否原样取自 AWR、
   空态有没有承诺做不到的事、换一次编译旧数字会不会残留。另外三条查页面自身的一致性：
   每个 `?` 都有对应的说明段落（点了没反应的按钮界面上看不出来）、没有打不开的说明、
-  主区不再有固定宽度上限。
+  主区不再有固定宽度上限。再三条守 `BudgetExceeded` 的处理：重试按钮不超过 AWR 的上限、
+  必需量本身超上限时不给必然失败的按钮、先成功再失败时上一次的数字不残留。
 
 CI 见 `.github/workflows/inspector.yml`。
 

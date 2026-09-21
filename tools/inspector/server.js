@@ -525,10 +525,17 @@ const routes = {
     const goal = asKey(body.goal);
     if (goal) extra.push('--goal', goal);
 
-    // 上限跟着 AWR 走：crates/awr-context/src/budget.rs 里是 1..100000，
-    // 超了它直接回 InvalidInput。这里先挡住，省得跑一趟子进程。
-    const budget = Number(body.budget);
-    if (Number.isInteger(budget) && budget >= 500 && budget <= 100000) {
+    // 上限跟着 AWR 走：crates/awr-context/src/budget.rs 里是 1..100000。
+    // 超限就明确拒绝。之前是悄悄不传 --budget 让 AWR 用默认的 5000——
+    // 结果一个 105000 的请求会以 5000 跑一遍再失败，谁也看不懂发生了什么。
+    if (body.budget !== undefined && body.budget !== null && body.budget !== '') {
+      const budget = Number(body.budget);
+      if (!Number.isInteger(budget) || budget < 500 || budget > 100000) {
+        return {
+          ok: false,
+          error: { code: 'BadRequest', message: 'budget 必须是 500 到 100000 之间的整数' },
+        };
+      }
       extra.push('--budget', String(budget));
     }
 

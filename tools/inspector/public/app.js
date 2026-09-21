@@ -195,6 +195,9 @@
   ];
   const queueMeta = (k) => QUEUES.find((q) => q.key === k) || { label: k || '—', dot: '', why: '' };
 
+  /** AWR 的预算上限（crates/awr-context/src/budget.rs 里是 1..100000）。桥接和这里必须一致。 */
+  const BUDGET_MAX = 100000;
+
   // ───────────────────────── 代际守卫 ─────────────────────────
 
   /**
@@ -530,16 +533,25 @@
     // AWR 会在 details 里给出实际需要多少 token，直接做成一个按钮，省得人自己算。
     const required = error && error.details && Number(error.details.required);
     if (code === 'BudgetExceeded' && Number.isFinite(required)) {
-      const target = Math.min(200000, Math.ceil((required * 1.1) / 500) * 500);
-      const act = el('div', 'actions');
-      const bump = el('button', 'btn', `把 budget 调到 ${group(target)} 并重编译`);
-      bump.addEventListener('click', () => {
-        $('fBudget').value = String(target);
-        updateCliMirror();
-        doCompile();
-      });
-      act.appendChild(bump);
-      box.appendChild(act);
+      if (required > BUDGET_MAX) {
+        // 必需内容本身就超过了 AWR 的上限，没有任何预算能编译成功——
+        // 给按钮就是骗人，说清楚原因。
+        box.appendChild(el('div', 'msg',
+          `必需内容就有 ${group(required)} tokens，已经超过 AWR 的上限 ${group(BUDGET_MAX)}。` +
+          '调预算解决不了，得减少这件活关联的规则、依赖或源引文。'));
+      } else {
+        // 留 10% 余量，但不能超过 AWR 的上限——超了桥接会拒，等于白点一次。
+        const target = Math.min(BUDGET_MAX, Math.ceil((required * 1.1) / 500) * 500);
+        const act = el('div', 'actions');
+        const bump = el('button', 'btn', `把 budget 调到 ${group(target)} 并重编译`);
+        bump.addEventListener('click', () => {
+          $('fBudget').value = String(target);
+          updateCliMirror();
+          doCompile();
+        });
+        act.appendChild(bump);
+        box.appendChild(act);
+      }
     }
     if (command) {
       const cmd = el('div', 'cmd');
@@ -1137,12 +1149,11 @@
 
     // 拿不到任何报告才算真失败。
     if (failure && !ctx) {
+      // 先按「没有编译结果」把所有面板归零——体积、大数字、省略折叠区、组成、
+      // 完整性、预览——否则上一次成功的数字会留在页面上，和这次的错误摆在一起。
+      renderCompile();
       clear($('breakdown'));
       $('breakdown').appendChild(errorBlock(failure.error, failure.command));
-      clear($('completeBody'));
-      setText('packetTotal', '');
-      setText('packetNote', '');
-      setText('packetPreview', '');
       setText('compileHint', '编译失败。');
       return;
     }
@@ -1174,11 +1185,13 @@
     const bd = $('breakdown');
     clear(bd);
     if (!ctx) {
-      const ob = $('omittedBox');
-      if (ob) ob.hidden = true;
+      resetOmissions();
       bd.appendChild(stateBlock('empty', '还没有编译', '在上面选好参数，点「编译」。'));
       clear($('completeBody'));
       $('completeBody').appendChild(stateBlock('empty', '—', '编译之后这里会显示有没有内容被省略。'));
+      setText('packetTotal', '');
+      setText('packetNote', '');
+      setText('completeSub', '');
       setText('packetPreview', '');
       return;
     }
@@ -1282,10 +1295,21 @@
    * 逐条列出来只会把真正要看的东西（缺哪一维、少什么证据）挤到屏幕外。
    * 所以先按 section 归并给出数量，原始 id 收进折叠区，需要的人再展开。
    */
+  /** 折叠区归零：隐藏之外还要清空内容。只隐藏的话旧 id 留在 DOM 里，之后一显示就是上一次的。 */
+  function resetOmissions() {
+    const box = $('omittedBox');
+    if (box) {
+      box.hidden = true;
+      box.open = false;
+    }
+    setText('omittedSummary', '');
+    setText('omittedList', '');
+  }
+
   function renderOmissions(ctx, cb) {
     const box = $('omittedBox');
     if (!ctx.omissions.length) {
-      if (box) box.hidden = true;
+      resetOmissions();
       return;
     }
 
