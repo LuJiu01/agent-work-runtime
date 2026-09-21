@@ -1,11 +1,11 @@
 /**
- * 概览页「上下文体积」那张图的回归。
+ * 上下文页「这个包有多大」的回归。
  *
- * 它曾经只读 `context_sample`——一个只存在于演示数据里的字段——所以在真实项目上
- * 永远是空的，空态却写着「去编译一次这里就会显示」。这些用例守住两点：
- * 编译之后图真的会填上，以及空态不再承诺做不到的事。
+ * 这块度量原来在概览页，只读 `context_sample`——一个只存在于演示数据里的字段——
+ * 所以真实项目上永远是空的，空态却写着「去编译一次这里就会显示」。
+ * 现在它就画在编译按钮下面，和产生它的动作同一页。
  *
- * 跑：node --test test/overview-chart.test.js
+ * 跑：node --test test/packet-size.test.js
  */
 
 'use strict';
@@ -19,8 +19,8 @@ install();
 const app = require('../public/app.js');
 
 const $ = (id) => document.getElementById(id);
-const chartText = () => $('cmpChart').textContent;
-const noteText = () => document.querySelector('[data-note="contextChart"]').textContent;
+const chartText = () => $('sizeChart').textContent;
+const noteText = () => $('sizeNote').textContent;
 
 /** 一份真实形状的编译响应。 */
 function compileResponse({ total = 6256, required = 1930, budget = 16000, omitted = [] } = {}) {
@@ -45,11 +45,10 @@ function compileResponse({ total = 6256, required = 1930, budget = 16000, omitte
 
 beforeEach(() => {
   app.state.mode = 'live';
-  app.state.lastCompile = null;
   app.state.compile = null;
-  app.state.status = { contextSample: null };
+  app.state.status = {};
   app.state.raw = {};
-  $('cmpChart').textContent = '';
+  $('sizeChart').textContent = '';
   $('fWork').value = 'RECON-040';
   $('fGoal').value = '';
   $('fBudget').value = '16000';
@@ -57,29 +56,28 @@ beforeEach(() => {
 });
 
 test('还没编译时，空态不承诺做不到的事', () => {
-  app.renderContextChart(app.state.status);
+  app.renderPacketSize(null);
 
-  assert.equal($('heroBig').textContent, '—');
-  assert.ok(chartText().includes('还没有编译记录'));
+  assert.equal($('ctxBig').textContent, '—');
+  assert.ok(chartText().includes('还没有编译'));
   // 旧文案说「显示这个项目自己的体积对比」——那个对比在真实项目上造不出来，
   // 不能再出现在空态里。
   assert.ok(!chartText().includes('体积对比'), `空态不该再提「体积对比」：${chartText()}`);
-  assert.ok(chartText().includes('实测体积'), '应说明编译后显示的是那次编译的实测值');
+  assert.ok(chartText().includes('实测体积'), '应说明编译后显示的是这个包的实测值');
 });
 
-test('编译之后概览那张图会填上（这正是原来的 bug）', async () => {
+test('编译之后同一页就填上了，不用切页面', async () => {
   global.fetch = async () => ({ json: async () => compileResponse() });
 
   await app.doCompile();
 
-  // doCompile 会自己把概览那张图重画一遍，不用切页面
-  assert.equal($('heroBig').textContent, '6,256');
-  assert.ok($('heroCap').textContent.includes('RECON-040'), '大数字旁边要写明是哪个工作项');
-  assert.equal($('cmpSub').textContent, '本项目实测');
+  assert.equal($('ctxBig').textContent, '6,256');
+  assert.ok($('ctxCap').textContent.includes('RECON-040'), '大数字旁边要写明是哪个工作项');
+  assert.equal($('sizeSub').textContent, '用掉预算的 39%');
 
   const text = chartText();
   assert.ok(text.includes('必需内容') && text.includes('1,930 tokens'), text);
-  assert.ok(text.includes('这次编译装进去的') && text.includes('6,256 tokens'), text);
+  assert.ok(text.includes('这次装进去的') && text.includes('6,256 tokens'), text);
   assert.ok(text.includes('预算上限') && text.includes('16,000 tokens'), text);
 });
 
@@ -93,7 +91,7 @@ test('三条都来自 AWR，不做推算', async () => {
   assert.ok(text.includes('1,561 tokens'), 'required 要原样取自 required_tokens');
   assert.ok(text.includes('4,998 tokens'), 'total 要原样取自 token_estimate');
   assert.ok(text.includes('5,000 tokens'), 'budget 要原样取自 token_budget');
-  // 演示数据里那个「读完整源码」的对比，真实项目上不该出现
+  // 语料体积测不出来，不许出现这类条目
   assert.ok(!text.includes('读完整源码'), '真实项目不得出现无法测量的对比条');
 });
 
@@ -105,36 +103,26 @@ test('有内容被省略时，注脚说出省了几块', async () => {
   global.fetch = async () => ({ json: async () => compileResponse({ omitted }) });
   await app.doCompile();
 
-  assert.ok($('cmpNote').textContent.includes('省略了 2 块'), $('cmpNote').textContent);
+  assert.ok(noteText().includes('省略了 2 块'), noteText());
 });
 
-test('演示模式仍走公开 benchmark 那三条，并标注来源', () => {
-  app.state.mode = 'demo';
-  app.renderContextChart({
-    contextSample: {
-      full_corpus_tokens: 18955,
-      json_dump_tokens: 12748,
-      compiled_tokens: 4998,
-      note: '公开 benchmark 值，不是本项目实测。',
-    },
-  });
-
-  const text = chartText();
-  assert.ok(text.includes('读完整源码') && text.includes('18,955 tokens'), text);
-  assert.ok(text.includes('AWR 编译包'), text);
-  assert.equal($('heroBig').textContent, '−73.6%');
-  assert.equal($('cmpSub').textContent, '公开基准值');
-  assert.ok($('cmpNote').textContent.includes('不是本项目实测'), '必须标注这不是本项目的数');
-});
-
-test('说明文字跟着当前显示的那张图走', async () => {
-  // 空态：讲编译后会看到什么
-  app.renderContextChart(app.state.status);
-  assert.ok(noteText().includes('编译一次之后'), noteText());
-
-  // 实测：讲这三条各是什么
+test('没有省略时也说清楚', async () => {
   global.fetch = async () => ({ json: async () => compileResponse() });
   await app.doCompile();
-  assert.ok(noteText().includes('必需内容是不能省的部分'), noteText());
-  assert.ok(!noteText().includes('不用 AWR'), '实测图不该沿用 benchmark 的说法');
+  assert.ok(noteText().includes('没有内容被省略'), noteText());
+});
+
+test('换一次编译，数字跟着换', async () => {
+  global.fetch = async () => ({ json: async () => compileResponse() });
+  await app.doCompile();
+  assert.equal($('ctxBig').textContent, '6,256');
+
+  global.fetch = async () => ({
+    json: async () => compileResponse({ total: 900, required: 700, budget: 4000 }),
+  });
+  $('fBudget').value = '4000';
+  await app.doCompile();
+  assert.equal($('ctxBig').textContent, '900', '旧的数不该留在页面上');
+  assert.ok(chartText().includes('4,000 tokens'));
+  assert.ok(!chartText().includes('16,000 tokens'), '上一次的预算不该还在');
 });

@@ -76,7 +76,7 @@
 
     <!-- ════════ 概览 ════════ -->
     <section class="view" id="view-overview">
-      <div class="hero">
+      <div class="view-head">
         <div>
           <span class="eyebrow">awr status</span>
           <h1>现在该干什么</h1>
@@ -89,31 +89,11 @@
             也不替代 CLI 或 MCP。
           </p>
         </div>
-        <div class="headline">
-          <span class="big" id="heroBig">—</span>
-          <span class="cap" id="heroCap">上下文压缩率</span>
-        </div>
       </div>
 
       <div class="stack-lg">
 
         <div class="strip" id="statusStrip"></div>
-
-        <div class="panel lift">
-          <header>
-            <h2>每次编译的上下文体积</h2>
-            <button class="why" data-why="contextChart" aria-label="这是什么">?</button>
-            <span class="sub" id="cmpSub"></span>
-          </header>
-          <p class="why-note" data-note="contextChart" hidden>
-            agent 每开一个新会话，都要先「读懂项目」。<b>不用 AWR</b> 时它得把源文件整个读一遍；
-            <b>用 AWR</b> 时它只读一个编译好的上下文包。这张图比的就是这两者的 token 数——越短越省钱、越不容易超出模型的上下文窗口。
-          </p>
-          <div class="body">
-            <div class="cmp" id="cmpChart"></div>
-            <p class="figure-note" id="cmpNote"></p>
-          </div>
-        </div>
 
         <div class="grid two">
           <div class="panel">
@@ -251,13 +231,19 @@
 
     <!-- ════════ 上下文 ════════ -->
     <section class="view" id="view-context" hidden>
-      <div class="view-head">
-        <span class="eyebrow">awr context compile</span>
-        <h1>编译一个上下文包</h1>
-        <p class="lede">
-          选好工作项和预算，AWR 会挑出这个任务真正需要的规则、验收标准、阻塞和源引文，
-          压成一段有上限的文本，交给 agent。
-        </p>
+      <div class="hero">
+        <div>
+          <span class="eyebrow">awr context compile</span>
+          <h1>编译一个上下文包</h1>
+          <p class="lede">
+            选好工作项和预算，AWR 会挑出这个任务真正需要的规则、验收标准、阻塞和源引文，
+            压成一段有上限的文本，交给 agent。
+          </p>
+        </div>
+        <div class="headline">
+          <span class="big" id="ctxBig">—</span>
+          <span class="cap" id="ctxCap">还没有编译</span>
+        </div>
       </div>
 
       <div class="stack-lg">
@@ -313,6 +299,23 @@
                 <button class="copy" data-copy-target="cliMirror">复制</button>
               </div>
             </div>
+          </div>
+        </div>
+
+        <div class="panel lift">
+          <header>
+            <h2>这个包有多大</h2>
+            <button class="why" data-why="size" aria-label="这是什么">?</button>
+            <span class="sub" id="sizeSub"></span>
+          </header>
+          <p class="why-note" data-note="size" hidden>
+            三条都是 AWR 这次编译实际给出的数。<b>必需内容</b>是不能省的部分，
+            预算比它还小 AWR 会直接拒绝编译；<b>装进去的</b>是 agent 真正会读到的量；
+            <b>预算上限</b>是你设的硬线。装进去的贴近上限时，说明有东西被挤出去了。
+          </p>
+          <div class="body">
+            <div class="cmp" id="sizeChart"></div>
+            <p class="figure-note" id="sizeNote"></p>
           </div>
         </div>
 

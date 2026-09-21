@@ -180,7 +180,6 @@
     workDetail: {},        // key -> 详情
     sources: null,
     compile: null,
-    lastCompile: null,   // 概览那张图用：最近一次编译的实测值
     raw: {},               // 每个视图最近一次的原始 JSON
     queueTab: 'blocked',   // 概览里队列面板当前选的队列
     workFilter: 'all',
@@ -381,7 +380,6 @@
       orgState: pick(raw, M.orgState, null),
       freshness: pick(raw, M.freshness, null),
       guidance: pick(raw, M.guidance, null),
-      contextSample: raw && raw.context_sample ? raw.context_sample : null,
     };
   }
 
@@ -465,6 +463,7 @@
 
     return {
       rendered: pick(raw, M.rendered, ''),
+      work: pick(raw, ['work_context.identity.work_item_key'], null),
       sections,
       chunkTotal: chunks.length,
       dimensions,
@@ -616,7 +615,6 @@
       strip.appendChild(kv);
     }
 
-    renderContextChart(s);
     renderQueueTabs();
     renderQueueList();
     renderGaps(s);
@@ -627,75 +625,34 @@
     setText('mcpSub', state.mode === 'live' ? '本工具走 CLI，agent 走 MCP' : '演示模式');
   }
 
-  function renderContextChart(s) {
-    const wrap = $('cmpChart');
-    clear(wrap);
-    const sample = s.contextSample;
-    const note = document.querySelector('[data-note="contextChart"]');
-
-    // 真实项目：用最近一次编译的实测值。
-    // 「读全量源码要多少 token」AWR 不报，浏览器里也没法分词，所以那个对比
-    // 只在演示数据里有（标注为公开 benchmark），真实项目不造这个数。
-    if (!sample && state.lastCompile) {
-      renderCompileGauge(wrap, state.lastCompile, note);
-      return;
-    }
-
-    if (!sample) {
-      setText('heroBig', '—');
-      setText('heroCap', '还没有编译记录');
-      wrap.appendChild(stateBlock('empty', '还没有编译记录',
-        '去「上下文」页编译一次，这里就会显示那次编译的实测体积。'));
-      setText('cmpNote', '');
-      setText('cmpSub', '');
-      if (note) {
-        note.textContent = '编译一次之后，这里显示那个包实际占了多少 token、其中多少是必需内容、离预算上限还有多远。';
-      }
-      return;
-    }
-
-    const full = sample.full_corpus_tokens;
-    const rows = [
-      { label: '读完整源码', tokens: full, lead: false },
-      { label: 'CLI JSON 全量响应', tokens: sample.json_dump_tokens, lead: false },
-      { label: 'AWR 编译包', tokens: sample.compiled_tokens, lead: true },
-    ];
-
-    for (const r of rows) {
-      const pct = full ? (r.tokens / full) * 100 : 0;
-      const row = el('div', 'cmp-row' + (r.lead ? ' is-lead' : ''));
-      const label = el('div', 'cmp-label');
-      label.appendChild(document.createTextNode(r.label + ' '));
-      label.appendChild(el('span', 'num', group(r.tokens) + ' tokens'));
-      if (r.tokens !== full) {
-        label.appendChild(el('span', 'delta', '−' + (100 - pct).toFixed(1) + '%'));
-      }
-      row.appendChild(label);
-      const track = el('div', 'cmp-track');
-      const fill = el('div', 'cmp-fill');
-      fill.style.width = pct.toFixed(1) + '%';
-      track.appendChild(fill);
-      row.appendChild(track);
-      wrap.appendChild(row);
-    }
-
-    const saved = full ? (100 - (sample.compiled_tokens / full) * 100).toFixed(1) : '0';
-    setText('heroBig', '−' + saved + '%');
-    setText('heroCap', '上下文 token 对比全量源码');
-    setText('cmpSub', sample.note ? '公开基准值' : '本项目实测');
-    setText('cmpNote', sample.note || '');
-  }
-
   /**
-   * 最近一次编译的实测值。三条都是 AWR 真给的数，不做任何推算：
-   * 必需内容 / 这次装进去的 / 预算上限。
+   * 这个包有多大。
+   *
+   * 三条都是 AWR 这次编译直接给出的数，不做任何推算：必需内容 / 装进去的 / 预算上限。
+   * 它就画在编译按钮下面——度量和产生它的动作在同一页，不必跨页保存状态。
+   *
+   * 「读全量源码要多少 token」这类对比这里做不出来：AWR 不报语料体积，
+   * 浏览器里也没有 o200k 分词器。造一个数不如不做。
    */
-  function renderCompileGauge(wrap, last, note) {
-    const budget = last.budget || last.total || 1;
+  function renderPacketSize(ctx) {
+    const wrap = $('sizeChart');
+    clear(wrap);
+
+    if (!ctx || ctx.total == null) {
+      setText('ctxBig', '—');
+      setText('ctxCap', '还没有编译');
+      setText('sizeSub', '');
+      setText('sizeNote', '');
+      wrap.appendChild(stateBlock('empty', '还没有编译',
+        '在上面选好工作项和预算，点「编译」，这里会显示这个包的实测体积。'));
+      return;
+    }
+
+    const budget = ctx.budget || ctx.total || 1;
     const rows = [
-      { label: '必需内容', tokens: last.required, lead: false },
-      { label: '这次编译装进去的', tokens: last.total, lead: true },
-      { label: '预算上限', tokens: last.budget, lead: false },
+      { label: '必需内容', tokens: ctx.requiredTokens, lead: false },
+      { label: '这次装进去的', tokens: ctx.total, lead: true },
+      { label: '预算上限', tokens: ctx.budget, lead: false },
     ].filter((r) => Number.isFinite(r.tokens));
 
     for (const r of rows) {
@@ -713,18 +670,13 @@
       wrap.appendChild(row);
     }
 
-    setText('heroBig', group(last.total));
-    setText('heroCap', 'tokens · ' + last.work);
-    setText('cmpSub', '本项目实测');
-    setText('cmpNote', last.omitted
-      ? `最近一次编译（${last.work}），因预算省略了 ${last.omitted} 块。`
-      : `最近一次编译（${last.work}），没有内容被省略。`);
-    if (note) {
-      note.textContent =
-        'agent 每开一个新会话都要先搞清楚项目状态。这三条是最近一次编译的实测：'
-        + '必需内容是不能省的部分，装进去的是 agent 实际会读到的量，预算上限是你设的硬线。'
-        + '装进去的贴近上限时，说明有东西被挤出去了。';
-    }
+    const used = ctx.budget ? Math.round((ctx.total / ctx.budget) * 100) : null;
+    setText('ctxBig', group(ctx.total));
+    setText('ctxCap', 'tokens' + (ctx.work ? ' · ' + ctx.work : ''));
+    setText('sizeSub', used != null ? `用掉预算的 ${used}%` : '');
+    setText('sizeNote', ctx.omissions.length
+      ? `因预算省略了 ${ctx.omissions.length} 块，详见右侧完整性面板。`
+      : '没有内容被省略。');
   }
 
   function renderQueueTabs() {
@@ -1180,6 +1132,7 @@
     }
 
     btn.disabled = false;
+    if (ctx) ctx.work = ctx.work || work;
     state.compile = ctx;
 
     // 拿不到任何报告才算真失败。
@@ -1195,18 +1148,6 @@
     }
 
     renderCompile();
-
-    // 记下这次编译，概览页那张图靠它显示本项目的实测体积。
-    if (ctx && ctx.total != null) {
-      state.lastCompile = {
-        work,
-        total: ctx.total,
-        required: ctx.requiredTokens,
-        budget: ctx.budget,
-        omitted: ctx.omissions.length,
-      };
-      if (state.status) renderContextChart(state.status);
-    }
 
     if (failure) {
       // 报告有，只是 AWR 判定它不完整——把它的原话放在完整性面板顶上。
@@ -1228,6 +1169,8 @@
 
   function renderCompile() {
     const ctx = state.compile;
+    renderPacketSize(ctx);
+
     const bd = $('breakdown');
     clear(bd);
     if (!ctx) {
@@ -1609,6 +1552,7 @@
         '<p>你的 coding agent 每开一个新会话，都得先搞清楚「这个项目在干嘛、我该接着做什么」。AWR 就是替它记住这些事的那一层。</p>',
         '<p>AWR Inspector 是给<b>人</b>看的那一面：agent 看到的状态，你也能看到同一份。</p>',
         '<div class="tour-art"><div class="row"><span>源文件</span><span class="bar on"></span></div><div class="row"><span>AWR 索引</span><span class="bar on"></span></div><div class="row"><span>上下文包</span><span class="bar on bar-short"></span></div></div>',
+        '<p>仓库公开 benchmark 里，读全量源码要 <code>18,955</code> tokens，AWR 编译出的包最大 <code>4,998</code>——少 73.6%。那是 39 个活跃任务上的测量值，不是你项目的数；你自己项目的实测在「上下文」页编译一次就能看到。</p>',
       ].join(''),
     },
     {
@@ -1770,7 +1714,7 @@
   if (typeof module !== 'undefined' && module.exports) {
     module.exports = {
       createGenerationGuard, state, detailGuard, renderWorkDetail,
-      renderContextChart, doCompile,
+      renderPacketSize, doCompile,
     };
   }
 })();
