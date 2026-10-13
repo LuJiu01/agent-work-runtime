@@ -21,6 +21,465 @@ const WRITER: &str = "synthetic-writer-credential-for-http-fixtures";
 const READER: &str = "synthetic-reader-credential-for-http-fixtures";
 const COLLEAGUE: &str = "synthetic-colleague-credential-for-http-fixtures";
 
+fn diagnostic(result: Value, path: &str, constraint: &str) -> Value {
+    error(result.clone(), "InvalidInput");
+    let detail = result["structuredContent"].clone();
+    assert_eq!(detail["invalid_field"], path, "{result}");
+    assert_eq!(detail["constraint"], constraint, "{result}");
+    assert!(!result.to_string().contains("private-fixture"));
+    assert!(!result.to_string().contains("unexpected-input-name"));
+    detail
+}
+
+#[tokio::test]
+async fn personal_parser_diagnostics_preserve_optional_nulls_and_exact_receipts() {
+    for mode in ["flat", "hierarchical"] {
+        let a = ProjectFixture::new("Review parser attribution");
+        let b = ProjectFixture::new("Separate parser attribution");
+        let config = registry(&a, &b);
+        let mut server = Server::start_mode(&config, mode).await;
+        let source = fs::read(a.root.join("work.yaml")).unwrap();
+        let started = ok(server
+            .call(
+                WRITER,
+                "awr_session_start",
+                start_args("alpha", "W", "parser", a.revision(), true),
+            )
+            .await);
+        let sid = started["session"]["id"].clone();
+        let revision = a.revision();
+        diagnostic(
+            server
+                .raw_call(
+                    WRITER,
+                    "awr_search",
+                    json!({"project":"alpha","kind":"private-fixture-kind","limit":-1}),
+                )
+                .await,
+            "/limit",
+            "parse",
+        );
+        assert_eq!(a.revision(), revision);
+        for (name, mut args, path, constraint) in [
+            (
+                "awr_session_claim",
+                json!({"action":"private-fixture-action","claim":"private-fixture-id","request_id":"mixed-claim"}),
+                "/claim",
+                "parse",
+            ),
+            (
+                "awr_session_checkpoint",
+                json!({"agent":null,"context_hash":"a".repeat(64),"digest":false,"next_action":"Review","request_id":"null-agent"}),
+                "/digest",
+                "type",
+            ),
+        ] {
+            args["project"] = json!("alpha");
+            args["session"] = sid.clone();
+            args["expected_revision"] = json!(a.revision());
+            let rejected = server.raw_call(WRITER, name, args.clone()).await;
+            let mut live = diagnostic(rejected, path, constraint);
+            let receipt = ok(server
+                .raw_call(
+                    WRITER,
+                    "awr_operation_get",
+                    json!({"project":"alpha","request_id":args["request_id"]}),
+                )
+                .await);
+            assert!(receipt["domain_receipts"].as_array().unwrap().is_empty());
+            live.as_object_mut().unwrap().remove("operation");
+            live.as_object_mut()
+                .unwrap()
+                .remove("receipt_project_revision");
+            assert_eq!(live, receipt["operation"]["result"]);
+            let revision = a.revision();
+            server.stop().await;
+            server = Server::start_mode(&config, mode).await;
+            let repeated = server.raw_call(WRITER, name, args).await;
+            let mut replay = diagnostic(repeated, path, constraint);
+            assert_eq!(replay["operation"]["replayed"], true);
+            replay.as_object_mut().unwrap().remove("operation");
+            replay
+                .as_object_mut()
+                .unwrap()
+                .remove("receipt_project_revision");
+            assert_eq!(live, replay);
+            assert_eq!(a.revision(), revision);
+        }
+        let session = ok(server
+            .raw_call(
+                WRITER,
+                "awr_session_get",
+                json!({"project":"alpha","session":sid}),
+            )
+            .await);
+        assert_eq!(session["session"]["status"], "active");
+        assert!(
+            session["claims"]
+                .as_array()
+                .unwrap()
+                .iter()
+                .any(|c| c["status"] == "active")
+        );
+        let saved = ok(server.call(WRITER, "awr_session_checkpoint", json!({"project":"alpha","session":sid,"expected_revision":a.revision(),"agent":null,"context_hash":"a".repeat(64),"digest":"Review","next_action":"Review"})).await);
+        assert_eq!(saved["checkpoint_save"]["actor"]["origin"], "undeclared");
+        assert!(saved.get("invalid_field").is_none());
+        assert_eq!(source, fs::read(a.root.join("work.yaml")).unwrap());
+        server.stop().await;
+    }
+}
+
+#[tokio::test]
+async fn personal_diagnostics_follow_the_actual_admission_rejection() {
+    for mode in ["flat", "hierarchical"] {
+        let a = ProjectFixture::new("Review admission diagnostics");
+        let b = ProjectFixture::new("Separate admission diagnostics");
+        let mut server = Server::start_mode(&registry(&a, &b), mode).await;
+        let start = ok(server
+            .call(
+                WRITER,
+                "awr_session_start",
+                start_args("alpha", "W", "admission", a.revision(), true),
+            )
+            .await);
+        let sid = start["session"]["id"].clone();
+        let revision = a.revision();
+        let source = fs::read(a.root.join("work.yaml")).unwrap();
+        let cases = [
+            (
+                "awr_search",
+                json!({"project":"alpha","limit":0,"text":false}),
+                "/text",
+                "type",
+            ),
+            (
+                "awr_search",
+                json!({"project":"alpha","kind":"private-fixture-kind","text":false}),
+                "/text",
+                "type",
+            ),
+            (
+                "awr_work_get",
+                json!({"project":"alpha","explain":"private-fixture-value"}),
+                "/explain",
+                "type",
+            ),
+            (
+                "awr_session_end",
+                json!({"project":"alpha","session":sid,"expected_revision":revision,"request_id":false}),
+                "/request_id",
+                "type",
+            ),
+            (
+                "awr_session_end",
+                json!({"project":"alpha","session":sid,"expected_revision":revision,"outcome":"ended"}),
+                "/request_id",
+                "required",
+            ),
+            (
+                "awr_session_end",
+                json!({"project":"alpha","session":sid,"expected_revision":revision}),
+                "/request_id",
+                "required",
+            ),
+            (
+                "awr_session_end",
+                json!({"project":"alpha","session":"private-fixture-id","expected_revision":revision,"request_id":"bad-session","outcome":false}),
+                "/session",
+                "format",
+            ),
+            (
+                "awr_session_end",
+                json!({"project":"alpha","conversation":false,"expected_revision":revision,"request_id":"bad-conversation","outcome":false}),
+                "/conversation",
+                "type",
+            ),
+        ];
+        for (name, args, path, constraint) in cases {
+            let rejected = server.raw_call(WRITER, name, args).await;
+            diagnostic(rejected, path, constraint);
+            assert_eq!(a.revision(), revision);
+        }
+        let denied = server
+            .raw_call(
+                READER,
+                "awr_session_end",
+                json!({"project":"alpha","request_id":false}),
+            )
+            .await;
+        error(denied.clone(), "RuleViolation");
+        assert!(denied["structuredContent"].get("invalid_field").is_none());
+        let stale = server.raw_call(WRITER, "awr_session_end", json!({"project":"alpha","session":sid,"outcome":false,"expected_revision":0,"request_id":"stale-diagnostic"})).await;
+        error(stale.clone(), "RevisionConflict");
+        assert!(stale["structuredContent"].get("invalid_field").is_none());
+        assert_eq!(a.revision(), revision);
+        assert_eq!(source, fs::read(a.root.join("work.yaml")).unwrap());
+        server.stop().await;
+    }
+}
+
+#[tokio::test]
+async fn personal_diagnostics_check_payload_type_and_survive_receipt_failure() {
+    let a = ProjectFixture::new("Review payload diagnostics");
+    let b = ProjectFixture::new("Separate payload diagnostics");
+    let config = registry(&a, &b);
+    let mut server = Server::start(&config).await;
+    let source = fs::read(a.root.join("work.yaml")).unwrap();
+    let args = json!({"project":"alpha","expected_revision":a.revision(),"request_id":"payload-type","event_type":"review.observed","summary":"Review the input","payload":false});
+    let rejected = server
+        .raw_call(WRITER, "awr_event_append", args.clone())
+        .await;
+    let mut normalized = diagnostic(rejected, "/payload", "type");
+    let receipt = ok(server
+        .call(
+            WRITER,
+            "awr_operation_get",
+            json!({"project":"alpha","request_id":"payload-type"}),
+        )
+        .await);
+    normalized.as_object_mut().unwrap().remove("operation");
+    normalized
+        .as_object_mut()
+        .unwrap()
+        .remove("receipt_project_revision");
+    assert_eq!(normalized, receipt["operation"]["result"]);
+    let revision = a.revision();
+    server.stop().await;
+    let mut server = Server::start(&config).await;
+    let repeated = server.raw_call(WRITER, "awr_event_append", args).await;
+    let mut replay = repeated["structuredContent"].clone();
+    assert_eq!(replay["operation"]["replayed"], true);
+    replay.as_object_mut().unwrap().remove("operation");
+    replay
+        .as_object_mut()
+        .unwrap()
+        .remove("receipt_project_revision");
+    assert_eq!(replay, normalized);
+    assert_eq!(a.revision(), revision);
+
+    let conn = rusqlite::Connection::open(a.root.join(".awr/state.db")).unwrap();
+    conn.execute_batch("CREATE TRIGGER fixture_deny_diagnostic_receipt BEFORE INSERT ON events WHEN new.event_type='mcp.operation_finished' BEGIN SELECT RAISE(ABORT,'synthetic diagnostic receipt failure'); END;").unwrap();
+    let bad = json!({"project":"alpha","expected_revision":a.revision(),"request_id":"lost-diagnostic","event_type":"review.observed","summary":"Review the input","payload":false});
+    let unknown = server
+        .raw_call(WRITER, "awr_event_append", bad.clone())
+        .await;
+    assert_eq!(unknown["isError"], true);
+    assert_eq!(unknown["structuredContent"]["write_outcome"], "unknown");
+    assert!(unknown["structuredContent"].get("invalid_field").is_none());
+    conn.execute_batch("DROP TRIGGER fixture_deny_diagnostic_receipt;")
+        .unwrap();
+    drop(conn);
+    let revision = a.revision();
+    server.stop().await;
+    let mut server = Server::start(&config).await;
+    let repeated = server.raw_call(WRITER, "awr_event_append", bad).await;
+    assert_eq!(repeated["structuredContent"]["write_outcome"], "unknown");
+    let recovered = server
+        .call(
+            WRITER,
+            "awr_operation_recover",
+            json!({"project":"alpha","request_id":"lost-diagnostic","expected_revision":revision}),
+        )
+        .await;
+    assert_eq!(recovered["structuredContent"]["write_outcome"], "unknown");
+    assert_eq!(a.revision(), revision);
+    assert_eq!(source, fs::read(a.root.join("work.yaml")).unwrap());
+    server.stop().await;
+}
+
+#[tokio::test]
+async fn legacy_personal_error_receipts_remain_unchanged_after_restart() {
+    use sha2::Digest;
+    let a = ProjectFixture::new("Review a legacy receipt");
+    let b = ProjectFixture::new("Separate legacy receipt");
+    let config = registry(&a, &b);
+    let mut server = Server::start(&config).await;
+    let started = ok(server
+        .call(
+            WRITER,
+            "awr_session_start",
+            start_args("alpha", "W", "legacy", a.revision(), true),
+        )
+        .await);
+    let original = json!({"session":started["session"]["id"],"outcome":false,"expected_revision":a.revision()});
+    let fingerprint = format!(
+        "{:x}",
+        sha2::Sha256::digest(
+            serde_json::to_vec(&json!({"tool":"awr_session_end","arguments":original})).unwrap()
+        )
+    );
+    let mut store = Store::open_existing(&a.root.join(".awr/state.db")).unwrap();
+    let operation = store
+        .begin_mcp_operation(
+            a.id,
+            a.revision(),
+            "writer",
+            "legacy-error",
+            "awr_session_end",
+            &fingerprint,
+        )
+        .unwrap();
+    let (saved, _) = store.finish_mcp_operation(a.id, operation.started_revision, &operation, json!({"code":"InvalidInput","message":"invalid input: tool arguments do not match the tool schema"}), true, false).unwrap();
+    let legacy = saved.result.unwrap();
+    drop(store);
+    let revision = a.revision();
+    server.stop().await;
+    let mut server = Server::start(&config).await;
+    let mut args = original;
+    args["project"] = json!("alpha");
+    args["request_id"] = json!("legacy-error");
+    let repeated = server.raw_call(WRITER, "awr_session_end", args).await;
+    error(repeated.clone(), "InvalidInput");
+    assert_eq!(repeated["structuredContent"]["operation"]["replayed"], true);
+    assert!(repeated["structuredContent"].get("invalid_field").is_none());
+    let inspected = ok(server
+        .call(
+            WRITER,
+            "awr_operation_get",
+            json!({"project":"alpha","request_id":"legacy-error"}),
+        )
+        .await);
+    assert_eq!(inspected["operation"]["result"], legacy);
+    assert_eq!(a.revision(), revision);
+    let session = ok(server
+        .call(
+            WRITER,
+            "awr_session_get",
+            json!({"project":"alpha","session":started["session"]["id"]}),
+        )
+        .await);
+    assert_eq!(session["session"]["status"], "active");
+    server.stop().await;
+}
+
+#[tokio::test]
+async fn personal_input_diagnostics_preserve_admission_and_durable_error_replay() {
+    for mode in ["flat", "hierarchical"] {
+        let a = ProjectFixture::new("Review diagnostic guidance");
+        let b = ProjectFixture::new("Separate diagnostic guidance");
+        let config = registry(&a, &b);
+        let mut server = Server::start_mode(&config, mode).await;
+        let source = fs::read(a.root.join("work.yaml")).unwrap();
+        let start = ok(server
+            .call(
+                WRITER,
+                "awr_session_start",
+                start_args("alpha", "W", "diagnostic-window", a.revision(), true),
+            )
+            .await);
+        let sid = start["session"]["id"].clone();
+
+        let revision = a.revision();
+        let read = server
+            .call(WRITER, "awr_work_get", json!({"project":"alpha","work":17}))
+            .await;
+        diagnostic(read, "/work", "type");
+        assert_eq!(a.revision(), revision);
+
+        let missing = server
+            .call(
+                WRITER,
+                "awr_session_end",
+                json!({"project":"alpha","session":sid,"expected_revision":a.revision()}),
+            )
+            .await;
+        diagnostic(missing, "/outcome", "required");
+
+        let checkpoint = server
+            .call(
+                WRITER,
+                "awr_session_checkpoint",
+                json!({"project":"alpha","session":sid,"expected_revision":a.revision(),
+                    "context_hash":"a".repeat(64),"digest":false,"next_action":"Review the guide"}),
+            )
+            .await;
+        diagnostic(checkpoint, "/digest", "type");
+
+        let evidence = server
+            .call(
+                WRITER,
+                "awr_evidence_record",
+                json!({"project":"alpha","expected_revision":a.revision(),"external_key":"guide-check",
+                    "evidence_type":"verification_report","level":"unknown","summary":"Review the guide",
+                    "locator":"guide-report.json","scope":"guide"}),
+            )
+            .await;
+        diagnostic(evidence, "/scope", "type");
+
+        let bad = json!({"project":"alpha","session":sid,"expected_revision":a.revision(),
+            "outcome":"ended","request_id":"diagnostic-end","unexpected-input-name":"private-fixture-content"});
+        let rejected = server.call(WRITER, "awr_session_end", bad.clone()).await;
+        let detail = diagnostic(rejected, "/", "unexpected_field");
+        assert!(
+            detail["expected_fields"]
+                .as_array()
+                .unwrap()
+                .contains(&json!("outcome"))
+        );
+
+        let revision = a.revision();
+        let replay = ok(server
+            .call(
+                WRITER,
+                "awr_operation_get",
+                json!({"project":"alpha","request_id":"diagnostic-end"}),
+            )
+            .await);
+        assert_eq!(
+            replay["operation"]["result"]["invalid_field"],
+            detail["invalid_field"]
+        );
+        assert_eq!(
+            replay["operation"]["result"]["constraint"],
+            detail["constraint"]
+        );
+        let repeated = server.call(WRITER, "awr_session_end", bad).await;
+        error(repeated.clone(), "InvalidInput");
+        assert_eq!(repeated["structuredContent"]["operation"]["replayed"], true);
+        assert_eq!(
+            repeated["structuredContent"]["expected_fields"],
+            detail["expected_fields"]
+        );
+        assert_eq!(a.revision(), revision);
+        let session = ok(server
+            .call(
+                WRITER,
+                "awr_session_get",
+                json!({"project":"alpha","session":sid}),
+            )
+            .await);
+        assert_eq!(session["session"]["status"], "active");
+        assert!(
+            session["claims"]
+                .as_array()
+                .unwrap()
+                .iter()
+                .any(|c| c["status"] == "active")
+        );
+
+        let denied = server
+            .call(READER, "awr_session_end", json!({"project":"alpha","session":sid,
+                "expected_revision":a.revision(),"outcome":"ended","unexpected-input-name":"private-fixture-content"}))
+            .await;
+        error(denied.clone(), "RuleViolation");
+        assert!(denied["structuredContent"].get("invalid_field").is_none());
+        assert_eq!(a.revision(), revision);
+
+        let ended = ok(server
+            .call(
+                WRITER,
+                "awr_session_end",
+                json!({"project":"alpha","session":sid,
+                "expected_revision":a.revision(),"outcome":"ended","request_id":"corrected-end"}),
+            )
+            .await);
+        assert_eq!(ended["session"]["status"], "ended");
+        assert!(ended.get("invalid_field").is_none());
+        assert_eq!(source, fs::read(a.root.join("work.yaml")).unwrap());
+        server.stop().await;
+    }
+}
+
 #[tokio::test]
 async fn compaction_http_isolated_recoverable_and_wait_guidance_has_priority() {
     let a = ProjectFixture::new("Continue the guide");
@@ -307,6 +766,9 @@ impl Server {
         {
             arguments["request_id"] = json!(Id::new().to_string());
         }
+        self.raw_call(credential, name, arguments).await
+    }
+    async fn raw_call(&self, credential: &str, name: &str, arguments: Value) -> Value {
         let response = reqwest::Client::new().post(&self.url).bearer_auth(credential)
             .header("Accept", "application/json, text/event-stream")
             .header("MCP-Protocol-Version", "2026-07-28")

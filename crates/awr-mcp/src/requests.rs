@@ -1,5 +1,5 @@
 //! Durable request identities and recovery from committed domain receipts.
-use crate::{operations::parse, project::database};
+use crate::{input_diagnostics::parse_tool, project::database};
 use awr_core::*;
 use awr_store::Store;
 use rmcp::model::{CallToolResult, JsonObject};
@@ -165,7 +165,7 @@ struct Recover {
     expected_revision: Revision,
 }
 pub(crate) fn inspect(root: &Path, args: Value, client: &str) -> Result<CallToolResult> {
-    let args: Inspect = parse(args)?;
+    let args: Inspect = parse_tool!("awr_operation_get", args);
     let store = Store::read_snapshot(&database(root)?, 256 * 1024 * 1024)?;
     let project = store.project_by_root(root)?;
     let operation = store
@@ -176,7 +176,7 @@ pub(crate) fn inspect(root: &Path, args: Value, client: &str) -> Result<CallTool
     Ok(CallToolResult::structured(value))
 }
 pub(crate) fn recover(root: &Path, args: Value, client: &str) -> Result<CallToolResult> {
-    let args: Recover = parse(args)?;
+    let args: Recover = parse_tool!("awr_operation_recover", args);
     let (mut store, project) = open(root)?;
     let operation = store
         .mcp_operation(project.id, client, &args.request_id)?

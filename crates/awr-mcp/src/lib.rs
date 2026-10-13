@@ -5,6 +5,7 @@ mod changes;
 mod compaction;
 pub mod domains;
 pub mod hub;
+mod input_diagnostics;
 mod lifecycle;
 mod operations;
 mod project;

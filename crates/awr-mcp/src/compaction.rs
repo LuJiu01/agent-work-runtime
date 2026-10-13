@@ -1,4 +1,4 @@
-use crate::{operations::parse, project::database};
+use crate::{input_diagnostics::parse_tool, project::database};
 use awr_core::*;
 use awr_store::Store;
 use rmcp::model::CallToolResult;
@@ -13,15 +13,15 @@ pub(crate) const NAMES: [&str; 3] = [
 pub(crate) fn call(root: &Path, name: &str, args: Value) -> Result<CallToolResult> {
     let value = if name == "awr_compaction_get" {
         let store = Store::read_snapshot(&database(root)?, 256 * 1024 * 1024)?;
-        awr_runtime::inspect_compaction(&store, root, &parse(args)?)?
+        awr_runtime::inspect_compaction(&store, root, &parse_tool!(name, args))?
     } else {
         let mut store = Store::open_existing(&database(root)?)?;
         match name {
             "awr_compaction_observe" => {
-                awr_runtime::observe_compaction(&mut store, root, &parse(args)?)?
+                awr_runtime::observe_compaction(&mut store, root, &parse_tool!(name, args))?
             }
             "awr_compaction_defer" => {
-                awr_runtime::defer_compaction(&mut store, root, &parse(args)?)?
+                awr_runtime::defer_compaction(&mut store, root, &parse_tool!(name, args))?
             }
             _ => return Err(Error::Unsupported(name.into())),
         }

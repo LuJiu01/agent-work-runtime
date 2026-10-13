@@ -1,6 +1,6 @@
 //! Thin MCP adapters for existing runtime lifecycle operations.
 use crate::{
-    operations::parse,
+    input_diagnostics::parse_tool,
     project::{database, write_project},
 };
 use awr_core::*;
@@ -101,7 +101,7 @@ pub(crate) fn authorize(
     name: &str,
     args: &mut rmcp::model::JsonObject,
     principal: Option<&str>,
-) -> Result<()> {
+) -> std::result::Result<(), crate::input_diagnostics::Rejection> {
     // Host conversations, never a transport-global "current session", resolve implicit selectors.
     let client = principal.unwrap_or("stdio");
     let conversation_selector = !matches!(name, "awr_session_start" | "awr_session_resume")
@@ -112,7 +112,13 @@ pub(crate) fn authorize(
         let project = store.project_by_root(root)?;
         if conversation_selector {
             let conversation: String = serde_json::from_value(args.remove("conversation").unwrap())
-                .map_err(|_| Error::InvalidInput("conversation must be a string".into()))?;
+                .map_err(|_| {
+                    crate::input_diagnostics::Rejection::input(
+                        "conversation must be a string",
+                        "/conversation",
+                        "type",
+                    )
+                })?;
             let session = store
                 .mcp_bound_session(
                     project.id,
@@ -128,21 +134,32 @@ pub(crate) fn authorize(
             {
                 return Err(Error::RuleViolation(
                     "conversation and session selectors disagree".into(),
-                ));
+                )
+                .into());
             }
             args.insert("session".into(), json!(session.id));
         }
         if principal.is_some() {
             let session: Id =
                 serde_json::from_value(args.get("session").cloned().unwrap_or(Value::Null))
-                    .map_err(|_| Error::InvalidInput("invalid session identifier".into()))?;
+                    .map_err(|_| {
+                        crate::input_diagnostics::Rejection::input(
+                            "invalid session identifier",
+                            "/session",
+                            if args.get("session").is_some_and(Value::is_string) {
+                                "format"
+                            } else {
+                                "type"
+                            },
+                        )
+                    })?;
             if store
                 .mcp_session_binding(project.id, session)?
                 .is_none_or(|binding| binding.client != client)
             {
-                return Err(Error::RuleViolation(
-                    "session access denied for this client".into(),
-                ));
+                return Err(
+                    Error::RuleViolation("session access denied for this client".into()).into(),
+                );
             }
         }
     }
@@ -154,7 +171,8 @@ pub(crate) fn authorize(
     {
         return Err(Error::InvalidInput(
             "shared context needs a session/conversation, or explicit detached work".into(),
-        ));
+        )
+        .into());
     }
     Ok(())
 }
@@ -182,12 +200,12 @@ fn session_value(store: &Store, project: &Project, session: Id) -> Result<Value>
 pub(crate) fn call(root: &Path, name: &str, args: Value, client: &str) -> Result<CallToolResult> {
     let value = match name {
         "awr_session_get" => {
-            let args: Get = parse(args)?;
+            let args: Get = parse_tool!(name, args);
             let (store, project) = snapshot(root)?;
             session_value(&store, &project, args.session)?
         }
         "awr_session_list" => {
-            let args: List = parse(args)?;
+            let args: List = parse_tool!(name, args);
             let (store, project) = snapshot(root)?;
             let limit = args.limit.unwrap_or(20);
             let sessions = store.mcp_sessions(project.id, client, limit, args.before_revision)?;
@@ -199,7 +217,7 @@ pub(crate) fn call(root: &Path, name: &str, args: Value, client: &str) -> Result
             json!({"ok":true,"read_only":true,"source_refresh_performed":false,"freshness_basis":"runtime_database","project_revision":project.project_revision,"sessions":sessions,"next_before_revision":next,"scope":"current client"})
         }
         "awr_session_start" => {
-            let args: Start = parse(args)?;
+            let args: Start = parse_tool!(name, args);
             let binding = McpSessionBinding {
                 client: client.into(),
                 conversation: args.conversation,
@@ -249,7 +267,7 @@ pub(crate) fn call(root: &Path, name: &str, args: Value, client: &str) -> Result
             json!({"ok":true,"project_revision":event.project_revision,"session":started.session,"claim":started.claim,"binding":binding,"binding_reused":false,"event_id":event.id})
         }
         "awr_session_checkpoint" => {
-            let args: Checkpoint = parse(args)?;
+            let args: Checkpoint = parse_tool!(name, args);
             let (mut store, project) =
                 write_project(root, args.expected_revision).map_err(Error::for_checkpoint)?;
             let (checkpoint, event) = Runtime::attach(&mut store, project.id)?
@@ -269,7 +287,7 @@ pub(crate) fn call(root: &Path, name: &str, args: Value, client: &str) -> Result
             json!({"ok":true,"project_revision":event.project_revision,"checkpoint":checkpoint,"checkpoint_save":store.checkpoint_save_metadata(project.id,checkpoint.id)?,"context_hash_verified":false,"warning":CHECKPOINT_LIMITATION,"event_id":event.id})
         }
         "awr_session_end" => {
-            let args: End = parse(args)?;
+            let args: End = parse_tool!(name, args);
             // Cleanup remains possible with stale or unavailable sources, as with CLI.
             let mut store = Store::open_existing(&database(root)?)?;
             let project = store.project_by_root(root)?;
@@ -281,7 +299,7 @@ pub(crate) fn call(root: &Path, name: &str, args: Value, client: &str) -> Result
             json!({"ok":true,"project_revision":event.project_revision,"session":session,"closed_claim_ids":event.payload["closed_claim_ids"],"event_id":event.id})
         }
         "awr_session_claim" => {
-            let args: Claim = parse(args)?;
+            let args: Claim = parse_tool!(name, args);
             let (mut store, project) = if args.action == "release" {
                 let store = Store::open_existing(&database(root)?)?;
                 let project = store.project_by_root(root)?;
@@ -309,7 +327,7 @@ pub(crate) fn call(root: &Path, name: &str, args: Value, client: &str) -> Result
             json!({"ok":true,"project_revision":event.project_revision,"claim":claim,"event_id":event.id})
         }
         "awr_session_resume" => {
-            let args: Resume = parse(args)?;
+            let args: Resume = parse_tool!(name, args);
             let (mut store, _) = write_project(root, args.expected_revision)?;
             let report = awr_runtime::resume_bound_session(
                 &mut store,

@@ -121,6 +121,31 @@ Source work actions retain the domain service's fingerprint checks before accept
 
 Domain errors are tool results with `isError: true` and the core AWR `code` and message. Incomplete context retains its L1 diagnostics and `completeness` alongside the error. A source write failure that has already produced a proposal returns that proposal's report, including its recovery outcome. Unknown tools are JSON-RPC protocol errors. Successful tool results have `isError: false`.
 
+An already rejected personal-tool `InvalidInput` can also include `invalid_field`
+(a known field path; `/` denotes the root container), `constraint`, and `next_step`.
+For example, a non-string
+`work` reports `/work` with `constraint: "type"`; a missing session-end outcome
+reports `/outcome` with `constraint: "required"`. Unexpected fields report their
+container and a bounded `expected_fields` list, without echoing unknown names or
+submitted values. Schema advice is restricted to argument-parser failures;
+selected earlier admission failures identify their own field, so a missing HTTP
+`request_id` is reported even when another required argument is missing.
+Parser advice follows the actual Serde failure path through known public fields,
+then describes that field's required/type/enum constraint. Other parse failures,
+such as a negative unsigned count or malformed identifier, use `constraint:
+"parse"`. Unrelated fields are not rescanned, and accepted optional nulls retain
+their existing behavior. Unknown paths, generic maps and paths exceeding the
+diagnostic bounds retain the original generic error. Raw parser messages and
+paths are never returned. Runtime length/range/count checks are not rescanned
+as parser failures.
+Domain failures are not reinterpreted as an unrelated schema mismatch.
+This advice does not change validation, authorization or successful responses.
+Generic payloads and editable maps are excluded from parser traversal. An event
+payload's outer type is diagnosed at the original domain rejection; its contents
+are not traversed.
+Identified writes retain the advice in their error receipt and exact replay;
+inspect an uncertain write's original receipt before retrying.
+
 An interrupted or cancelled request may have committed. Shared HTTP writes require
 stable `request_id` values; stdio accepts them optionally. Inspect the identified
 operation before retrying. The request journal consumes revisions too: use returned

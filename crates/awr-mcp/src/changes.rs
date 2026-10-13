@@ -1,7 +1,7 @@
 //! Source changes use their existing durable domain journal, not the MCP lifecycle
 //! journal: adding lifecycle revisions would invalidate the reviewed source preview.
 use crate::{
-    operations::parse,
+    input_diagnostics::parse_tool,
     project::{ReadProject, database},
 };
 use awr_core::*;
@@ -247,7 +247,7 @@ fn outcome(mut value: Value, failure: Option<Error>) -> Result<CallToolResult> {
 pub(crate) fn call(root: &Path, name: &str, args: Value, client: &str) -> Result<CallToolResult> {
     match name {
         "awr_change_preview" => {
-            let input: Preview = parse(args)?;
+            let input: Preview = parse_tool!(name, args);
             // A private in-memory snapshot makes previews truly read-only, including indexing.
             let mut view = ReadProject::open(root)?;
             let (mut value, failure) = apply_change(&mut view.store, root, input, client, None)?;
@@ -258,7 +258,7 @@ pub(crate) fn call(root: &Path, name: &str, args: Value, client: &str) -> Result
             outcome(value, failure)
         }
         "awr_change_apply" => {
-            let input: Apply = parse(args)?;
+            let input: Apply = parse_tool!(name, args);
             let mut store = Store::open_existing(&database(root)?)?;
             let (value, failure) = apply_change(
                 &mut store,
@@ -274,7 +274,7 @@ pub(crate) fn call(root: &Path, name: &str, args: Value, client: &str) -> Result
             outcome(value, failure)
         }
         "awr_change_status" => {
-            let input: Status = parse(args)?;
+            let input: Status = parse_tool!(name, args);
             let request_key = key(client, &input.kind, &input.request_id)?;
             // Recovery lookup remains available even when a partial write made sources stale.
             let store = Store::open_readonly(&database(root)?)?;
@@ -297,7 +297,7 @@ pub(crate) fn call(root: &Path, name: &str, args: Value, client: &str) -> Result
             outcome(value, failure)
         }
         "awr_change_recover" => {
-            let input: Recover = parse(args)?;
+            let input: Recover = parse_tool!(name, args);
             let request_key = key(client, &input.kind, &input.request_id)?;
             let mut store = Store::open_existing(&database(root)?)?;
             let (mut value, failure) = match input.kind.as_str() {

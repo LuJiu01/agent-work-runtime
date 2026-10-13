@@ -20,6 +20,7 @@ sha2.workspace = true
 axum = { version = "0.8", default-features = false, features = ["http1", "tokio"] }
 rmcp = { version = "3.2.0", default-features = false, features = ["server", "transport-io", "transport-streamable-http-server"] }
 tokio = { version = "1", features = ["rt-multi-thread", "macros", "sync", "net", "signal"] }
+serde_path_to_error = "0.1"
 
 [dev-dependencies]
 rusqlite.workspace = true

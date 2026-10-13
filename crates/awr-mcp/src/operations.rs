@@ -1,5 +1,6 @@
 use crate::{
     arguments::*,
+    input_diagnostics::{invalid_input, parse_tool},
     project::{ReadProject, database, write_project},
 };
 use awr_context::{ContextRequest, DeltaBaseline, compile_branch_context, compile_context};
@@ -17,7 +18,7 @@ use std::{
 pub(crate) fn parse<T: DeserializeOwned>(args: Value) -> Result<T> {
     awr_core::ensure_public_value(&args)?;
     serde_json::from_value(args)
-        .map_err(|_| Error::InvalidInput("tool arguments do not match the tool schema".into()))
+        .map_err(|_| Error::InvalidInput(crate::input_diagnostics::SCHEMA_MISMATCH.into()))
 }
 fn check_sha(sha: Option<&str>) -> Result<()> {
     if sha.is_some_and(|s| !is_source_sha(s)) {
@@ -95,15 +96,19 @@ pub(crate) fn call_as(
         Some(Value::Bool(v)) => v,
         Some(Value::Null) => false,
         Some(_) => {
-            return Err(Error::InvalidInput(
-                "explain must be a boolean when provided".into(),
-            ));
+            return invalid_input(
+                "explain must be a boolean when provided",
+                "/explain",
+                "type",
+            );
         }
     };
     if explain && !matches!(name, "awr_work_prepare" | "awr_work_assess") {
-        return Err(Error::InvalidInput(
-            "explain is only supported on awr_work_prepare and awr_work_assess".into(),
-        ));
+        return invalid_input(
+            "explain is only supported on awr_work_prepare and awr_work_assess",
+            "/explain",
+            "unsupported",
+        );
     }
     let supported = matches!(name, "awr_work_prepare" | "awr_work_transition");
     let action =
@@ -114,16 +119,19 @@ pub(crate) fn call_as(
         Some(Value::String(view)) if supported && view == "summary" => true,
         Some(Value::String(_)) if action => false,
         _ => {
-            return Err(Error::InvalidInput(
-                "response_view requires full/summary on a work tool, or action on awr_work_prepare"
-                    .into(),
-            ));
+            return invalid_input(
+                "response_view requires full/summary on a work tool, or action on awr_work_prepare",
+                "/response_view",
+                "supported_view",
+            );
         }
     };
     if summary && name == "awr_work_transition" && !args.contains_key("request_id") {
-        return Err(Error::InvalidInput(
-            "summary transitions require request_id so the full receipt remains queryable".into(),
-        ));
+        return invalid_input(
+            "summary transitions require request_id so the full receipt remains queryable",
+            "/request_id",
+            "required",
+        );
     }
     let full_arguments = args.clone();
     if action {
@@ -189,31 +197,36 @@ fn call_as_full(
     }
     ensure_public_value(&Value::Object(args.clone()))?;
     let client = principal.unwrap_or("stdio");
-    if crate::changes::NAMES.contains(&name) {
-        return crate::changes::call(root, name, Value::Object(args), client);
+    if crate::changes::NAMES.contains(&name)
+        || matches!(name, "awr_operation_get" | "awr_operation_recover")
+    {
+        let input = Value::Object(args);
+        return match name {
+            "awr_operation_get" => crate::requests::inspect(root, input, client),
+            "awr_operation_recover" => crate::requests::recover(root, input, client),
+            _ => crate::changes::call(root, name, input, client),
+        };
     }
-    if name == "awr_operation_get" {
-        return crate::requests::inspect(root, Value::Object(args), client);
-    }
-    if name == "awr_operation_recover" {
-        return crate::requests::recover(root, Value::Object(args), client);
-    }
-    let request = args
-        .remove("request_id")
-        .map(|value| {
-            serde_json::from_value::<String>(value)
-                .map_err(|_| Error::InvalidInput("request_id must be a string".into()))
-        })
-        .transpose()?;
+    let request = match args.remove("request_id") {
+        None => None,
+        Some(Value::String(value)) => Some(value),
+        Some(_) => {
+            return invalid_input("request_id must be a string", "/request_id", "type");
+        }
+    };
     if request.is_some() && is_read_only(name) {
-        return Err(Error::InvalidInput(
-            "read tools do not take request_id".into(),
-        ));
+        return invalid_input(
+            "read tools do not take request_id",
+            "/request_id",
+            "unsupported",
+        );
     }
     if principal.is_some() && !is_read_only(name) && request.is_none() {
-        return Err(Error::InvalidInput(
-            "shared writes require a stable request_id for outcome recovery".into(),
-        ));
+        return invalid_input(
+            "shared writes require a stable request_id for outcome recovery",
+            "/request_id",
+            "required",
+        );
     }
     let original = args.clone();
     if let Some(request) = &request {
@@ -221,21 +234,23 @@ fn call_as_full(
             return Ok(result);
         }
     }
-    crate::lifecycle::authorize(root, name, &mut args, principal)?;
+    if let Err(rejection) = crate::lifecycle::authorize(root, name, &mut args, principal) {
+        return rejection.into_result();
+    }
     if matches!(name, "awr_work_transition" | "awr_session_resume") {
         if let Some(session) = args.get("session").and_then(Value::as_str) {
             let store = Store::open_readonly(&database(root)?)?;
             let project = store.project_by_root(root)?;
-            crate::waiting::require_resolved(
-                &store,
-                project.id,
-                session
-                    .parse()
-                    .map_err(|_| Error::InvalidInput("invalid session".into()))?,
-            )?;
+            let session = match session.parse() {
+                Ok(session) => session,
+                Err(_) => {
+                    return invalid_input("invalid session", "/session", "format");
+                }
+            };
+            crate::waiting::require_resolved(&store, project.id, session)?;
         }
     }
-    let apply = |args| {
+    let apply = |args: JsonObject| {
         if crate::compaction::NAMES.contains(&name) {
             crate::compaction::call(root, name, Value::Object(args))
         } else if crate::lifecycle::NAMES.contains(&name) {
@@ -264,21 +279,21 @@ pub(crate) fn call(root: &Path, name: &str, mut args: JsonObject) -> Result<Call
         return Err(Error::InvalidInput("tool arguments exceed 1 MiB".into()));
     }
     match name {
-        "awr_work_transition" => return transition(root, parse(args)?),
-        "awr_event_append" => return append_event(root, parse(args)?),
-        "awr_evidence_record" => return evidence(root, parse(args)?),
+        "awr_work_transition" => return transition(root, parse_tool!(name, args)),
+        "awr_event_append" => return append_event(root, parse_tool!(name, args)),
+        "awr_evidence_record" => return evidence(root, parse_tool!(name, args)),
         "awr_work_manage" => {
             let mut store = Store::open_existing(&database(root)?)?;
             return Ok(CallToolResult::structured(awr_runtime::manage_work(
                 &mut store,
                 root,
-                &parse(args)?,
+                &parse_tool!(name, args),
             )?));
         }
         _ => (),
     }
     if name == "awr_project_status" {
-        let status: StatusArgs = parse(args.clone())?;
+        let status: StatusArgs = parse_tool!(name, args.clone());
         check_sha(status.source_sha.as_deref())?;
     }
     let mut view = match ReadProject::open(root) {
@@ -295,12 +310,12 @@ pub(crate) fn call(root: &Path, name: &str, mut args: JsonObject) -> Result<Call
         Err(error) => return Err(error),
     };
     let mut value = match name {
-        "awr_project_status" => status(&view, parse(args)?)?,
-        "awr_work_ready" => ready(&view, parse(args)?)?,
-        "awr_work_get" => work(&view, parse(args)?)?,
-        "awr_context_compile" => context(&mut view, root, parse(args)?)?,
+        "awr_project_status" => status(&view, parse_tool!(name, args))?,
+        "awr_work_ready" => ready(&view, parse_tool!(name, args))?,
+        "awr_work_get" => work(&view, parse_tool!(name, args))?,
+        "awr_context_compile" => context(&mut view, root, parse_tool!(name, args))?,
         "awr_work_prepare" => {
-            let request: awr_runtime::PrepareWorkRequest = parse(args)?;
+            let request: awr_runtime::PrepareWorkRequest = parse_tool!(name, args);
             let prepared = awr_runtime::prepare_work(&mut view.store, root, &request)?;
             if action {
                 awr_runtime::guide_prepared_work(&view.store, root, prepared, request.session)?
@@ -309,11 +324,13 @@ pub(crate) fn call(root: &Path, name: &str, mut args: JsonObject) -> Result<Call
             }
         }
         "awr_completion_prepare" => {
-            awr_runtime::prepare_completion(&view.store, root, &parse(args)?)?
+            awr_runtime::prepare_completion(&view.store, root, &parse_tool!(name, args))?
         }
-        "awr_work_assess" => awr_runtime::assess_management(&view.store, root, &parse(args)?)?,
-        "awr_work_graph" => awr_runtime::work_graph(&view.store, root, &parse(args)?)?,
-        "awr_search" => search(&mut view, parse(args)?)?,
+        "awr_work_assess" => {
+            awr_runtime::assess_management(&view.store, root, &parse_tool!(name, args))?
+        }
+        "awr_work_graph" => awr_runtime::work_graph(&view.store, root, &parse_tool!(name, args))?,
+        "awr_search" => search(&mut view, parse_tool!(name, args))?,
         _ => return Err(Error::Unsupported(name.into())),
     };
     view.finish(root)?;
@@ -644,11 +661,21 @@ fn append_event(root: &Path, args: EventArgs) -> Result<CallToolResult> {
         payload: args.payload.unwrap_or_else(|| json!({})),
     };
     let mut runtime = Runtime::attach(&mut store, project.id)?;
+    let invalid_payload_type = !draft.payload.is_object();
     let event = if args.branch.is_some() {
         runtime.append_event_in_branch(args.expected_revision, draft)
     } else {
         runtime.append_event(args.expected_revision, draft)
-    }?;
+    };
+    let event = match event {
+        Err(Error::InvalidInput(message))
+            if invalid_payload_type
+                && message == "event requires a type, object payload and valid importance" =>
+        {
+            return invalid_input(message, "/payload", "type");
+        }
+        other => other?,
+    };
     Ok(CallToolResult::structured(
         json!({"ok":true,"project_revision":event.project_revision,"event":event,"freshness_basis":"source_refresh","source_refresh_performed":true}),
     ))

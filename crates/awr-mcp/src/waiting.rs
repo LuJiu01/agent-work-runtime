@@ -1,5 +1,5 @@
 use crate::{
-    operations::parse,
+    input_diagnostics::parse_tool,
     project::{database, write_project},
 };
 use awr_core::*;
@@ -50,7 +50,7 @@ pub(crate) fn require_resolved(store: &Store, project: Id, session: Id) -> Resul
 pub(crate) fn call(root: &Path, name: &str, args: Value, client: &str) -> Result<CallToolResult> {
     let value = match name {
         "awr_session_wait" => {
-            let args: Wait = parse(args)?;
+            let args: Wait = parse_tool!(name, args);
             if args.question.trim().is_empty() || args.question.len() > 8192 {
                 return Err(Error::InvalidInput(
                     "wait question must contain 1..8192 bytes".into(),
@@ -80,7 +80,7 @@ pub(crate) fn call(root: &Path, name: &str, args: Value, client: &str) -> Result
             json!({"ok":true,"project_revision":event.project_revision,"wait":wait,"checkpoint":checkpoint,"event_id":event.id,"host_action":"Collect user input and call awr_session_reply; AWR does not schedule or execute the next turn."})
         }
         "awr_session_reply" => {
-            let args: Reply = parse(args)?;
+            let args: Reply = parse_tool!(name, args);
             let mut store = Store::open_existing(&database(root)?)?;
             let project = store.project_by_root(root)?;
             let existing = store.mcp_wait(project.id, args.wait)?;
@@ -100,7 +100,7 @@ pub(crate) fn call(root: &Path, name: &str, args: Value, client: &str) -> Result
             json!({"ok":true,"project_revision":event.project_revision,"wait":wait,"event_id":event.id,"host_action":"Inspect the session and compile current context; resume explicitly if a new session is needed."})
         }
         "awr_source_reindex" => {
-            let args: Reindex = parse(args)?;
+            let args: Reindex = parse_tool!(name, args);
             let mut store = Store::open_existing(&database(root)?)?;
             let project = store.project_by_root(root)?;
             if project.project_revision != args.expected_revision {

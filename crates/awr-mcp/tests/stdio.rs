@@ -14,6 +14,177 @@ const WORK: &str = "work_items:\n- id: W\n  title: Prepare customer analysis\n  
 const MANIFEST: &str = "[project]\nname='MCP fixture'\nexternal_key='mcp-fixture'\n[[sources]]\ndomain='ledger'\nrole='primary'\npath='work.yaml'\nadapter='yaml-ledger-v1'\n[[sources]]\ndomain='rules'\nrole='primary'\npath='rules.md'\nadapter='markdown-rules-v1'\n[[sources]]\ndomain='goal'\nrole='primary'\npath='goal.md'\nadapter='markdown-heading-v1'\n[sources.options]\nstatus='active'\n[[sources]]\ndomain='decisions'\nrole='supporting'\npath='decisions'\nadapter='markdown-directory-v1'\n";
 
 #[tokio::test]
+async fn personal_input_diagnostics_stdio_preserve_state_and_defaults() {
+    let f = Fixture::new();
+    let sid = f.session("W", true, None).session.id;
+    let client = f.client().await;
+    let revision = f.rev();
+    let before = f.logical_state();
+    let source = fs::read(f.root.join("work.yaml")).unwrap();
+    let cases = [
+        (
+            "awr_search",
+            json!({"kind":"private-fixture-kind","limit":-1}),
+            "/limit",
+            "parse",
+        ),
+        (
+            "awr_session_claim",
+            json!({"session":sid,"expected_revision":revision,"action":"private-fixture-action","claim":"private-fixture-id"}),
+            "/claim",
+            "parse",
+        ),
+        (
+            "awr_session_checkpoint",
+            json!({"session":sid,"expected_revision":revision,"agent":null,"context_hash":"a".repeat(64),"digest":false,"next_action":"Review"}),
+            "/digest",
+            "type",
+        ),
+        (
+            "awr_session_end",
+            json!({"session":sid,"expected_revision":revision}),
+            "/outcome",
+            "required",
+        ),
+        (
+            "awr_session_end",
+            json!({"session":sid,"expected_revision":revision,"outcome":"ended","unexpected-input-name":"private-fixture-content"}),
+            "/",
+            "unexpected_field",
+        ),
+        (
+            "awr_session_end",
+            json!({"session":sid,"expected_revision":revision,"outcome":"private-fixture-outcome"}),
+            "/outcome",
+            "enum",
+        ),
+        (
+            "awr_search",
+            json!({"limit":0,"text":false}),
+            "/text",
+            "type",
+        ),
+        (
+            "awr_search",
+            json!({"kind":"private-fixture-kind","text":false}),
+            "/text",
+            "type",
+        ),
+        (
+            "awr_event_append",
+            json!({"expected_revision":revision,"event_type":"review.observed","summary":"Review","payload":false,"work":false}),
+            "/work",
+            "type",
+        ),
+        ("awr_operation_get", json!({}), "/request_id", "required"),
+        (
+            "awr_operation_recover",
+            json!({"request_id":false,"expected_revision":revision}),
+            "/request_id",
+            "type",
+        ),
+        (
+            "awr_change_status",
+            json!({"request_id":"fixture","kind":false}),
+            "/kind",
+            "type",
+        ),
+        (
+            "awr_change_preview",
+            json!({"request_id":"fixture","reason":false,"change":{"kind":"create","title":"Review"}}),
+            "/reason",
+            "type",
+        ),
+        (
+            "awr_work_get",
+            json!({"explain":false,"work":false}),
+            "/work",
+            "type",
+        ),
+        (
+            "awr_work_get",
+            json!({"explain":"private-fixture-value"}),
+            "/explain",
+            "type",
+        ),
+        (
+            "awr_session_end",
+            json!({"session":sid,"expected_revision":revision,"request_id":false}),
+            "/request_id",
+            "type",
+        ),
+        (
+            "awr_session_end",
+            json!({"conversation":false,"expected_revision":revision,"outcome":false}),
+            "/conversation",
+            "type",
+        ),
+        (
+            "awr_event_append",
+            json!({"expected_revision":revision,"event_type":"review.observed","summary":"Review the input","payload":false}),
+            "/payload",
+            "type",
+        ),
+    ];
+    for (name, args, path, constraint) in cases {
+        let rejected = call(&client, name, args).await;
+        assert_eq!(rejected.is_error, Some(true));
+        let detail = body(&rejected);
+        assert_eq!(detail["code"], "InvalidInput");
+        assert_eq!(detail["invalid_field"], path, "{detail}");
+        assert_eq!(detail["constraint"], constraint);
+        assert!(
+            !serde_json::to_string(&rejected)
+                .unwrap()
+                .contains("private-fixture")
+        );
+        assert!(
+            !serde_json::to_string(&rejected)
+                .unwrap()
+                .contains("unexpected-input-name")
+        );
+        assert_eq!(f.logical_state(), before);
+    }
+    for (name, message) in [
+        ("awr_work_ready", "ready limit must be 1..100"),
+        ("awr_search", "search limit must be 1..100"),
+    ] {
+        let result = call(&client, name, json!({"limit":0})).await;
+        let detail = error(result, "InvalidInput");
+        assert_eq!(detail["message"], format!("invalid input: {message}"));
+        assert!(detail.get("invalid_field").is_none());
+        assert_eq!(f.logical_state(), before);
+    }
+    let legacy = call(&client, "awr_work_get", json!({"work":"W","branch":null})).await;
+    let tolerated = call(
+        &client,
+        "awr_work_get",
+        json!({"work":"W","branch":null,"explain":null}),
+    )
+    .await;
+    assert_eq!(
+        serde_json::to_value(&legacy).unwrap(),
+        serde_json::to_value(&tolerated).unwrap()
+    );
+    assert_eq!(f.logical_state(), before);
+    let saved = success(call(&client, "awr_session_checkpoint", json!({"session":sid,"expected_revision":revision,"agent":null,"context_hash":"a".repeat(64),"digest":"Review","next_action":"Review"})).await);
+    assert_eq!(saved["checkpoint_save"]["actor"]["origin"], "undeclared");
+    assert!(saved.get("invalid_field").is_none());
+    let ended = success(
+        call(
+            &client,
+            "awr_session_end",
+            json!({"session":sid,"expected_revision":f.rev(),"outcome":"ended"}),
+        )
+        .await,
+    );
+    assert_eq!(ended["session"]["status"], "ended");
+    assert!(ended.get("invalid_field").is_none());
+    assert_eq!(source, fs::read(f.root.join("work.yaml")).unwrap());
+    client.cancel().await.unwrap();
+}
+
+#[tokio::test]
 async fn action_view_preserves_exact_context_and_compaction_stdio_matches_runtime() {
     let f = Fixture::new();
     let session = f.session("W", true, None).session.id;
