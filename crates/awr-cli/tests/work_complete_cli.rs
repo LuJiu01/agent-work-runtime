@@ -410,6 +410,391 @@ impl Drop for Fixture {
 }
 
 #[test]
+fn report_diagnostics_agree_between_preflight_and_completion() {
+    for (case, pointer, code) in [
+        ("missing_passed", "/checks/0/passed", "InvalidInput"),
+        ("source_sha", "/source_sha", "EvidenceMissing"),
+        ("failed_check", "/checks/0/passed", "EvidenceMissing"),
+    ] {
+        let f = Fixture::new();
+        let mut report = f.report();
+        match case {
+            "missing_passed" => {
+                report["checks"][0]
+                    .as_object_mut()
+                    .unwrap()
+                    .remove("passed");
+            }
+            "source_sha" => report["source_sha"] = json!("b".repeat(40)),
+            _ => report["checks"][0]["passed"] = json!(false),
+        }
+        let evidence = f.evidence("E", &report, |_| {});
+        let source = fs::read(f.root.join("work.yaml")).unwrap();
+        let revision = f.revision();
+        let preflight = f.run(&[
+            "work",
+            "prepare-completion",
+            "W",
+            "--report",
+            &evidence.locator,
+            "--evidence-key",
+            "E",
+            "--source-sha",
+            SHA,
+        ]);
+        Fixture::error(&preflight, code);
+        let completion = f.complete(&f.input());
+        Fixture::error(&completion, "EvidenceMissing");
+        let preflight: Value = serde_json::from_slice(&preflight.stderr).unwrap();
+        let completion: Value = serde_json::from_slice(&completion.stderr).unwrap();
+        assert_eq!(
+            preflight["details"]["location"]["pointer"], pointer,
+            "{case}: {preflight}"
+        );
+        assert_eq!(preflight["details"], completion["details"], "{case}");
+        assert_eq!(fs::read(f.root.join("work.yaml")).unwrap(), source);
+        assert_eq!(f.revision(), revision);
+        assert_eq!(f.claim_status(), "active");
+    }
+}
+
+#[test]
+fn report_semantic_locations_follow_aliases_and_positional_representations() {
+    for (form, pointer) in [
+        ("result_alias", "/checks/0/result"),
+        ("check_sequence", "/checks/0/1"),
+        ("report_sequence", "/6/0/passed"),
+        ("nested_sequences", "/6/0/1"),
+        ("sequence_sha", "/2"),
+    ] {
+        let f = Fixture::new();
+        let mut report = f.report();
+        let verified_at = report["verified_at"].as_i64().unwrap();
+        if form == "result_alias" {
+            let check = report["checks"][0].as_object_mut().unwrap();
+            let details = check.remove("details").unwrap();
+            check.insert("result".into(), details);
+        } else {
+            if matches!(form, "check_sequence" | "nested_sequences") {
+                let check = &report["checks"][0];
+                report["checks"][0] = json!([
+                    check["name"],
+                    check["passed"],
+                    check["details"],
+                    check["criteria"]
+                ]);
+            }
+            if matches!(
+                form,
+                "report_sequence" | "nested_sequences" | "sequence_sha"
+            ) {
+                report = json!([
+                    report["version"],
+                    report["work_item"],
+                    report["source_sha"],
+                    report["command"],
+                    report["scope"],
+                    report["verified_at"],
+                    report["checks"]
+                ]);
+            }
+        }
+        let valid = report.clone();
+        *report.pointer_mut(pointer).unwrap() = match form {
+            "result_alias" => json!(""),
+            "sequence_sha" => json!("b".repeat(40)),
+            _ => json!(false),
+        };
+        // These remain supported serde representations; rejection is semantic.
+        assert!(serde_json::from_value::<CompletionReport>(report.clone()).is_ok());
+        assert!(report.pointer(pointer).is_some());
+        let evidence = f.evidence("E", &report, |draft| draft.verified_at = Some(verified_at));
+        let source = fs::read(f.root.join("work.yaml")).unwrap();
+        let revision = f.revision();
+        let preflight = f.run(&[
+            "work",
+            "prepare-completion",
+            "W",
+            "--report",
+            &evidence.locator,
+            "--evidence-key",
+            "E",
+            "--source-sha",
+            SHA,
+        ]);
+        Fixture::error(&preflight, "EvidenceMissing");
+        let completion = f.complete(&f.input());
+        Fixture::error(&completion, "EvidenceMissing");
+        let preflight: Value = serde_json::from_slice(&preflight.stderr).unwrap();
+        let completion: Value = serde_json::from_slice(&completion.stderr).unwrap();
+        assert_eq!(
+            preflight["details"]["location"]["pointer"], pointer,
+            "{form}"
+        );
+        assert_eq!(preflight["details"], completion["details"], "{form}");
+        assert_eq!(fs::read(f.root.join("work.yaml")).unwrap(), source);
+        assert_eq!(f.revision(), revision);
+        assert_eq!(f.claim_status(), "active");
+        let corrected = f.evidence("corrected", &valid, |draft| {
+            draft.verified_at = Some(verified_at)
+        });
+        let prepared = f.ok(&[
+            "work",
+            "prepare-completion",
+            "W",
+            "--report",
+            &corrected.locator,
+            "--evidence-key",
+            "corrected",
+            "--source-sha",
+            SHA,
+        ]);
+        Fixture::success(&f.complete(&prepared["completion"]));
+        assert_eq!(f.work()["status"], "completed");
+        assert_eq!(f.claim_status(), "released");
+    }
+}
+
+#[test]
+fn duplicate_report_fields_keep_parser_diagnostics_across_completion_paths() {
+    for alias in [false, true] {
+        let f = Fixture::new();
+        f.organize();
+        let report = f.report();
+        let bytes = serde_json::to_string(&report).unwrap();
+        let bytes = if alias {
+            bytes.replace(
+                "\"details\":\"Checked the analysis and delivery receipt\"",
+                "\"result\":\"synthetic-private-value\",\"details\":false",
+            )
+        } else {
+            bytes.replace("\"version\":1", "\"version\":1,\"version\":false")
+        };
+        let evidence = f.evidence("E", &report, |draft| {
+            draft.sha256 = Some(
+                awr_source::fingerprint(bytes.as_bytes())
+                    .trim_start_matches("sha256:")
+                    .into(),
+            );
+        });
+        fs::write(f.root.join(&evidence.locator), &bytes).unwrap();
+        let source = fs::read_to_string(f.root.join("work.yaml")).unwrap();
+        let revision = f.revision();
+        let preflight = f.run(&[
+            "work",
+            "prepare-completion",
+            "W",
+            "--report",
+            &evidence.locator,
+            "--evidence-key",
+            "E",
+            "--source-sha",
+            SHA,
+        ]);
+        Fixture::error(&preflight, "InvalidInput");
+        let completion = f.complete(&f.input());
+        Fixture::error(&completion, "EvidenceMissing");
+        let preflight: Value = serde_json::from_slice(&preflight.stderr).unwrap();
+        let completion: Value = serde_json::from_slice(&completion.stderr).unwrap();
+        assert_eq!(preflight["details"], completion["details"]);
+        let details = &preflight["details"];
+        assert_eq!(details["location"]["pointer"], Value::Null);
+        assert!(details["location"]["line"].is_u64());
+        assert!(details["location"]["column"].is_u64());
+        assert!(
+            details["repair"]
+                .as_str()
+                .unwrap()
+                .contains("duplicate fields")
+        );
+        assert_eq!(
+            fs::read_to_string(f.root.join("work.yaml")).unwrap(),
+            source
+        );
+        assert_eq!(f.revision(), revision);
+        assert_eq!(f.claim_status(), "active");
+        fs::write(
+            f.root.join("work.yaml"),
+            source.replace("status: in_progress", "status: completed"),
+        )
+        .unwrap();
+        f.ok(&["source", "reindex"]);
+        let inspected = f.ok(&["intake", "inspect", "--source-sha", SHA]);
+        assert_eq!(inspected["organization"]["verified_completed"], 0);
+        let gap = inspected["organization"]["gaps"]
+            .as_array()
+            .unwrap()
+            .iter()
+            .find(|gap| gap["target"] == "W" && gap["code"] == "completion_verification_failed")
+            .unwrap();
+        let detail = gap["detail"].as_str().unwrap();
+        assert!(
+            detail.contains(&format!(
+                "Source: {}:{}:{}",
+                evidence.locator, details["location"]["line"], details["location"]["column"]
+            )),
+            "{gap}"
+        );
+        assert!(
+            detail.contains(details["repair"].as_str().unwrap()),
+            "{gap}"
+        );
+        assert!(!detail.contains("Field:"), "{gap}");
+        assert!(!detail.contains("synthetic-private"), "{gap}");
+    }
+}
+
+#[test]
+fn opaque_report_metadata_preserves_completion_and_truthful_fallback_diagnostics() {
+    let f = Fixture::new();
+    let mut report = f.report();
+    let check = report["checks"][0].as_object_mut().unwrap();
+    check.remove("details");
+    check.insert("result".into(), json!(""));
+    let mut bytes = serde_json::to_string(&report).unwrap();
+    bytes.pop();
+    bytes.push_str(",\"producer\":1e400}");
+    assert!(serde_json::from_str::<CompletionReport>(&bytes).is_ok());
+    let evidence = f.evidence("E", &report, |draft| {
+        draft.sha256 = Some(
+            awr_source::fingerprint(bytes.as_bytes())
+                .trim_start_matches("sha256:")
+                .into(),
+        );
+    });
+    fs::write(f.root.join(&evidence.locator), &bytes).unwrap();
+    let source = fs::read(f.root.join("work.yaml")).unwrap();
+    let revision = f.revision();
+    let preflight = f.run(&[
+        "work",
+        "prepare-completion",
+        "W",
+        "--report",
+        &evidence.locator,
+        "--evidence-key",
+        "E",
+        "--source-sha",
+        SHA,
+    ]);
+    Fixture::error(&preflight, "EvidenceMissing");
+    let completion = f.complete(&f.input());
+    Fixture::error(&completion, "EvidenceMissing");
+    let preflight: Value = serde_json::from_slice(&preflight.stderr).unwrap();
+    let completion: Value = serde_json::from_slice(&completion.stderr).unwrap();
+    assert_eq!(preflight["details"], completion["details"]);
+    assert_eq!(preflight["details"]["location"]["pointer"], Value::Null);
+    assert_eq!(
+        preflight["details"]["location"]["locator"],
+        evidence.locator
+    );
+    assert_eq!(
+        preflight["details"]["rule"],
+        "completion.report.check.details"
+    );
+    assert!(!preflight["details"]["repair"].as_str().unwrap().is_empty());
+    assert_eq!(fs::read(f.root.join("work.yaml")).unwrap(), source);
+    assert_eq!(f.revision(), revision);
+    assert_eq!(f.claim_status(), "active");
+    report["checks"][0]["result"] = json!("Checked the analysis and delivery receipt");
+    let corrected = bytes.replace(
+        "\"result\":\"\"",
+        "\"result\":\"Checked the analysis and delivery receipt\"",
+    );
+    let evidence = f.evidence("corrected", &report, |draft| {
+        draft.sha256 = Some(
+            awr_source::fingerprint(corrected.as_bytes())
+                .trim_start_matches("sha256:")
+                .into(),
+        );
+    });
+    fs::write(f.root.join(&evidence.locator), corrected).unwrap();
+    let prepared = f.ok(&[
+        "work",
+        "prepare-completion",
+        "W",
+        "--report",
+        &evidence.locator,
+        "--evidence-key",
+        "corrected",
+        "--source-sha",
+        SHA,
+    ]);
+    Fixture::success(&f.complete(&prepared["completion"]));
+    assert_eq!(f.work()["status"], "completed");
+    assert_eq!(f.claim_status(), "released");
+}
+
+#[test]
+fn completed_source_revalidation_uses_the_shared_report_explanation() {
+    let f = Fixture::new();
+    f.organize();
+    let mut report = f.report();
+    let mut second = report["checks"][0].clone();
+    second["name"] = json!("delivery review");
+    second.as_object_mut().unwrap().remove("passed");
+    report["checks"].as_array_mut().unwrap().push(second);
+    let evidence = f.evidence("E", &report, |_| {});
+    let preflight = f.run(&[
+        "work",
+        "prepare-completion",
+        "W",
+        "--report",
+        &evidence.locator,
+        "--evidence-key",
+        "E",
+        "--source-sha",
+        SHA,
+    ]);
+    Fixture::error(&preflight, "InvalidInput");
+    let preflight: Value = serde_json::from_slice(&preflight.stderr).unwrap();
+    assert_eq!(
+        preflight["details"]["location"]["pointer"],
+        "/checks/1/passed"
+    );
+    let source = fs::read_to_string(f.root.join("work.yaml")).unwrap();
+    fs::write(
+        f.root.join("work.yaml"),
+        source.replace("status: in_progress", "status: completed"),
+    )
+    .unwrap();
+    f.ok(&["source", "reindex"]);
+    let inspected = f.ok(&["intake", "inspect", "--source-sha", SHA]);
+    assert_eq!(inspected["organization"]["verified_completed"], 0);
+    let gap = inspected["organization"]["gaps"]
+        .as_array()
+        .unwrap()
+        .iter()
+        .find(|gap| gap["target"] == "W" && gap["code"] == "completion_verification_failed")
+        .unwrap();
+    let detail = gap["detail"].as_str().unwrap();
+    assert!(detail.contains("field passed is required"), "{gap}");
+    let text = Command::new(env!("CARGO_BIN_EXE_awr"))
+        .arg("--project")
+        .arg(&f.root)
+        .args(["intake", "inspect", "--source-sha", SHA])
+        .output()
+        .unwrap();
+    assert!(
+        text.status.success(),
+        "{}",
+        String::from_utf8_lossy(&text.stderr)
+    );
+    let text = String::from_utf8(text.stdout).unwrap();
+    for expected in [
+        format!("Source: {}", evidence.locator),
+        "Field: /checks/1/passed".into(),
+        format!("Rule: {}", preflight["details"]["rule"].as_str().unwrap()),
+        format!(
+            "Repair: {}",
+            preflight["details"]["repair"].as_str().unwrap()
+        ),
+    ] {
+        assert!(detail.contains(&expected), "{gap}");
+        assert!(text.contains(&expected), "{text}");
+    }
+}
+
+#[test]
 fn completion_preserves_metadata_binds_all_proof_and_releases_only_own_claim() {
     let f = Fixture::new();
     let e = f.evidence("E", &f.report(), |d| d.level = EvidenceLevel::Released);
@@ -856,13 +1241,21 @@ fn completion_report_criterion_mismatch_names_the_field_without_the_submitted_te
     assert!(selected.sha256.is_some());
     let result = f.complete(&f.input());
     Fixture::error(&result, "EvidenceMissing");
-    let message = String::from_utf8_lossy(&result.stderr);
-    assert!(message.contains("/checks/0/criteria/1"), "{message}");
-    assert!(
-        message.contains("authoritative acceptance criterion"),
-        "{message}"
+    let error: Value = serde_json::from_slice(&result.stderr).unwrap();
+    assert_eq!(
+        error["details"]["location"]["pointer"],
+        "/checks/0/criteria/1"
     );
-    assert!(!message.contains(submitted), "{message}");
+    assert_eq!(error["details"]["location"]["locator"], selected.locator);
+    assert_eq!(error["details"]["rule"], "completion.report.check.criteria");
+    assert!(
+        error["details"]["repair"]
+            .as_str()
+            .unwrap()
+            .contains("exact criterion"),
+        "{error}"
+    );
+    assert!(!error.to_string().contains(submitted), "{error}");
 }
 
 #[test]
@@ -896,6 +1289,11 @@ fn completion_binding_errors_name_fields_without_submitted_values() {
     assert!(selected.sha256.is_some());
     let result = f.complete(&f.input());
     Fixture::error(&result, "EvidenceMissing");
+    let error: Value = serde_json::from_slice(&result.stderr).unwrap();
+    assert_eq!(error["details"]["location"]["pointer"], "/work_item");
+    assert_eq!(error["details"]["location"]["locator"], selected.locator);
+    assert_eq!(error["details"]["rule"], "completion.report.work_item");
+    assert!(!error["details"]["repair"].as_str().unwrap().is_empty());
     let message = String::from_utf8_lossy(&result.stderr);
     assert!(message.contains("/work_item"), "{message}");
     assert!(

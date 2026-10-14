@@ -109,11 +109,7 @@ pub fn prepare_completion(
         None,
         1024 * 1024,
     )?;
-    let report: CompletionReport = serde_json::from_slice(&bytes).map_err(|e| {
-        Error::InvalidSource(Box::new(SourceDiagnostic {message:"invalid completion report schema".into(), location:DiagnosticLocation {
-            locator:Some(request.report.clone()), pointer:None, line:(e.line()>0).then_some(e.line()), column:(e.column()>0).then_some(e.column()),
-        }, rule:"completion.report.v1".into(), repair:"Provide version, work_item, source_sha, command, scope, verified_at and checks with name, passed, details and criteria; see the completion report template.".into()}))
-    })?;
+    let report = CompletionReport::parse(&bytes, &request.report).map_err(Error::InvalidSource)?;
     let evidence = Evidence {
         id: Id::new(),
         project_id: project.id,
@@ -133,18 +129,15 @@ pub fn prepare_completion(
         revision: 0,
         verified_at: Some(report.verified_at),
     };
-    report.validate(
-        &evidence,
-        &request.work,
-        &work.item.acceptance,
-        now_millis()?,
-    )?;
-    if evidence.scope.is_empty() || !work.item.acceptance.iter().all(|c| report.covers(c)) {
-        return Err(Error::EvidenceMissing(
-            "report must cover every current acceptance criterion and declare a nonempty scope"
-                .into(),
-        ));
-    }
+    report
+        .validate(
+            &evidence,
+            &request.work,
+            &work.item.acceptance,
+            now_millis()?,
+        )
+        .and_then(|()| report.validate_coverage(&evidence, &work.item.acceptance))
+        .map_err(|error| CompletionReport::locate_error(&bytes, error))?;
     let completion = CompletionInput {
         version: 1,
         source_sha: request.source_sha.clone(),

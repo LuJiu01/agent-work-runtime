@@ -655,10 +655,15 @@ pub fn inspect_organization(
                     Ok(()) => result.verified_completed += 1,
                     Err(error) => {
                         result.completion_verification_failed += 1;
+                        let report = error.report();
                         result.gap(
                             "completion_verification_failed",
                             key,
-                            &error.report().message,
+                            &format!(
+                                "{}{}",
+                                report.message,
+                                render_diagnostic_details(report.details.as_ref())
+                            ),
                             vec![work.meta.source_ref.clone()],
                             "evidence",
                         );
@@ -827,14 +832,16 @@ fn verify_completed(
             (*budget).min(1024 * 1024) as u64,
         )?;
         *budget = budget.saturating_sub(bytes.len());
-        let report: CompletionReport = serde_json::from_slice(&bytes)
-            .map_err(|_| Error::EvidenceMissing("invalid completion report".into()))?;
-        report.validate(
-            evidence,
-            &work.meta.external_key,
-            &work.acceptance,
-            now_millis()?,
-        )?;
+        let report = CompletionReport::parse(&bytes, &evidence.locator)
+            .map_err(Error::EvidenceDiagnostic)?;
+        report
+            .validate(
+                evidence,
+                &work.meta.external_key,
+                &work.acceptance,
+                now_millis()?,
+            )
+            .map_err(|error| CompletionReport::locate_error(&bytes, error))?;
         for criterion in &work.acceptance {
             if report.covers(criterion) {
                 covered.insert(criterion);

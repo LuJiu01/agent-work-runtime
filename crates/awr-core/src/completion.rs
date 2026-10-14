@@ -2,6 +2,7 @@ use crate::{Error, Evidence, EvidenceLevel, Id, Result, WorkItem, is_source_sha}
 use serde::{Deserialize, Serialize};
 use serde_json::{Value, json};
 use std::collections::BTreeSet;
+mod report;
 
 pub fn verification_rank(level: EvidenceLevel) -> Option<u8> {
     match level {
@@ -120,23 +121,38 @@ impl CompletionReport {
         criteria: &[String],
         at: i64,
     ) -> Result<()> {
-        // Diagnostics stay value-free: submitted report content must never be
-        // echoed back, so failures identify the JSON pointer of the offending
-        // field plus a static rule and repair hint (see also #321).
         let known = criteria.iter().map(String::as_str).collect::<BTreeSet<_>>();
+        let invalid = |pointer: &str, rule: &str, message: &str, repair: &str| {
+            Error::EvidenceDiagnostic(report::diagnostic(
+                &evidence.locator,
+                pointer,
+                rule,
+                message,
+                repair,
+            ))
+        };
         if self.version != 1 {
-            return Err(Error::EvidenceMissing(
-                "/version must be 1 in the verification report".into(),
+            return Err(invalid(
+                "/version",
+                "completion.report.version",
+                "completion report version must be 1",
+                "Use the version 1 completion report template.",
             ));
         }
         if self.work_item != work_key {
-            return Err(Error::EvidenceMissing(
-                "/work_item must equal the key of the work item being completed".into(),
+            return Err(invalid(
+                "/work_item",
+                "completion.report.work_item",
+                "completion report work_item does not match the target work",
+                "Check which work was actually verified and select its report.",
             ));
         }
         if !is_source_sha(&self.source_sha) {
-            return Err(Error::EvidenceMissing(
-                "verification report /source_sha must be a full source commit SHA".into(),
+            return Err(invalid(
+                "/source_sha",
+                "completion.report.source_sha",
+                "completion report source_sha must be a full source SHA",
+                "Supply the full source revision actually verified.",
             ));
         }
         if !evidence
@@ -144,77 +160,145 @@ impl CompletionReport {
             .as_ref()
             .is_some_and(|sha| sha.eq_ignore_ascii_case(&self.source_sha))
         {
-            return Err(Error::EvidenceMissing(
-                "verification report /source_sha must equal the SHA bound to the evidence".into(),
+            return Err(invalid(
+                "/source_sha",
+                "completion.report.source_sha",
+                "completion report source_sha does not match the evidence binding",
+                "Check the report and evidence against the source revision actually verified, then rerun completion preflight.",
             ));
         }
-        if evidence.command.as_deref() != Some(&self.command) || self.command.trim().is_empty() {
-            return Err(Error::EvidenceMissing(
-                "verification report /command must equal the command registered with the evidence and be nonempty".into(),
+        if self.command.trim().is_empty() {
+            return Err(invalid(
+                "/command",
+                "completion.report.command",
+                "completion report command must be nonempty",
+                "Record the command or verification procedure actually executed.",
+            ));
+        }
+        if evidence.command.as_deref() != Some(&self.command) {
+            return Err(invalid(
+                "/command",
+                "completion.report.command",
+                "completion report command does not match the evidence binding",
+                "Check the report and registered command against the actual verification record.",
             ));
         }
         if self.scope.iter().collect::<BTreeSet<_>>() != evidence.scope.iter().collect() {
-            return Err(Error::EvidenceMissing(
-                "verification report /scope must match the scope registered with the evidence"
-                    .into(),
+            return Err(invalid(
+                "/scope",
+                "completion.report.scope",
+                "completion report scope does not match the evidence binding",
+                "Check the scope actually verified against the report and evidence.",
             ));
         }
         if self.verified_at < 0 {
-            return Err(Error::EvidenceMissing(
-                "verification report /verified_at must be a non-negative Unix epoch milliseconds integer (now_millis())".into(),
+            return Err(invalid(
+                "/verified_at",
+                "completion.report.verified_at",
+                "completion report verified_at must be nonnegative",
+                "Record the actual verification time as Unix milliseconds.",
             ));
         }
         if self.verified_at > at {
-            return Err(Error::EvidenceMissing(
-                "verification report /verified_at is later than the current time; use Unix epoch milliseconds (now_millis())".into(),
+            return Err(invalid(
+                "/verified_at",
+                "completion.report.verified_at",
+                "completion report verified_at is later than the current time",
+                "Record the actual verification time as Unix milliseconds, not a future timestamp.",
             ));
         }
         if evidence.verified_at != Some(self.verified_at) {
-            return Err(Error::EvidenceMissing(
-                "verification report /verified_at must equal the verified_at registered with the evidence".into(),
+            return Err(invalid(
+                "/verified_at",
+                "completion.report.verified_at",
+                "completion report verified_at does not match the evidence binding",
+                "Check the report and evidence against the actual verification time.",
             ));
         }
         if self.checks.is_empty() {
-            return Err(Error::EvidenceMissing(
-                "verification report requires at least one check".into(),
+            return Err(invalid(
+                "/checks",
+                "completion.report.checks",
+                "completion report requires checks",
+                "Provide named checks with their observed results and acceptance references.",
             ));
         }
-        for (check_index, check) in self.checks.iter().enumerate() {
-            let check_path = format!("/checks/{check_index}");
+        for (index, check) in self.checks.iter().enumerate() {
+            let path = format!("/checks/{index}");
             if !check.passed {
-                return Err(Error::EvidenceMissing(format!(
-                    "{check_path}/passed records passed=false; completion requires passing checks"
-                )));
+                return Err(invalid(
+                    &format!("{path}/passed"),
+                    "completion.report.check.passed",
+                    &format!("completion report check {index} did not pass"),
+                    "Resolve the failed check and obtain a passing result before submitting completion evidence.",
+                ));
             }
             if check.name.trim().is_empty() {
-                return Err(Error::EvidenceMissing(format!(
-                    "{check_path}/name requires nonempty unique names"
-                )));
+                return Err(invalid(
+                    &format!("{path}/name"),
+                    "completion.report.check.name",
+                    &format!("completion report check {index} requires a name"),
+                    "Give the check a nonempty, unique name.",
+                ));
             }
             if check.details.trim().is_empty() {
-                return Err(Error::EvidenceMissing(format!(
-                    "{check_path}/details requires nonempty details"
-                )));
+                return Err(invalid(
+                    &format!("{path}/details"),
+                    "completion.report.check.details",
+                    &format!("completion report check {index} requires details"),
+                    "Describe the observed result of this check.",
+                ));
             }
-            for (criterion_index, _) in check.criteria.iter().enumerate() {
-                if !known.contains(check.criteria[criterion_index].as_str()) {
-                    return Err(Error::EvidenceMissing(format!(
-                        "{check_path}/criteria/{criterion_index} must match an authoritative acceptance criterion from the ledger byte-for-byte"
-                    )));
-                }
+            if let Some(criterion) = check
+                .criteria
+                .iter()
+                .position(|s| !known.contains(s.as_str()))
+            {
+                return Err(invalid(
+                    &format!("{path}/criteria/{criterion}"),
+                    "completion.report.check.criteria",
+                    &format!(
+                        "completion report check {index} references an unknown acceptance criterion"
+                    ),
+                    "Read the current work acceptance and use the exact criterion actually verified.",
+                ));
             }
         }
-        if self
-            .checks
+        let mut names = BTreeSet::new();
+        for (index, check) in self.checks.iter().enumerate() {
+            if !names.insert(&check.name) {
+                return Err(invalid(
+                    &format!("/checks/{index}/name"),
+                    "completion.report.check.name",
+                    &format!("completion report check {index} repeats a check name"),
+                    "Use a distinct name for each check.",
+                ));
+            }
+        }
+        Ok(())
+    }
+    /// The single-report preflight requires complete coverage; completion may select several reports.
+    pub fn validate_coverage(&self, evidence: &Evidence, criteria: &[String]) -> Result<()> {
+        if self.scope.is_empty() {
+            return Err(Error::EvidenceDiagnostic(report::diagnostic(
+                &evidence.locator,
+                "/scope",
+                "completion.report.scope",
+                "completion report scope must be nonempty",
+                "Declare the scope actually verified.",
+            )));
+        }
+        if let Some(index) = criteria
             .iter()
-            .map(|c| &c.name)
-            .collect::<BTreeSet<_>>()
-            .len()
-            != self.checks.len()
+            .position(|criterion| !self.covers(criterion))
         {
-            return Err(Error::EvidenceMissing(
-                "verification report check names must be unique".into(),
-            ));
+            return Err(Error::EvidenceDiagnostic(report::diagnostic(
+                &evidence.locator,
+                "/checks",
+                "completion.report.coverage",
+                &format!("completion report does not cover current work acceptance[{index}]"),
+                "Read the current work acceptance and include checks for each criterion actually verified before rerunning single-report preflight.",
+            )));
         }
         Ok(())
     }

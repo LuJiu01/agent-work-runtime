@@ -40,6 +40,8 @@ pub enum Error {
     },
     #[error("required evidence missing: {0}")]
     EvidenceMissing(String),
+    #[error("required evidence missing: {}", .0.message)]
+    EvidenceDiagnostic(Box<SourceDiagnostic>),
     #[error("mutation unsupported: {0}")]
     MutationUnsupported(String),
     #[error("proposal {proposal_id} requires manual handling: {reason}")]
@@ -172,7 +174,7 @@ impl Error {
             Self::DependencyBlocked(_) => "DependencyBlocked",
             Self::ClaimConflict(_) => "ClaimConflict",
             Self::RuleViolation(_) | Self::SensitiveSource { .. } => "RuleViolation",
-            Self::EvidenceMissing(_) => "EvidenceMissing",
+            Self::EvidenceMissing(_) | Self::EvidenceDiagnostic(_) => "EvidenceMissing",
             Self::MutationUnsupported(_) => "MutationUnsupported",
             Self::ProposalRequired { .. } => "proposal_required",
             Self::MutationIncomplete { .. } => "MutationIncomplete",
@@ -209,7 +211,7 @@ impl Error {
                     );
                     Some(details)
                 }
-                Self::InvalidSource(diagnostic) => Some(serde_json::json!({
+                Self::InvalidSource(diagnostic) | Self::EvidenceDiagnostic(diagnostic) => Some(serde_json::json!({
                     "location":diagnostic.location,"rule":diagnostic.rule,"repair":diagnostic.repair
                 })),
                 Self::IntakePreflightRejected { issues, intake_staged } => Some(serde_json::json!({

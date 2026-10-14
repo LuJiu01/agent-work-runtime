@@ -101,6 +101,27 @@ writes with current revisions. Completion rechecks claims, dependencies, source
 freshness and report bytes; changing a report after preflight invalidates its digest.
 Query a shared MCP write by its stable request ID when its outcome is unknown.
 
+Report parsing and field-validation failures return one diagnostic with
+`details.location`, `details.rule` and `details.repair`, using the same format as
+[source diagnostics](diagnostics.md).
+For example, `/checks/0/passed` identifies a missing or failing check result, and
+`/source_sha` identifies a malformed or mismatched verification revision. The rule
+and repair distinguish these causes without including the submitted value.
+Pointers follow the original report's field spelling (including the `result` alias)
+and supported positional struct representations. Unlocated errors omit the pointer
+and retain parser coordinates when available. Coordinates are not inferred for a
+field pointer.
+
+Preflight and completion share report diagnostics. Completed-work revalidation
+renders these diagnostics in its existing gap detail. A report structure failure
+retains `InvalidInput` during preflight and `EvidenceMissing` during completion;
+binding and check failures use `EvidenceMissing` in both. Correct the indicated
+problem against the actual verification record, then rerun preflight before
+registering evidence. Evidence registration alone does not validate report bytes.
+Preflight requires one report covering all current acceptance criteria; completion
+can still bind different reports to different criteria. A failed check needs an
+actual passing result, not merely an edit to its `passed` flag.
+
 When status is checked with a source SHA, an unchanged task completed through AWR
 is verified against the evidence selected by that successful completion on the
 same runtime branch. Every selected report, including extra required evidence,

@@ -1473,6 +1473,78 @@ async fn source_actions_use_owned_claims_revision_guards_and_recovery_receipts()
 }
 
 #[tokio::test]
+async fn report_diagnostics_survive_mcp_and_a_corrected_preflight_completes() {
+    let f = Fixture::new();
+    let sid = f.session("W", true, None).session.id;
+    let client = f.client().await;
+    let mut progress = action(&f, sid, "progress");
+    progress["next_action"] = json!("Verify the fixture report");
+    success(call(&client, "awr_work_transition", progress).await);
+    let valid = json!({"version":1,"work_item":"W","source_sha":SHA,
+        "command":"review customer analysis","scope":["W"],"verified_at":now_millis().unwrap(),
+        "checks":[{"name":"review","passed":true,"details":"Observed the fixture result","criteria":[CRITERION]}]});
+    let prepare = json!({"work":"W","report":"report.json","evidence_key":"E","source_sha":SHA,"level":"locally_verified"});
+    for (index, code) in ["InvalidInput", "EvidenceMissing"].iter().enumerate() {
+        let mut report = valid.clone();
+        if index == 0 {
+            report["checks"][0]
+                .as_object_mut()
+                .unwrap()
+                .remove("passed");
+        } else {
+            report["checks"][0]["passed"] = json!(false);
+        }
+        let bytes = serde_json::to_vec(&report).unwrap();
+        fs::write(f.root.join("report.json"), &bytes).unwrap();
+        let before = f.logical_state();
+        let preflight = error(
+            call(
+                &client,
+                "awr_context",
+                json!({"child_tool":"awr_completion_prepare","arguments":prepare}),
+            )
+            .await,
+            code,
+        );
+        assert_eq!(
+            preflight["details"]["location"]["pointer"],
+            "/checks/0/passed"
+        );
+        assert_eq!(f.logical_state(), before);
+        let key = format!("rejected-{index}");
+        success(call(&client, "awr_evidence_record", json!({"expected_revision":f.rev(),
+            "external_key":key,"work":"W","evidence_type":"completion_report","level":"locally_verified",
+            "summary":"Fixture report","locator":"report.json","sha256":awr_source::fingerprint(&bytes).trim_start_matches("sha256:"),
+            "source_sha":SHA,"command":valid["command"],"scope":valid["scope"],"verified_at":valid["verified_at"]})).await);
+        let before = f.logical_state();
+        let mut args = action(&f, sid, "complete");
+        args["completion"] = json!({"version":1,"source_sha":SHA,"acceptance":[{"criterion":CRITERION,"evidence":[key]}]});
+        let rejected = error(
+            call(&client, "awr_work_transition", args).await,
+            "EvidenceMissing",
+        );
+        assert_eq!(preflight["details"], rejected["details"]);
+        assert_eq!(f.logical_state(), before);
+    }
+    fs::write(
+        f.root.join("report.json"),
+        serde_json::to_vec(&valid).unwrap(),
+    )
+    .unwrap();
+    let prepared = success(call(&client, "awr_completion_prepare", prepare).await);
+    assert_eq!(prepared["verification_executed"], false);
+    assert_eq!(prepared["completion_claimed"], false);
+    let mut draft = prepared["evidence"].clone();
+    draft["expected_revision"] = json!(f.rev());
+    success(call(&client, "awr_evidence_record", draft).await);
+    let mut args = action(&f, sid, "complete");
+    args["completion"] = prepared["completion"].clone();
+    let completed = success(call(&client, "awr_work_transition", args).await);
+    assert_eq!(completed["event"]["event_type"], "work.completed");
+    client.cancel().await.unwrap();
+}
+
+#[tokio::test]
 async fn completion_requires_actual_bound_evidence_and_releases_only_the_owned_claim() {
     let f = Fixture::new();
     let started = f.session("W", true, None);
