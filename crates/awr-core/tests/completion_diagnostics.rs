@@ -47,6 +47,8 @@ fn rejected_report_fields_have_safe_actionable_locations() {
             json!({"synthetic-private-key":"synthetic-private-value"}),
         ),
         ("/verified_at", json!(1.5)),
+        ("/verified_at", json!("synthetic-private-value")),
+        ("/verified_at", json!(null)),
         ("/checks", json!(false)),
         ("/checks/0", json!("synthetic-private-value")),
         ("/checks/0/name", json!(3)),
@@ -61,6 +63,9 @@ fn rejected_report_fields_have_safe_actionable_locations() {
         assert_eq!(detail.location.pointer.as_deref(), Some(pointer));
         assert_eq!(detail.rule, "completion.report.v1");
         assert!(!detail.repair.is_empty());
+        if pointer == "/verified_at" {
+            assert!(detail.repair.contains("Unix epoch milliseconds"));
+        }
         let output = serde_json::to_string(&detail).unwrap();
         assert!(!output.contains("synthetic-private"));
         // A structural probe has no independently established source coordinates.
@@ -70,6 +75,7 @@ fn rejected_report_fields_have_safe_actionable_locations() {
     for (parent, name) in [
         ("", "version"),
         ("", "work_item"),
+        ("", "verified_at"),
         ("", "checks"),
         ("/checks/0", "passed"),
         ("/checks/0", "details"),
@@ -85,6 +91,9 @@ fn rejected_report_fields_have_safe_actionable_locations() {
             .unwrap_err();
         assert_eq!(detail.location.pointer, Some(format!("{parent}/{name}")));
         assert!(detail.message.contains("required"));
+        if name == "verified_at" {
+            assert!(detail.repair.contains("Unix epoch milliseconds"));
+        }
     }
 }
 

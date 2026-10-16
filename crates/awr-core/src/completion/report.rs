@@ -150,7 +150,15 @@ fn shape_issue(value: &Value, locator: &str) -> Option<Box<SourceDiagnostic>> {
         .or_else(|| field::<String>(value, locator, "", "source_sha", "a string"))
         .or_else(|| field::<String>(value, locator, "", "command", "a string"))
         .or_else(|| field::<Vec<String>>(value, locator, "", "scope", "an array of strings"))
-        .or_else(|| field::<i64>(value, locator, "", "verified_at", "a signed 64-bit integer"))
+        .or_else(|| {
+            field::<i64>(
+                value,
+                locator,
+                "",
+                "verified_at",
+                "a signed 64-bit Unix epoch milliseconds integer",
+            )
+        })
         .or_else(|| {
             if value.get("checks").is_some_and(Value::is_array) {
                 None
