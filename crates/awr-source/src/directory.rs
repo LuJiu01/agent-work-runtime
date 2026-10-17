@@ -280,6 +280,14 @@ impl SourceAdapter for MarkdownDirectoryAdapter {
         )?;
         meta.source_ref.section_fingerprint = Some(snapshot.section_fingerprint(1, lines)?);
         let decision = Decision {
+            specification: if let Some(value) = metadata.get("specification") {
+                let specification: awr_core::Specification = serde_json::from_value(value.clone())
+                    .map_err(|_| Error::InvalidInput("/specification must contain version and items with explicit id/disposition and optional superseded_by".into()))?;
+                specification.validate()?;
+                Some(specification)
+            } else {
+                None
+            },
             meta,
             title,
             status,

@@ -81,6 +81,18 @@ fn catalog() -> Vec<Capability> {
             &["registered_sources_only", "bounded_body_reads"][..],
         ),
         (
+            "specification.check",
+            true,
+            &["spec check"][..],
+            &[
+                "registered_decision_metadata",
+                "explicit_version_and_fingerprint",
+                "declared_coverage_only",
+                "read_only_no_source_or_runtime_writes",
+                "unknown_is_not_semantic_agreement",
+            ][..],
+        ),
+        (
             "source.refresh",
             true,
             &["source scan", "source reindex", "source history"],
