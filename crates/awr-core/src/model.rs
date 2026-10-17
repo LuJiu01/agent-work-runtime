@@ -205,6 +205,8 @@ pub struct WorkItem {
     pub acceptance: Vec<String>,
     pub tags: Vec<String>,
     pub paths: Vec<String>,
+    #[serde(default, skip_serializing_if = "Vec::is_empty")]
+    pub spec_refs: Vec<crate::SpecificationReference>,
 }
 
 fn is_false(value: &bool) -> bool {
@@ -251,6 +253,8 @@ pub struct Decision {
     pub adoption: Option<DecisionAdoption>,
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub superseded_by: Option<DocumentVersion>,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub specification: Option<crate::Specification>,
 }
 
 #[derive(Debug, Clone, Serialize, Deserialize, PartialEq, Eq)]

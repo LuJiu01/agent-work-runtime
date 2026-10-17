@@ -39,11 +39,15 @@ fn short(text: &str) -> String {
         .unwrap_or_else(|_| awr_core::SENSITIVE_CONTENT_WITHHELD.into())
 }
 fn brief(work: &Projected<WorkItem>) -> Value {
-    json!({"id":work.item.meta.id,"external_key":work.item.meta.external_key,"title":work.item.title,"source_ref":work.item.meta.source_ref,
+    let mut value = json!({"id":work.item.meta.id,"external_key":work.item.meta.external_key,"title":work.item.title,"source_ref":work.item.meta.source_ref,
         "archived":work.item.archived,"ordinary_completion":work.item.ordinary_completion,"ordinary_work_policy":work.source.config["adapter_options"]["ordinary_work_policy"],
         "status":work.item.status,"raw_status":work.item.raw_status,"summary":short(if work.item.summary.is_empty(){&work.item.title}else{&work.item.summary}),
         "priority":work.item.priority,"milestone":work.item.milestone,"owner":work.item.owner,"next_action":work.item.next_action,
-        "blocker":work.item.blocker,"revision":work.item.meta.revision,"source_revision":work.item.meta.source_ref.source_revision,"freshness":work.source.freshness})
+        "blocker":work.item.blocker,"revision":work.item.meta.revision,"source_revision":work.item.meta.source_ref.source_revision,"freshness":work.source.freshness});
+    if !work.item.spec_refs.is_empty() {
+        value["spec_refs"] = json!(work.item.spec_refs);
+    }
+    value
 }
 fn ready_brief(work: &WorkReadiness) -> Value {
     let mut value = brief(&work.work);
@@ -63,6 +67,7 @@ pub(crate) fn is_read_only(name: &str) -> bool {
             | "awr_completion_prepare"
             | "awr_work_assess"
             | "awr_work_graph"
+            | "awr_spec_check"
             | "awr_change_preview"
             | "awr_change_status"
             | "awr_context_compile"
@@ -330,6 +335,9 @@ pub(crate) fn call(root: &Path, name: &str, mut args: JsonObject) -> Result<Call
             awr_runtime::assess_management(&view.store, root, &parse_tool!(name, args))?
         }
         "awr_work_graph" => awr_runtime::work_graph(&view.store, root, &parse_tool!(name, args))?,
+        "awr_spec_check" => {
+            awr_runtime::check_specifications(&view.store, root, &parse_tool!(name, args))?
+        }
         "awr_search" => search(&mut view, parse_tool!(name, args))?,
         _ => return Err(Error::Unsupported(name.into())),
     };

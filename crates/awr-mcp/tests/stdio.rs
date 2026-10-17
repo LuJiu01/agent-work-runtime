@@ -479,6 +479,78 @@ fn success(result: CallToolResult) -> Value {
     assert_eq!(result.is_error, Some(false), "{result:?}");
     body(&result)
 }
+
+#[tokio::test]
+async fn specification_check_is_discoverable_read_only_and_conservative() {
+    let f = Fixture::new();
+    let metadata = json!({"id":"SPEC","status":"accepted","specification":{"version":"2","items":[
+        {"id":"OLD","disposition":"superseded","superseded_by":"NEW"},
+        {"id":"NEW","disposition":"future"},
+        {"id":"CANCELLED","disposition":"cancelled"}
+    ]}});
+    let document = format!(
+        "---\n{}\n---\n# Synthetic specification\n\n## Decision\nUse the reviewed boundary.\n",
+        serde_json::to_string_pretty(&metadata).unwrap()
+    );
+    fs::write(f.root.join("decisions/spec.md"), &document).unwrap();
+    let reference = json!({"specification":"SPEC","item":"OLD","approved_version":"1","source_fingerprint":format!("sha256:{}","a".repeat(64)),"criterion":CRITERION});
+    fs::write(
+        f.root.join("work.yaml"),
+        WORK.replace(
+            "  verification:\n",
+            &format!("  spec_refs: [{}]\n  verification:\n", reference),
+        ),
+    )
+    .unwrap();
+    f.reindex();
+    let client = f.client().await;
+    let before = f.logical_state();
+    let source = fs::read(f.root.join("work.yaml")).unwrap();
+    let manifest = success(call(&client, "awr_work", json!({})).await);
+    let tool = manifest["children"]
+        .as_array()
+        .unwrap()
+        .iter()
+        .find(|c| c["name"] == "awr_spec_check")
+        .unwrap();
+    assert_eq!(tool["read_only"], true);
+    let result = success(
+        call(
+            &client,
+            "awr_work",
+            json!({"child_tool":"awr_spec_check","arguments":{"spec":"SPEC"}}),
+        )
+        .await,
+    );
+    assert_eq!(result["status"], "needs_review");
+    assert_eq!(result["references"][0]["replacement"], "NEW");
+    assert_eq!(result["counts"]["uncovered"], 1);
+    assert_eq!(result["counts"]["not_required"], 2);
+    assert_eq!(result["read_only"], true);
+    let unknown = success(call(&client, "awr_spec_check", json!({"spec":"missing"})).await);
+    assert_eq!(unknown["status"], "unknown");
+    error(
+        call(&client, "awr_spec_check", json!({"limit":0})).await,
+        "InvalidInput",
+    );
+    assert_eq!(f.logical_state(), before);
+    assert_eq!(fs::read(f.root.join("work.yaml")).unwrap(), source);
+    assert_eq!(
+        fs::read_to_string(f.root.join("decisions/spec.md")).unwrap(),
+        document
+    );
+    fs::write(
+        f.root.join("decisions/spec.md"),
+        document + "\nChanged source.\n",
+    )
+    .unwrap();
+    error(
+        call(&client, "awr_spec_check", json!({"spec":"SPEC"})).await,
+        "SourceStale",
+    );
+    assert_eq!(f.logical_state(), before);
+    client.cancel().await.unwrap();
+}
 fn error(result: CallToolResult, expected: &str) -> Value {
     assert_eq!(result.is_error, Some(true), "{result:?}");
     let value = body(&result);
