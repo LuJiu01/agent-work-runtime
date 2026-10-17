@@ -653,6 +653,94 @@ async fn specification_document_history_and_unregistered_replacements_are_distin
     assert_eq!(f.logical_state(), before);
     client.cancel().await.unwrap();
 }
+
+#[tokio::test]
+async fn specification_history_keeps_extraction_warnings_separate_from_receipt_validity() {
+    let f = Fixture::new();
+    for (key, status, heading) in [
+        ("OLD", "accepted", "Decision"),
+        ("SECOND", "proposed", "Requirements"),
+        ("LATEST", "proposed", "Decision"),
+    ] {
+        let metadata = json!({"id":key,"status":status,"specification":{"version":"1","items":[{"id":"R","disposition":"required"}]}});
+        fs::write(f.root.join(format!("decisions/{key}.md")), format!("---\n{}\n---\n# Synthetic specification\n\n## {heading}\nUse the reviewed requirements.\n", serde_json::to_string_pretty(&metadata).unwrap())).unwrap();
+    }
+    f.reindex();
+    for (old, new) in [("OLD", "SECOND"), ("SECOND", "LATEST")] {
+        let (mut store, project) = f.store();
+        let version = |key: &str| {
+            let d = store.decision(project.id, key).unwrap();
+            json!({"source_id":d.item.meta.source_ref.source_id,"external_key":key,"source_fingerprint":d.item.meta.source_ref.source_fingerprint})
+        };
+        let request = serde_json::from_value::<awr_runtime::BatchRequest>(json!({"version":1,"request_key":format!("adopt-{new}"),"actor":{"host":"fixture","subject":"reviewer","origin":"human"},"reason":"Adopt the reviewed specification","change":{"kind":"related","changes":[{"operation":"adopt","candidate":version(new),"supersedes":version(old)}]}})).unwrap();
+        let preview =
+            awr_runtime::change_batch(&mut store, &f.root, request.clone(), false, None, None)
+                .unwrap();
+        assert!(preview.failure.is_none());
+        let applied = awr_runtime::change_batch(
+            &mut store,
+            &f.root,
+            request,
+            true,
+            preview.value["preview"]["fingerprint"].as_str(),
+            preview.value["project_revision"].as_u64(),
+        )
+        .unwrap();
+        assert!(applied.failure.is_none());
+    }
+    let fingerprint = {
+        let (store, project) = f.store();
+        store
+            .decision(project.id, "LATEST")
+            .unwrap()
+            .item
+            .meta
+            .source_ref
+            .source_fingerprint
+    };
+    fs::write(f.root.join("work.yaml"), serde_json::to_vec(&json!({"work_items":[{"id":"W","status":"planned","spec_refs":[{"specification":"LATEST","item":"R","approved_version":"1","source_fingerprint":fingerprint}]}]})).unwrap()).unwrap();
+    f.reindex();
+    let client = f.client().await;
+    let before = f.logical_state();
+    let path = f.root.join("decisions/SECOND.md");
+    let bytes = fs::read(&path).unwrap();
+    let result = success(call(&client, "awr_spec_check", json!({"limit":5})).await);
+    assert_eq!(result["status"], "matched", "{result}");
+    assert_eq!(result["counts"]["covered"], 1);
+    assert_eq!(result["counts"]["unknown"], 0);
+    assert_eq!(result["source_warnings"], 1);
+    assert_eq!(
+        result["specifications"]
+            .as_array()
+            .unwrap()
+            .iter()
+            .filter(|s| s["status"] == "historical")
+            .count(),
+        2
+    );
+    assert_eq!(f.logical_state(), before);
+    assert_eq!(fs::read(&path).unwrap(), bytes);
+    fs::write(
+        &path,
+        [bytes, b"\nChanged after approval.\n".to_vec()].concat(),
+    )
+    .unwrap();
+    f.reindex();
+    let before = f.logical_state();
+    let result = success(call(&client, "awr_spec_check", json!({})).await);
+    assert_eq!(result["status"], "unknown");
+    assert_eq!(
+        result["specifications"]
+            .as_array()
+            .unwrap()
+            .iter()
+            .find(|s| s["key"] == "SECOND")
+            .unwrap()["diagnostic"],
+        "document_replacement_adoption_unverified"
+    );
+    assert_eq!(f.logical_state(), before);
+    client.cancel().await.unwrap();
+}
 fn error(result: CallToolResult, expected: &str) -> Value {
     assert_eq!(result.is_error, Some(true), "{result:?}");
     let value = body(&result);

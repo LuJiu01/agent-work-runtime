@@ -61,8 +61,11 @@ Document replacements are checked by registered source identity, external key
 and version. A validated adoption receipt can identify the reviewed bytes before
 approval changed lifecycle metadata; a current file hash alone is not a substitute
 for that receipt. Unregistered, ambiguous, changed or unapproved targets and
-replacement cycles remain `unknown`. A superseded receipt with source warnings
-is not used as proof of its former approved version.
+replacement cycles remain `unknown`. Receipt content and object identity are
+validated by the source adapter, independently of prose extraction warnings.
+An invalid receipt is not used as proof of its former approved version; unrelated
+warnings remain visible without invalidating that proof. This is a derived source
+projection, not independent evidence of human review.
 
 An explicitly superseded document with a fully resolved approved replacement is
 reported as `historical`, with its source reference and item count retained. Its
