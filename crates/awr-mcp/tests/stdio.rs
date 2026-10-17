@@ -551,6 +551,108 @@ async fn specification_check_is_discoverable_read_only_and_conservative() {
     assert_eq!(f.logical_state(), before);
     client.cancel().await.unwrap();
 }
+
+#[tokio::test]
+async fn specification_queue_briefs_are_bounded_and_details_preserve_bindings() {
+    let checked = |result: CallToolResult, phase: &str| {
+        assert_eq!(result.is_error, Some(false), "{phase}: {result:?}");
+        body(&result)
+    };
+    let f = Fixture::new();
+    let criterion = "Reviewed requirement ".to_owned() + &"x".repeat(4000);
+    let refs = (0..100).map(|i|json!({"specification":"SPEC","item":format!("R{i}"),"approved_version":"1","source_fingerprint":format!("sha256:{}","a".repeat(64)),"criterion":criterion})).collect::<Vec<_>>();
+    fs::write(f.root.join("work.yaml"), serde_json::to_vec(&json!({"work_items":[{"id":"W","title":"Review specification","status":"ready","next_action":"Review","acceptance":[criterion],"spec_refs":refs}]})).unwrap()).unwrap();
+    f.reindex();
+    let client = f.client().await;
+    let before = f.logical_state();
+    let queue = checked(
+        call(&client, "awr_work_ready", json!({"limit":1})).await,
+        "queue",
+    );
+    assert_eq!(queue["ready"][0]["spec_refs_count"], 100);
+    assert!(queue["ready"][0].get("spec_refs").is_none());
+    assert!(serde_json::to_vec(&queue).unwrap().len() < 20000);
+    let status = checked(
+        call(&client, "awr_project_status", json!({"view":"full"})).await,
+        "ready status",
+    );
+    assert!(
+        !serde_json::to_string(&status)
+            .unwrap()
+            .contains("\"spec_refs\":")
+    );
+    assert!(serde_json::to_vec(&status).unwrap().len() < 20000);
+    let detail = checked(
+        call(&client, "awr_work_get", json!({"work":"W"})).await,
+        "detail",
+    );
+    assert_eq!(detail["work"]["spec_refs"].as_array().unwrap().len(), 100);
+    let check = checked(call(&client, "awr_spec_check", json!({})).await, "coverage");
+    assert_eq!(check["references"].as_array().unwrap().len(), 100);
+    assert_eq!(f.logical_state(), before);
+    let mut ledger: Value =
+        serde_json::from_slice(&fs::read(f.root.join("work.yaml")).unwrap()).unwrap();
+    ledger["work_items"][0]["status"] = json!("in_progress");
+    fs::write(
+        f.root.join("work.yaml"),
+        serde_json::to_vec(&ledger).unwrap(),
+    )
+    .unwrap();
+    f.reindex();
+    let status = checked(
+        call(&client, "awr_project_status", json!({"view":"full"})).await,
+        "current status",
+    );
+    assert_eq!(status["current"][0]["spec_refs_count"], 100);
+    assert!(status["current"][0].get("spec_refs").is_none());
+    assert!(serde_json::to_vec(&status).unwrap().len() < 20000);
+    client.cancel().await.unwrap();
+}
+
+#[tokio::test]
+async fn specification_document_history_and_unregistered_replacements_are_distinct() {
+    let f = Fixture::new();
+    let metadata = json!({"id":"NEW","status":"accepted","specification":{"version":"1","items":[{"id":"R","disposition":"required"}]}});
+    fs::write(
+        f.root.join("decisions/new-spec.md"),
+        format!(
+            "---\n{}\n---\n# New specification\n\n## Decision\nUse the explicit requirement.\n",
+            metadata
+        ),
+    )
+    .unwrap();
+    f.reindex();
+    let (store, project) = f.store();
+    let new = store.decision(project.id, "NEW").unwrap();
+    let replacement = json!({"source_id":new.item.meta.source_ref.source_id,"external_key":"NEW","source_fingerprint":new.item.meta.source_ref.source_fingerprint});
+    drop(store);
+    let mut old = json!({"id":"OLD","status":"superseded","superseded_by":replacement,"specification":{"version":"0","items":[{"id":"R","disposition":"required"}]}});
+    let write_old = |metadata: &Value| {
+        fs::write(f.root.join("decisions/old-spec.md"),format!("---\n{}\n---\n# Old specification\n\n## Decision\nRetain the historical requirement.\n",metadata)).unwrap()
+    };
+    write_old(&old);
+    fs::write(f.root.join("work.yaml"),serde_json::to_vec(&json!({"work_items":[{"id":"W","status":"planned","acceptance":[CRITERION],"spec_refs":[{"specification":"NEW","item":"R","approved_version":"1","source_fingerprint":replacement["source_fingerprint"],"criterion":CRITERION}]}]})).unwrap()).unwrap();
+    f.reindex();
+    let client = f.client().await;
+    let before = f.logical_state();
+    let r = success(call(&client, "awr_spec_check", json!({})).await);
+    assert_eq!(r["status"], "matched");
+    assert_eq!(r["counts"]["covered"], 1);
+    assert_eq!(r["requirements"].as_array().unwrap().len(), 1);
+    assert_eq!(f.logical_state(), before);
+    old["superseded_by"]["external_key"] = json!("MISSING");
+    write_old(&old);
+    f.reindex();
+    let before = f.logical_state();
+    let r = success(call(&client, "awr_spec_check", json!({"spec":"OLD"})).await);
+    assert_eq!(r["status"], "unknown");
+    assert_eq!(
+        r["specifications"][0]["diagnostic"],
+        "document_replacement_not_registered"
+    );
+    assert_eq!(f.logical_state(), before);
+    client.cancel().await.unwrap();
+}
 fn error(result: CallToolResult, expected: &str) -> Value {
     assert_eq!(result.is_error, Some(true), "{result:?}");
     let value = body(&result);

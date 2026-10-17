@@ -21,14 +21,9 @@ fn default_limit() -> usize {
 }
 
 fn replacement(
-    spec: &Specification,
+    items: &BTreeMap<&str, &SpecificationItem>,
     item: &SpecificationItem,
 ) -> (Option<String>, Option<&'static str>) {
-    let items = spec
-        .items
-        .iter()
-        .map(|i| (i.id.as_str(), i))
-        .collect::<BTreeMap<_, _>>();
     let mut seen = BTreeSet::new();
     let mut current = item;
     while current.disposition == RequirementDisposition::Superseded {
@@ -46,15 +41,81 @@ fn replacement(
     ((current.id != item.id).then(|| current.id.clone()), None)
 }
 
-fn specification_status(projected: &Projected<Decision>) -> &'static str {
-    if projected.source.freshness != Freshness::Fresh {
-        "unknown"
-    } else {
-        match projected.item.status {
-            DecisionStatus::Accepted => "current",
-            DecisionStatus::Superseded => "needs_review",
-            _ => "unknown",
+/// Resolve only declared document identities and approval versions, never item equivalence.
+fn document_status(
+    start: &Projected<Decision>,
+    documents: &BTreeMap<&str, Vec<&Projected<Decision>>>,
+    trusted_adoptions: &BTreeSet<Id>,
+) -> (&'static str, Option<&'static str>) {
+    let mut current = start;
+    let mut seen = BTreeSet::new();
+    loop {
+        seen.insert(current.item.meta.id);
+        if current.source.freshness != Freshness::Fresh {
+            return ("unknown", Some("document_replacement_source_not_fresh"));
         }
+        if current.item.specification.is_none() {
+            return (
+                "unknown",
+                Some("document_replacement_specification_not_declared"),
+            );
+        }
+        match current.item.status {
+            DecisionStatus::Accepted => {
+                if current.item.superseded_by.is_some() {
+                    return ("unknown", Some("document_replacement_status_conflict"));
+                }
+                return (
+                    if current.item.meta.id == start.item.meta.id {
+                        "current"
+                    } else {
+                        "historical"
+                    },
+                    None,
+                );
+            }
+            DecisionStatus::Superseded => (),
+            _ => return ("unknown", Some("document_replacement_not_approved")),
+        }
+        if current.item.adoption.is_some() && !trusted_adoptions.contains(&current.item.meta.id) {
+            return ("unknown", Some("document_replacement_adoption_unverified"));
+        }
+        let Some(reference) = &current.item.superseded_by else {
+            return ("unknown", Some("document_replacement_not_declared"));
+        };
+        let Some(candidates) = documents.get(reference.external_key.as_str()) else {
+            return ("unknown", Some("document_replacement_not_registered"));
+        };
+        if candidates.len() != 1 {
+            return ("unknown", Some("document_replacement_ambiguous"));
+        }
+        let target = candidates[0];
+        if target.item.meta.source_ref.source_id != reference.source_id {
+            return ("unknown", Some("document_replacement_identity_mismatch"));
+        }
+        if seen.contains(&target.item.meta.id) {
+            return ("unknown", Some("document_replacement_cycle"));
+        }
+        // Adoption changes lifecycle bytes. Its validated candidate preserves the
+        // exact reviewed version, including on a later-superseded intermediate.
+        let version_matches = target
+            .item
+            .meta
+            .source_ref
+            .source_fingerprint
+            .eq_ignore_ascii_case(&reference.source_fingerprint)
+            || (trusted_adoptions.contains(&target.item.meta.id)
+                && target.item.adoption.as_ref().is_some_and(|a| {
+                    a.candidate.source_id == reference.source_id
+                        && a.candidate.external_key == reference.external_key
+                        && a.candidate
+                            .source_fingerprint
+                            .eq_ignore_ascii_case(&reference.source_fingerprint)
+                }));
+        if !version_matches {
+            return ("unknown", Some("document_replacement_version_changed"));
+        }
+        current = target;
     }
 }
 
@@ -81,7 +142,36 @@ pub fn check_specifications(
             .or_default()
             .push(d);
     }
+    let mut trusted_adoptions = BTreeSet::new();
+    for d in &decisions {
+        // Accepted receipts are validated by the adapter. Superseded receipts
+        // may retain invalidation warnings; do not use those as approval proof.
+        if d.item.adoption.is_some()
+            && (d.item.status == DecisionStatus::Accepted
+                || store.source_warnings(&d.source)?.is_empty())
+        {
+            trusted_adoptions.insert(d.item.meta.id);
+        }
+    }
+    let assessments = decisions
+        .iter()
+        .map(|d| {
+            (
+                d.item.meta.id,
+                if documents[d.item.meta.external_key.as_str()].len() == 1 {
+                    document_status(d, &documents, &trusted_adoptions)
+                } else {
+                    ("unknown", Some("specification_ambiguous"))
+                },
+            )
+        })
+        .collect::<BTreeMap<_, _>>();
     let selected = |key: &str| request.spec.as_deref().is_none_or(|s| s == key);
+    let referenced_keys = works
+        .iter()
+        .flat_map(|w| &w.item.spec_refs)
+        .map(|r| r.specification.as_str())
+        .collect::<BTreeSet<_>>();
     let references_total = works
         .iter()
         .map(|w| {
@@ -94,7 +184,9 @@ pub fn check_specifications(
         .sum::<usize>();
     let requirements_total = decisions
         .iter()
-        .filter(|d| selected(&d.item.meta.external_key))
+        .filter(|d| {
+            selected(&d.item.meta.external_key) && assessments[&d.item.meta.id].0 != "historical"
+        })
         .filter_map(|d| d.item.specification.as_ref())
         .map(|s| s.items.len())
         .sum::<usize>();
@@ -111,6 +203,26 @@ pub fn check_specifications(
             budget: request.limit,
         });
     }
+    // One transient item index per inspected specification, reused by refs and coverage.
+    let item_indexes = decisions
+        .iter()
+        .filter(|d| {
+            selected(&d.item.meta.external_key)
+                && (assessments[&d.item.meta.id].0 != "historical"
+                    || referenced_keys.contains(d.item.meta.external_key.as_str()))
+        })
+        .filter_map(|d| {
+            d.item.specification.as_ref().map(|s| {
+                (
+                    d.item.meta.id,
+                    s.items
+                        .iter()
+                        .map(|i| (i.id.as_str(), i))
+                        .collect::<BTreeMap<_, _>>(),
+                )
+            })
+        })
+        .collect::<BTreeMap<_, _>>();
     let mut refs = vec![];
     let mut mapped_refs: BTreeMap<(&str, &str), Vec<usize>> = BTreeMap::new();
     let mut diagnostics = vec![];
@@ -122,7 +234,8 @@ pub fn check_specifications(
         for d in candidates {
             if let Some(spec) = &d.item.specification {
                 specifications.push(json!({"key":key,"version":spec.version,
-                    "status":if candidates.len()==1 {specification_status(d)}else{"unknown"},
+                    "status":assessments[&d.item.meta.id].0,"diagnostic":assessments[&d.item.meta.id].1,
+                    "item_count":spec.items.len(),
                     "decision_status":d.item.status,"source_ref":d.item.meta.source_ref,
                     "superseded_by":d.item.superseded_by}));
             }
@@ -154,6 +267,7 @@ pub fn check_specifications(
             let mut unknown = false;
             let mut replacement_key = None;
             let mut observed_version = None;
+            let mut historical_document = false;
             if w.source.freshness != Freshness::Fresh {
                 unknown = true;
                 reasons.push("work_source_not_fresh");
@@ -183,12 +297,17 @@ pub fn check_specifications(
                 }
                 Some(ds) => {
                     let d = ds[0];
-                    match specification_status(d) {
+                    let (document_state, diagnostic) = assessments[&d.item.meta.id];
+                    historical_document = document_state == "historical";
+                    match document_state {
                         "unknown" => {
                             unknown = true;
                             reasons.push("specification_not_currently_approved");
+                            if let Some(diagnostic) = diagnostic {
+                                reasons.push(diagnostic);
+                            }
                         }
-                        "needs_review" => reasons.push("specification_superseded"),
+                        "historical" => reasons.push("specification_superseded"),
                         _ => (),
                     }
                     if !r
@@ -207,13 +326,14 @@ pub fn check_specifications(
                             if r.approved_version != spec.version {
                                 reasons.push("approved_version_changed");
                             }
-                            match spec.items.iter().find(|i| i.id == r.item) {
+                            let items = &item_indexes[&d.item.meta.id];
+                            match items.get(r.item.as_str()) {
                                 None => {
                                     unknown = true;
                                     reasons.push("item_not_resolved");
                                 }
                                 Some(item) => {
-                                    let (target, error) = replacement(spec, item);
+                                    let (target, error) = replacement(items, item);
                                     replacement_key = target;
                                     if let Some(error) = error {
                                         unknown = true;
@@ -237,6 +357,10 @@ pub fn check_specifications(
             }
             let status = if unknown {
                 "unknown"
+            } else if historical_document
+                && (w.item.archived || w.item.status == WorkStatus::Cancelled)
+            {
+                "historical"
             } else if reasons.is_empty() {
                 "current"
             } else {
@@ -267,8 +391,11 @@ pub fn check_specifications(
             let Some(spec) = &d.item.specification else {
                 continue;
             };
+            if assessments[&d.item.meta.id].0 == "historical" {
+                continue;
+            }
             for item in &spec.items {
-                let (replacement, error) = replacement(spec, item);
+                let (replacement, error) = replacement(&item_indexes[&d.item.meta.id], item);
                 let mapped = mapped_refs
                     .get(&(*key, item.id.as_str()))
                     .into_iter()
@@ -280,27 +407,27 @@ pub fn check_specifications(
                     .filter(|r| r["status"] == "current")
                     .map(|r| r["work"].as_str().unwrap())
                     .collect::<BTreeSet<_>>();
-                let status =
-                    if ds.len() != 1 || error.is_some() || specification_status(d) == "unknown" {
-                        "unknown"
-                    } else if specification_status(d) == "needs_review" {
-                        "needs_review"
-                    } else if matches!(
-                        item.disposition,
-                        RequirementDisposition::Cancelled
-                            | RequirementDisposition::OutOfScope
-                            | RequirementDisposition::Superseded
-                    ) {
-                        "not_required"
-                    } else if !current.is_empty() {
-                        "covered"
-                    } else if mapped.iter().any(|r| r["status"] == "unknown") {
-                        "unknown"
-                    } else if !mapped.is_empty() {
-                        "needs_review"
-                    } else {
-                        "uncovered"
-                    };
+                let status = if ds.len() != 1
+                    || error.is_some()
+                    || assessments[&d.item.meta.id].0 == "unknown"
+                {
+                    "unknown"
+                } else if matches!(
+                    item.disposition,
+                    RequirementDisposition::Cancelled
+                        | RequirementDisposition::OutOfScope
+                        | RequirementDisposition::Superseded
+                ) {
+                    "not_required"
+                } else if !current.is_empty() {
+                    "covered"
+                } else if mapped.iter().any(|r| r["status"] == "unknown") {
+                    "unknown"
+                } else if !mapped.is_empty() {
+                    "needs_review"
+                } else {
+                    "uncovered"
+                };
                 requirements.push(json!({"specification":key,"item":item.id,"disposition":item.disposition,"status":status,
                     "work_items":current,"replacement":replacement,"diagnostic":error,
                     "source_ref":d.item.meta.source_ref}));

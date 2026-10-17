@@ -45,7 +45,8 @@ fn brief(work: &Projected<WorkItem>) -> Value {
         "priority":work.item.priority,"milestone":work.item.milestone,"owner":work.item.owner,"next_action":work.item.next_action,
         "blocker":work.item.blocker,"revision":work.item.meta.revision,"source_revision":work.item.meta.source_ref.source_revision,"freshness":work.source.freshness});
     if !work.item.spec_refs.is_empty() {
-        value["spec_refs"] = json!(work.item.spec_refs);
+        value["spec_refs_count"] = json!(work.item.spec_refs.len());
+        value["spec_refs_detail"] = json!({"work":work.item.meta.external_key,"cli_command":"work show","mcp_tool":"awr_work_get"});
     }
     value
 }
@@ -529,8 +530,12 @@ fn work(view: &ReadProject, args: WorkArgs) -> Result<Value> {
         args.source_sha.as_deref(),
         branch,
     )?;
+    let mut detail = ready_brief(&work);
+    if !work.work.item.spec_refs.is_empty() {
+        detail["spec_refs"] = json!(work.work.item.spec_refs);
+    }
     Ok(
-        json!({"work":ready_brief(&work),"acceptance":work.work.item.acceptance,"source_ref":work.work.item.meta.source_ref,
+        json!({"work":detail,"acceptance":work.work.item.acceptance,"source_ref":work.work.item.meta.source_ref,
         "progress":awr_runtime::work_progress(&view.store,view.project.id,&work.work,branch)?,
         "required_dependencies":work.dependencies.dependencies.iter().map(|d| json!({"external_key":d.item.meta.external_key,"status":d.item.status,"revision":d.item.meta.revision,"source_revision":d.item.meta.source_ref.source_revision,"freshness":d.source.freshness})).collect::<Vec<_>>(),
         "missing_dependencies":work.dependencies.missing_keys,"dependency_cycles":work.dependencies.cycle_keys,

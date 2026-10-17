@@ -183,7 +183,7 @@ fn change_tools() -> Vec<Tool> {
         ),
         tool(
             "awr_spec_check",
-            "Read explicit approved specification bindings, supersessions and requirement coverage. Unknown refs remain unknown; never edits sources or proves acceptance.",
+            "Read explicit approved specification bindings, supersessions and requirement coverage. Unknown refs remain unknown; never edits sources or proves acceptance. Owner stdio and unisolated project-level shared grants only; shared workstream scopes are unsupported.",
             object(
                 json!({"spec":optional(text()),"limit":{"type":"integer","minimum":1,"maximum":10000,"default":1000}}),
                 &[],
