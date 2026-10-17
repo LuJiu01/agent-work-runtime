@@ -22,6 +22,7 @@ fn evidence() -> Evidence {
         locator: "report.json".into(),
         sha256: Some("a".repeat(64)),
         source_sha: Some(SHA.into()),
+        section_fingerprint: None,
         command: Some("verify fixture".into()),
         scope: vec!["W".into(), "docs".into()],
         source_ref: None,
