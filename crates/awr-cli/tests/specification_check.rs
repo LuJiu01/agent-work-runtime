@@ -662,3 +662,116 @@ fn multi_step_adoption_resolves_history_and_invalidated_receipts_remain_unknown(
         "matched"
     );
 }
+
+#[test]
+fn extraction_warnings_preserve_valid_history_but_invalid_adoptions_stay_unknown() {
+    for invalidation in ["content", "identity", "receipt_version"] {
+        let p = Project::new(json!([{"id":"R","disposition":"required"}]), json!([]));
+        p.document("second", json!({"id":"second","status":"proposed","specification":{"version":"1","items":[{"id":"R","disposition":"required"}]}}));
+        let path = p.0.join("decisions/second.md");
+        let text = fs::read_to_string(&path)
+            .unwrap()
+            .replace("## Decision", "## Requirements");
+        fs::write(&path, text).unwrap();
+        p.ok(&["source", "reindex"]);
+        p.adopt("dashboard", "second");
+        p.document("latest", json!({"id":"latest","status":"proposed","specification":{"version":"2","items":[{"id":"R","disposition":"required"}]}}));
+        p.ok(&["source", "reindex"]);
+        p.adopt("second", "latest");
+        p.works(json!([{"id":"W","status":"planned","spec_refs":[{"specification":"latest","item":"R","approved_version":"2","source_fingerprint":p.version("latest")["source_fingerprint"]}]}]));
+        let bytes = fs::read(&path).unwrap();
+        let ledger = fs::read(p.0.join("work.yaml")).unwrap();
+        let state = p.logical_state();
+        let r = p.ok(&["spec", "check", "--limit", "5"]);
+        assert_eq!(r["status"], "matched", "{invalidation}: {r}");
+        assert_eq!(r["counts"]["covered"], 1);
+        assert_eq!(r["counts"]["unknown"], 0);
+        assert_eq!(
+            r["specifications"]
+                .as_array()
+                .unwrap()
+                .iter()
+                .filter(|d| d["status"] == "historical")
+                .count(),
+            2
+        );
+        let db = rusqlite::Connection::open(p.0.join(".awr/state.db")).unwrap();
+        let warning: String = db.query_row("SELECT json_extract(payload_json,'$.warnings') FROM events WHERE event_type='source.projected' AND json_extract(payload_json,'$.source_id')=?1 ORDER BY project_revision DESC LIMIT 1", [p.version("second")["source_id"].as_str().unwrap()], |r| r.get(0)).unwrap();
+        assert_eq!(
+            serde_json::from_str::<Value>(&warning).unwrap(),
+            json!(["no decision statement identified; consult the source reference"])
+        );
+        drop(db);
+        assert_eq!(p.logical_state(), state);
+        assert_eq!(fs::read(&path).unwrap(), bytes);
+        assert_eq!(fs::read(p.0.join("work.yaml")).unwrap(), ledger);
+
+        if invalidation == "content" {
+            // Previous projections have no structured receipt validity; refresh explicitly.
+            let db = rusqlite::Connection::open(p.0.join(".awr/state.db")).unwrap();
+            db.execute_batch("UPDATE sources SET config_json=json_set(config_json,'$.adapter_version',4) WHERE adapter='markdown-directory-v1'; UPDATE decisions SET payload_json=json_remove(payload_json,'$.adoption_valid');").unwrap();
+            drop(db);
+            let state = p.logical_state();
+            let stale = p.run(&["spec", "check"]);
+            assert!(!stale.status.success());
+            assert_eq!(
+                serde_json::from_slice::<Value>(&stale.stderr).unwrap()["code"],
+                "SourceStale"
+            );
+            assert_eq!(p.logical_state(), state);
+            p.ok(&["source", "reindex"]);
+            assert_eq!(
+                p.ok(&["spec", "check", "--limit", "5"])["status"],
+                "matched"
+            );
+            assert_eq!(fs::read(&path).unwrap(), bytes);
+        }
+
+        let text = fs::read_to_string(&path).unwrap();
+        let (header, body) = text
+            .strip_prefix("---\n")
+            .unwrap()
+            .split_once("\n---\n")
+            .unwrap();
+        let mut metadata: Value = serde_yaml_ng::from_str(header).unwrap();
+        let body = match invalidation {
+            "content" => format!("{body}\nChanged reviewed requirements.\n"),
+            "identity" => {
+                metadata["adoption"]["candidate"]["source_id"] = json!(Id::new());
+                body.to_owned()
+            }
+            "receipt_version" => {
+                metadata["adoption"]["version"] = json!(2);
+                body.to_owned()
+            }
+            _ => unreachable!(),
+        };
+        fs::write(
+            &path,
+            format!(
+                "---\n{}\n---\n{body}",
+                serde_json::to_string_pretty(&metadata).unwrap()
+            ),
+        )
+        .unwrap();
+        p.ok(&["source", "reindex"]);
+        let state = p.logical_state();
+        let r = p.ok(&["spec", "check"]);
+        assert_eq!(r["status"], "unknown", "{invalidation}: {r}");
+        assert_eq!(
+            r["specifications"]
+                .as_array()
+                .unwrap()
+                .iter()
+                .find(|d| d["key"] == "second")
+                .unwrap()["diagnostic"],
+            "document_replacement_adoption_unverified",
+            "{invalidation}: {r}"
+        );
+        assert_eq!(
+            p.ok(&["spec", "check", "--spec", "latest"])["status"],
+            "matched"
+        );
+        assert_eq!(p.logical_state(), state);
+    }
+}

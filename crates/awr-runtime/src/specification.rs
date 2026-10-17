@@ -144,12 +144,8 @@ pub fn check_specifications(
     }
     let mut trusted_adoptions = BTreeSet::new();
     for d in &decisions {
-        // Accepted receipts are validated by the adapter. Superseded receipts
-        // may retain invalidation warnings; do not use those as approval proof.
-        if d.item.adoption.is_some()
-            && (d.item.status == DecisionStatus::Accepted
-                || store.source_warnings(&d.source)?.is_empty())
-        {
+        // Reuse the adapter's exact receipt check; prose extraction warnings are unrelated.
+        if d.item.adoption.is_some() && d.item.adoption_valid == Some(true) {
             trusted_adoptions.insert(d.item.meta.id);
         }
     }

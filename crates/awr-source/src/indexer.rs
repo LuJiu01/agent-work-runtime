@@ -98,7 +98,7 @@ fn mapping_key(spec: &SourceSpec) -> String {
 pub fn source_configuration(spec: &SourceSpec, minimal_context: bool) -> serde_json::Value {
     let mut config = json!({"mapping_key":mapping_key(spec),"adapter_options":spec.options,"adapter_version":match spec.adapter.as_str() {
         "markdown-ledger-v1" | "yaml-ledger-v1" => 5,
-        "markdown-directory-v1" => 4,
+        "markdown-directory-v1" => 5,
         "yaml-workstream-ledger-v1" => 3,
         _ => 2,
     }});

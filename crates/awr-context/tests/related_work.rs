@@ -82,6 +82,7 @@ fn fixture() -> Fixture {
         batch.decisions.push(Decision {
             specification: None,
             adoption: None,
+            adoption_valid: None,
             superseded_by: None,
             meta: f.meta(key),
             title: key.into(),
