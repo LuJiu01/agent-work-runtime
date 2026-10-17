@@ -90,6 +90,7 @@ fn catalog() -> Vec<Capability> {
                 "declared_coverage_only",
                 "read_only_no_source_or_runtime_writes",
                 "unknown_is_not_semantic_agreement",
+                "shared_workstream_inspection_unsupported",
             ][..],
         ),
         (

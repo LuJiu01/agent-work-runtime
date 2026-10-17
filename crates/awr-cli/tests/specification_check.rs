@@ -64,6 +64,52 @@ impl Project {
         let db = rusqlite::Connection::open(self.0.join(".awr/state.db")).unwrap();
         db.query_row("SELECT (SELECT project_revision FROM projects LIMIT 1), (SELECT count(*) FROM events), (SELECT count(*) FROM sessions), (SELECT count(*) FROM claims)", [], |r| Ok((r.get(0)?,r.get(1)?,r.get(2)?,r.get(3)?))).unwrap()
     }
+    fn document(&self, key: &str, metadata: Value) {
+        fs::write(self.0.join(format!("decisions/{key}.md")), format!("---\n{}\n---\n# Synthetic specification\n\n## Decision\nUse the explicit requirements.\n",serde_json::to_string_pretty(&metadata).unwrap())).unwrap();
+    }
+    fn version(&self, key: &str) -> Value {
+        let sources = self.ok(&["source", "list"]);
+        let source = sources["sources"]
+            .as_array()
+            .unwrap()
+            .iter()
+            .find(|s| {
+                s["locator"]
+                    .as_str()
+                    .unwrap()
+                    .ends_with(&format!("/{key}.md"))
+            })
+            .unwrap();
+        json!({"source_id":source["id"],"external_key":key,"source_fingerprint":source["fingerprint"]})
+    }
+    fn works(&self, works: Value) {
+        fs::write(
+            self.0.join("work.yaml"),
+            serde_json::to_vec_pretty(&json!({"work_items":works})).unwrap(),
+        )
+        .unwrap();
+        self.ok(&["source", "reindex"]);
+    }
+    fn adopt(&self, old: &str, new: &str) {
+        let request = json!({"version":1,"request_key":format!("adopt-{old}-{new}"),"actor":{"host":"fixture","subject":"reviewer","origin":"human"},"reason":"Adopt the explicitly reviewed specification","change":{"kind":"related","changes":[{"operation":"adopt","candidate":self.version(new),"supersedes":self.version(old)}]}});
+        fs::write(
+            self.0.join("adopt.json"),
+            serde_json::to_vec(&request).unwrap(),
+        )
+        .unwrap();
+        let preview = self.ok(&["batch", "change", "--input", "adopt.json"]);
+        self.ok(&[
+            "batch",
+            "change",
+            "--input",
+            "adopt.json",
+            "--accept",
+            "--expected-preview",
+            preview["preview"]["fingerprint"].as_str().unwrap(),
+            "--expected-revision",
+            &preview["project_revision"].to_string(),
+        ]);
+    }
 }
 
 fn reference(item: &str, version: &str) -> Value {
@@ -406,4 +452,213 @@ fn reviewed_reference_edits_use_existing_batch_and_active_claim_guards() {
         "ClaimConflict"
     );
     assert_eq!(fs::read(p.0.join("work.yaml")).unwrap(), ledger);
+}
+
+#[test]
+fn adopted_history_is_traceable_without_current_gaps_but_live_old_refs_need_review() {
+    let p = Project::new(json!([{"id":"R","disposition":"required"}]), json!([]));
+    let mut old_ref = reference("R", "0.80");
+    old_ref["source_fingerprint"] = p.version("dashboard")["source_fingerprint"].clone();
+    p.document("new", json!({"id":"new","status":"proposed","specification":{"version":"1","items":[{"id":"R","disposition":"required"}]}}));
+    p.ok(&["source", "reindex"]);
+    let before_adoption = p.version("new");
+    p.adopt("dashboard", "new");
+    assert_ne!(
+        p.version("new")["source_fingerprint"],
+        before_adoption["source_fingerprint"]
+    );
+    let new_ref = json!({"specification":"new","item":"R","approved_version":"1","source_fingerprint":p.version("new")["source_fingerprint"],"criterion":"Save the reviewed configuration"});
+    let mut works = json!([
+        {"id":"NEW","status":"planned","acceptance":["Save the reviewed configuration"],"spec_refs":[new_ref]},
+        {"id":"CANCELLED","status":"cancelled","acceptance":["Save the reviewed configuration"],"spec_refs":[old_ref]},
+        {"id":"ARCHIVED","status":"completed","archived":true,"acceptance":["Save the reviewed configuration"],"spec_refs":[old_ref]}
+    ]);
+    p.works(works.clone());
+    let bytes = fs::read(p.0.join("work.yaml")).unwrap();
+    let old = fs::read(p.0.join("decisions/dashboard.md")).unwrap();
+    let state = p.logical_state();
+    let r = p.ok(&["spec", "check"]);
+    assert_eq!(r["status"], "matched", "{r}");
+    assert_eq!(r["counts"]["covered"], 1);
+    assert_eq!(r["requirements"].as_array().unwrap().len(), 1);
+    assert_eq!(
+        r["specifications"]
+            .as_array()
+            .unwrap()
+            .iter()
+            .find(|d| d["key"] == "dashboard")
+            .unwrap()["status"],
+        "historical"
+    );
+    let human = Command::new(env!("CARGO_BIN_EXE_awr"))
+        .args([
+            "--project",
+            p.0.to_str().unwrap(),
+            "spec",
+            "check",
+            "--spec",
+            "dashboard",
+        ])
+        .output()
+        .unwrap();
+    assert!(human.status.success());
+    assert!(String::from_utf8_lossy(&human.stdout).contains("historical"));
+    assert_eq!(fs::read(p.0.join("work.yaml")).unwrap(), bytes);
+    assert_eq!(fs::read(p.0.join("decisions/dashboard.md")).unwrap(), old);
+    assert_eq!(p.logical_state(), state);
+    works.as_array_mut().unwrap().push(json!({"id":"LIVE","status":"planned","acceptance":["Save the reviewed configuration"],"spec_refs":[old_ref]}));
+    p.works(works);
+    let r = p.ok(&["spec", "check"]);
+    assert_eq!(r["status"], "needs_review");
+    let live = r["references"]
+        .as_array()
+        .unwrap()
+        .iter()
+        .find(|r| r["work"] == "LIVE")
+        .unwrap();
+    assert_eq!(live["status"], "needs_review");
+    assert!(
+        live["reasons"]
+            .as_array()
+            .unwrap()
+            .contains(&json!("specification_superseded"))
+    );
+}
+
+#[test]
+fn document_replacement_targets_must_resolve_identity_version_and_approval() {
+    for case in [
+        "missing",
+        "identity",
+        "version",
+        "approval",
+        "declaration",
+        "cycle",
+        "status_conflict",
+    ] {
+        let p = Project::new(json!([{"id":"R","disposition":"required"}]), json!([]));
+        p.document("new", json!({"id":"new","status":if case=="approval" {"proposed"}else{"accepted"},"specification":{"version":"1","items":[{"id":"R","disposition":"required"}]}}));
+        if case == "cycle" {
+            p.document("new", json!({"id":"new","status":"superseded","superseded_by":p.version("dashboard"),"specification":{"version":"1","items":[{"id":"R","disposition":"required"}]}}));
+        } else if case == "declaration" {
+            p.document("new", json!({"id":"new","status":"accepted"}));
+        } else if case == "status_conflict" {
+            p.document("new", json!({"id":"new","status":"accepted","superseded_by":p.version("dashboard"),"specification":{"version":"1","items":[{"id":"R","disposition":"required"}]}}));
+        }
+        p.ok(&["source", "reindex"]);
+        let mut target = p.version("new");
+        match case {
+            "missing" => target["external_key"] = json!("missing"),
+            "identity" => target["source_id"] = json!(Id::new()),
+            "version" => target["source_fingerprint"] = json!(format!("sha256:{}", "b".repeat(64))),
+            _ => (),
+        }
+        p.document("dashboard", json!({"id":"dashboard","status":"superseded","superseded_by":target,"specification":{"version":"0.80","items":[{"id":"R","disposition":"required"}]}}));
+        p.ok(&["source", "reindex"]);
+        let mut r = reference("R", "0.80");
+        r["source_fingerprint"] = p.version("dashboard")["source_fingerprint"].clone();
+        p.works(json!([{"id":"W","status":"planned","acceptance":["Save the reviewed configuration"],"spec_refs":[r]}]));
+        let state = p.logical_state();
+        let result = p.ok(&["spec", "check"]);
+        assert_eq!(
+            result["references"][0]["status"], "unknown",
+            "{case}: {result}"
+        );
+        assert!(
+            result["references"][0]["reasons"]
+                .as_array()
+                .unwrap()
+                .iter()
+                .any(|r| r.as_str().unwrap().starts_with("document_replacement_")),
+            "{case}: {result}"
+        );
+        assert_eq!(p.logical_state(), state);
+    }
+}
+
+#[test]
+fn long_spec_refs_stay_out_of_queue_briefs_and_remain_in_explicit_details() {
+    let criterion = "Reviewed requirement ".to_owned() + &"x".repeat(4000);
+    let items = (0..100)
+        .map(|i| json!({"id":format!("R{i}"),"disposition":"required"}))
+        .collect::<Vec<_>>();
+    let refs = (0..100)
+        .map(|i| {
+            let mut r = reference(&format!("R{i}"), "0.80");
+            r["criterion"] = json!(criterion);
+            r
+        })
+        .collect::<Vec<_>>();
+    let p = Project::new(
+        json!(items),
+        json!([{"id":"W","title":"Review configuration","status":"ready","next_action":"Review","acceptance":[criterion],"spec_refs":refs}]),
+    );
+    let queue = p.ok(&["ready", "--limit", "1"]);
+    assert_eq!(queue["ready"][0]["spec_refs_count"], 100);
+    assert!(queue["ready"][0].get("spec_refs").is_none());
+    assert!(serde_json::to_vec(&queue).unwrap().len() < 16000);
+    let status = p.ok(&["status", "--view", "full"]);
+    assert!(
+        !serde_json::to_string(&status)
+            .unwrap()
+            .contains("\"spec_refs\":")
+    );
+    assert!(serde_json::to_vec(&status).unwrap().len() < 16000);
+    let mut ledger: Value =
+        serde_json::from_slice(&fs::read(p.0.join("work.yaml")).unwrap()).unwrap();
+    ledger["work_items"][0]["status"] = json!("in_progress");
+    p.works(ledger["work_items"].clone());
+    let status = p.ok(&["status", "--view", "full"]);
+    assert_eq!(status["current"][0]["spec_refs_count"], 100);
+    assert!(status["current"][0].get("spec_refs").is_none());
+    assert!(serde_json::to_vec(&status).unwrap().len() < 16000);
+    let detail = p.ok(&["work", "show", "W"]);
+    assert_eq!(detail["work"]["spec_refs"].as_array().unwrap().len(), 100);
+    assert_eq!(p.ok(&["spec", "check"])["counts"]["covered"], 100);
+}
+
+#[test]
+fn multi_step_adoption_resolves_history_and_invalidated_receipts_remain_unknown() {
+    let p = Project::new(json!([{"id":"R","disposition":"required"}]), json!([]));
+    p.document("second", json!({"id":"second","status":"proposed","specification":{"version":"1","items":[{"id":"R","disposition":"required"}]}}));
+    p.ok(&["source", "reindex"]);
+    p.adopt("dashboard", "second");
+    p.document("latest", json!({"id":"latest","status":"proposed","specification":{"version":"2","items":[{"id":"R","disposition":"required"}]}}));
+    p.ok(&["source", "reindex"]);
+    p.adopt("second", "latest");
+    p.works(json!([{"id":"W","status":"planned","acceptance":["Save the reviewed configuration"],"spec_refs":[{"specification":"latest","item":"R","approved_version":"2","source_fingerprint":p.version("latest")["source_fingerprint"]}]}]));
+    let state = p.logical_state();
+    let r = p.ok(&["spec", "check", "--limit", "5"]);
+    assert_eq!(r["status"], "matched", "{r}");
+    assert_eq!(r["requirements"].as_array().unwrap().len(), 1);
+    assert_eq!(
+        r["specifications"]
+            .as_array()
+            .unwrap()
+            .iter()
+            .filter(|d| d["status"] == "historical")
+            .count(),
+        2
+    );
+    assert_eq!(p.logical_state(), state);
+    let path = p.0.join("decisions/second.md");
+    let mut bytes = fs::read_to_string(&path).unwrap();
+    bytes.push_str("\nContent changed after supersession.\n");
+    fs::write(path, bytes).unwrap();
+    p.ok(&["source", "reindex"]);
+    let r = p.ok(&["spec", "check"]);
+    assert_eq!(r["status"], "unknown");
+    assert_eq!(
+        r["specifications"]
+            .as_array()
+            .unwrap()
+            .iter()
+            .find(|d| d["key"] == "second")
+            .unwrap()["diagnostic"],
+        "document_replacement_adoption_unverified"
+    );
+    assert_eq!(
+        p.ok(&["spec", "check", "--spec", "latest"])["status"],
+        "matched"
+    );
 }

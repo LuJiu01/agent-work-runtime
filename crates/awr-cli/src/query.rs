@@ -168,7 +168,8 @@ fn brief(work: &Projected<WorkItem>) -> Value {
         "priority":work.item.priority,"milestone":work.item.milestone,"owner":work.item.owner,"next_action":work.item.next_action,
         "blocker":work.item.blocker,"revision":work.item.meta.revision,"source_revision":work.item.meta.source_ref.source_revision,"freshness":work.source.freshness});
     if !work.item.spec_refs.is_empty() {
-        value["spec_refs"] = json!(work.item.spec_refs);
+        value["spec_refs_count"] = json!(work.item.spec_refs.len());
+        value["spec_refs_detail"] = json!({"work":work.item.meta.external_key,"cli_command":"work show","mcp_tool":"awr_work_get"});
     }
     value
 }
@@ -659,6 +660,9 @@ pub fn work(root: &Path, command: &WorkCommand, json_output: bool) -> Result<()>
             )?;
             let mut value = query.metadata();
             value["work"] = ready_brief(&work);
+            if !work.work.item.spec_refs.is_empty() {
+                value["work"]["spec_refs"] = json!(work.work.item.spec_refs);
+            }
             value["acceptance"] = json!(work.work.item.acceptance);
             value["source_ref"] = json!(work.work.item.meta.source_ref);
             value["progress"] =

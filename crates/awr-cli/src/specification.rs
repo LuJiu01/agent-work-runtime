@@ -65,6 +65,18 @@ pub fn run(root: &Path, command: &SpecificationCommand, json_output: bool) -> Re
             "Specification check: {} (declared bindings only)",
             value["status"].as_str().unwrap()
         );
+        for s in value["specifications"].as_array().unwrap() {
+            println!(
+                "{} @ {}: {}{}",
+                s["key"].as_str().unwrap(),
+                s["version"].as_str().unwrap(),
+                s["status"].as_str().unwrap(),
+                s["diagnostic"]
+                    .as_str()
+                    .map(|d| format!(" ({d})"))
+                    .unwrap_or_default()
+            );
+        }
         for r in value["references"].as_array().unwrap() {
             println!(
                 "{} -> {} / {}: {} ({})",

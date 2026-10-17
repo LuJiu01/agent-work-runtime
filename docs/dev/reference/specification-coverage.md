@@ -57,6 +57,19 @@ supersession continues to use the existing `superseded_by: DocumentVersion`
 metadata, returned with the specification's source reference. No replacement is
 inferred from dates, names or similarity.
 
+Document replacements are checked by registered source identity, external key
+and version. A validated adoption receipt can identify the reviewed bytes before
+approval changed lifecycle metadata; a current file hash alone is not a substitute
+for that receipt. Unregistered, ambiguous, changed or unapproved targets and
+replacement cycles remain `unknown`. A superseded receipt with source warnings
+is not used as proof of its former approved version.
+
+An explicitly superseded document with a fully resolved approved replacement is
+reported as `historical`, with its source reference and item count retained. Its
+old requirements do not enter current coverage counts. Active task references to
+it still need review. Cancelled/archived task references to resolved historical
+documents remain traceable as `historical`; unresolved references remain unknown.
+
 ## Bind an explicit task or acceptance criterion
 
 In the existing YAML ledger, add `spec_refs` to the actual work item. Copy the
@@ -107,6 +120,18 @@ MCP: discover `awr_work` then call its `awr_spec_check` child with
 directly. Shared clients also pass the authorized `project` key. Existing project
 read permissions apply; the checker grants no additional access.
 
+Local CLI and owner stdio can inspect the project. Shared HTTP supports this tool
+only for project-level grants on projects without workstream isolation. Projects
+with workstreams enabled, or callers with scoped workstream grants, receive
+`Unsupported` from the existing isolation guard. `awr_workstream` has no scoped
+specification-check action; choosing that tool is not a workaround. Team/Postgres
+and authenticated cross-workstream inspection are outside this capability.
+
+Ordinary `ready`/`status` and MCP queue briefs show `spec_refs_count` and a
+`spec_refs_detail` selector. They do not repeat every binding or acceptance text.
+Read the complete bindings explicitly with `awr work show WORK`, MCP
+`awr_work_get`, or the bounded `spec check` report.
+
 The check itself uses a coherent private snapshot, verifies current indexed
 sources before and after, and persists neither source edits nor runtime events.
 Changed files/mappings or an upgrade requiring reindex return `SourceStale`;
@@ -121,6 +146,7 @@ replacement identifiers, requirement coverage and reason codes:
 | Reference `current` | Its explicit version, fingerprint, item and optional criterion resolve; the work association is admitted and active. |
 | Reference `needs_review` | An approved version/content changed, an item/document was superseded or withdrawn, or the mapped work is cancelled/archived. |
 | `unknown` | Missing/ambiguous/unapproved specification, unresolved item/criterion/replacement, draft/unknown work scope, or missing explicit specification declarations. |
+| `historical` | A resolved superseded document, or its cancelled/archived task reference; retained for traceability without a current coverage gap. |
 | Requirement `covered` | At least one current declared task association exists. This is coverage, not a test result. |
 | Requirement `uncovered` | An explicit required/future item has no declared task reference. |
 | Requirement `not_required` | Explicitly cancelled/out of scope, or superseded with a resolved replacement. |
