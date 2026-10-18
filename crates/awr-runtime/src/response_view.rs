@@ -23,6 +23,10 @@ pub fn compact_prepared_response(mut value: Value) -> Value {
                 .iter()
                 .all(|c| c["reason"] == "insufficient_budget_for_whole_chunk")
     }) {
+        // Keep lone unannotated indexes inline instead of adding count/note bookkeeping.
+        if chunks.len() == 1 && chunks[0]["entities"].as_array().is_some_and(Vec::is_empty) {
+            return value;
+        }
         let count = chunks.len();
         value["context"]["work_context"]
             .as_object_mut()

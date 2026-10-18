@@ -41,6 +41,23 @@ fn optional_indexes_are_bounded_without_changing_required_facts_or_small_respons
 }
 
 #[test]
+fn a_single_unannotated_history_index_remains_inline_without_bookkeeping() {
+    for view in ["summary", "action"] {
+        let mut legacy = prepared(1);
+        legacy["response_view"]["view"] = json!(view);
+        legacy["context"]["work_context"]["omitted_chunks"] = json!([{
+            "key":"folded-process-history", "section":"delta", "entities":[],
+            "reason":"insufficient_budget_for_whole_chunk"
+        }]);
+        let concise = compact_prepared_response(legacy.clone());
+        assert!(
+            concise == legacy,
+            "a single unannotated index must preserve the entire response without metadata overhead"
+        );
+    }
+}
+
+#[test]
 fn full_incomplete_unknown_reasons_and_missing_detail_queries_remain_verbatim() {
     let original = prepared(20);
     for (path, value) in [

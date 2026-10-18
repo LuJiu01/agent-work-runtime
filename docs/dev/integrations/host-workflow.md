@@ -90,9 +90,10 @@ a nonempty `omitted_chunks` index when every entry has the optional
 `insufficient_budget_for_whole_chunk` reason. `response_view.detail_counts`
 reports its total, `omitted_fields` identifies the deferred path, and a bounded
 `detail_note` explains the common reason, required-context completeness and
-when to inspect `full_result`. Zero omissions add no bookkeeping; unknown
-reasons keep the original index. Rendered context, hash, identity, source
-versions, completeness, claims, readiness, waits and management requirements
+when to inspect `full_result`. A single entry without entity annotations stays
+inline, avoiding summary bookkeeping for a short index. Zero omissions add no
+bookkeeping; unknown reasons keep the original index. Rendered context, hash,
+identity, source versions, completeness, claims, readiness, waits and management requirements
 retain each view's semantics, including action's existing duplicate-field
 removal. The note does not change the rendered context or action instruction.
 

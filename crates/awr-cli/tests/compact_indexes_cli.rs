@@ -211,6 +211,59 @@ fn default_concise_cli_covers_zero_one_many_and_full_drilldown() {
 }
 
 #[test]
+fn a_single_folded_history_index_preserves_the_original_concise_result() {
+    let f = Fixture::new();
+    let revision = f.read(&["session", "list"])["project_revision"].to_string();
+    f.read(&[
+        "event",
+        "append",
+        "--type",
+        "review.observed",
+        "--summary",
+        "Read the public guide example",
+        "--work",
+        "W",
+        "--expected-revision",
+        &revision,
+    ]);
+    let full = f.read(&["work", "prepare", "W", "--budget", "100000"]);
+    let budget = (full["context"]["work_context"]["token_estimate"]
+        .as_u64()
+        .unwrap()
+        - 1)
+    .to_string();
+    let full = f.read(&["work", "prepare", "W", "--budget", &budget]);
+    let index = &full["context"]["work_context"]["omitted_chunks"];
+    assert_eq!(index.as_array().unwrap().len(), 1);
+    assert_eq!(index[0]["key"], "folded-process-history");
+    assert_eq!(index[0]["entities"], serde_json::json!([]));
+    let store = awr_store::Store::open_readonly(&f.0.join(".awr/state.db")).unwrap();
+    for view in ["summary", "action"] {
+        let concise = f.read(&[
+            "work",
+            "prepare",
+            "W",
+            "--budget",
+            &budget,
+            "--response-view",
+            view,
+        ]);
+        // These existing view builders define the result before index compaction.
+        let mut original_view = if view == "summary" {
+            awr_runtime::summarize_work_response(full.clone())
+        } else {
+            awr_runtime::guide_prepared_work(&store, &f.0, full.clone(), None).unwrap()
+        };
+        original_view["response_view"]["full_result"] =
+            concise["response_view"]["full_result"].clone();
+        assert_eq!(
+            concise, original_view,
+            "short index adds no presentation metadata"
+        );
+    }
+}
+
+#[test]
 fn cli_concise_preserves_failures_raw_indexes_and_human_context() {
     let f = Fixture::new();
     let full = f.read(&["work", "prepare", "W"]);

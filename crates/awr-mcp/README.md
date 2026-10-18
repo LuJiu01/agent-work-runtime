@@ -67,7 +67,8 @@ No extra option is required. When every entry records
 array, reports the total in `response_view.detail_counts`, and lists its path
 in `response_view.omitted_fields`. A bounded `detail_note` explains the common
 budget-selection reason, required-context completeness and when to inspect
-`full_result`. Zero omissions add no metadata. For example:
+`full_result`. A single entry without entity annotations stays inline, avoiding
+summary bookkeeping for a short index. Zero omissions add no metadata. For example:
 
 ```json
 {"work":"W","budget":5000,"response_view":"action"}

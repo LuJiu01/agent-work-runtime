@@ -8,8 +8,9 @@ Successful, complete responses defer a nonempty `omitted_chunks` array only
 when every entry has the known whole-chunk budget-selection reason. The
 existing `response_view` metadata lists the deferred path, reports its total
 in `detail_counts`, and explains the reason and when to inspect `full_result`
-in a bounded `detail_note`. Zero omissions remain unchanged; other reasons,
-incomplete contexts and errors keep their details.
+in a bounded `detail_note`. A single entry without entity annotations stays
+inline rather than gaining summary metadata. Zero omissions remain unchanged;
+other reasons, incomplete contexts and errors keep their details.
 
 This changes concise JSON field availability within the existing view metadata
 version. Consumers that need every omitted entry must request `full`; do not
