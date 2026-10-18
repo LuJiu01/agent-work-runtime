@@ -91,21 +91,6 @@ pub(crate) fn call_as(
         return crate::team_review::handle(Value::Object(args));
     }
     let view = args.remove("response_view");
-    let compact_indexes = if name == "awr_work_prepare" {
-        match args.remove("compact_indexes") {
-            None => false,
-            Some(Value::Bool(enabled)) => enabled,
-            Some(_) => {
-                return invalid_input(
-                    "compact_indexes must be a boolean when provided",
-                    "/compact_indexes",
-                    "type",
-                );
-            }
-        }
-    } else {
-        false
-    };
     let explain = match args.remove("explain") {
         None => false,
         Some(Value::Bool(v)) => v,
@@ -156,7 +141,7 @@ pub(crate) fn call_as(
     let mut result = call_as_full(root, name, args, principal)?;
     // Summary/action stay success-only (legacy). Explain may attach on structured
     // error bodies too so callers can read the same assessment on incomplete prepare.
-    let present = summary || action || explain || compact_indexes;
+    let present = summary || action || explain;
     if present {
         if let Some(value) = result.structured_content.take() {
             let errored = result.is_error == Some(true);
@@ -188,7 +173,7 @@ pub(crate) fn call_as(
                     }
                 }
             }
-            if compact_indexes && !errored {
+            if name == "awr_work_prepare" && !errored {
                 value = awr_runtime::compact_prepared_response(value);
             }
             let displayed = if errored {

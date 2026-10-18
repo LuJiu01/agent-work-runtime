@@ -57,29 +57,49 @@ impl Drop for Fixture {
 }
 
 #[test]
-fn opt_in_cli_projection_covers_zero_one_and_many_omissions_and_full_drilldown() {
+fn default_concise_cli_covers_zero_one_many_and_full_drilldown() {
     let f = Fixture::new();
-    let full = f.read(&["work", "prepare", "W", "--budget", "100000"]);
+    let full = f.read(&[
+        "work",
+        "prepare",
+        "W",
+        "--budget",
+        "100000",
+        "--branch",
+        "main",
+        "--source-sha",
+        "aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa",
+    ]);
     let pack = &full["context"]["work_context"];
     let budgets = [
         100000,
         pack["token_estimate"].as_u64().unwrap() - 1,
         pack["required_tokens"].as_u64().unwrap() + 50,
     ];
+    let help = f.run(&["work", "prepare", "--help"]);
+    assert!(!String::from_utf8_lossy(&help.stdout).contains("compact-indexes"));
     for (case, budget) in budgets.into_iter().enumerate() {
         let budget = budget.to_string();
-        for view in ["full", "summary", "action"] {
-            let args = [
+        for explain in [false, true] {
+            let mut args = vec![
                 "work",
                 "prepare",
                 "W",
                 "--budget",
                 &budget,
-                "--response-view",
-                view,
+                "--branch",
+                "main",
+                "--source-sha",
+                "aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa",
             ];
-            let legacy = f.read(&args);
-            let count = legacy["context"]["work_context"]["omitted_chunks"]
+            if explain {
+                args.push("--explain");
+            }
+            let full = f.read(&args);
+            let mut explicit = args.clone();
+            explicit.extend(["--response-view", "full"]);
+            assert_eq!(f.read(&explicit), full);
+            let count = full["context"]["work_context"]["omitted_chunks"]
                 .as_array()
                 .unwrap()
                 .len();
@@ -88,31 +108,39 @@ fn opt_in_cli_projection_covers_zero_one_and_many_omissions_and_full_drilldown()
                 1 => assert_eq!(count, 1),
                 _ => assert!(count > 10),
             }
-            let mut opted = args.to_vec();
-            opted.push("--compact-indexes");
-            let compact = f.read(&opted);
-            if view == "full" {
-                assert_eq!(compact, legacy);
-            } else {
-                contract::assert_projection(&legacy, &compact, count);
-                let q = &compact["response_view"]["full_result"];
+            for view in ["summary", "action"] {
+                let mut concise_args = args.clone();
+                concise_args.extend(["--response-view", view]);
+                let concise = f.read(&concise_args);
+                contract::assert_prepared_view(&full, &concise, count);
+                let q = &concise["response_view"]["full_result"];
                 assert_eq!(q["response_view"], "full");
-                assert!(q.get("compact_indexes").is_none());
+                assert_eq!(q["branch"], "main");
+                assert_eq!(q["source_sha"], "aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa");
+                assert_eq!(q["budget"].to_string(), budget);
+                if view == "action" {
+                    assert!(serde_json::to_vec(&concise["guidance"]).unwrap().len() <= 1024);
+                }
+                // Explain is a presentation option and is not needed to retrieve indexes.
                 let detail = f.read(&[
                     "work",
                     "prepare",
                     q["work"].as_str().unwrap(),
                     "--budget",
                     &budget,
+                    "--branch",
+                    q["branch"].as_str().unwrap(),
+                    "--source-sha",
+                    q["source_sha"].as_str().unwrap(),
                 ]);
                 assert_eq!(
                     detail["context"]["work_context"]["omitted_chunks"],
-                    legacy["context"]["work_context"]["omitted_chunks"]
+                    full["context"]["work_context"]["omitted_chunks"]
                 );
-                assert_eq!(detail["project_revision"], compact["project_revision"]);
+                assert_eq!(detail["project_revision"], concise["project_revision"]);
                 assert_eq!(
                     detail["context"]["work_context"]["context_hash"],
-                    compact["context"]["work_context"]["context_hash"]
+                    concise["context"]["work_context"]["context_hash"]
                 );
             }
         }
@@ -144,17 +172,33 @@ fn opt_in_cli_projection_covers_zero_one_and_many_omissions_and_full_drilldown()
         "--budget",
         "100000",
     ];
-    let legacy = f.read(&args);
-    let mut opted = args.to_vec();
-    opted.push("--compact-indexes");
+    let concise = f.read(&args);
     assert_eq!(
-        legacy["context"]["work_context"]["omitted_chunks"]
-            .as_array()
-            .unwrap()
-            .len(),
-        0
+        concise["context"]["work_context"]["omitted_chunks"],
+        serde_json::json!([])
     );
-    assert_eq!(f.read(&opted), legacy);
+    assert!(concise["response_view"].get("detail_note").is_none());
+    assert_eq!(concise["response_view"]["full_result"]["session"], sid);
+    let old_hash = concise["context"]["work_context"]["context_hash"].clone();
+    fs::write(
+        f.0.join("work.yaml"),
+        fs::read_to_string(f.0.join("work.yaml"))
+            .unwrap()
+            .replace("Draft the guide", "Review the guide"),
+    )
+    .unwrap();
+    f.read(&["source", "reindex"]);
+    let changed = f.read(&[
+        "work",
+        "prepare",
+        "W",
+        "--session",
+        sid,
+        "--budget",
+        "100000",
+    ]);
+    assert_ne!(changed["project_revision"], concise["project_revision"]);
+    assert_ne!(changed["context"]["work_context"]["context_hash"], old_hash);
     let rev = f.read(&["session", "list"])["project_revision"].to_string();
     f.read(&[
         "session",
@@ -167,10 +211,18 @@ fn opt_in_cli_projection_covers_zero_one_and_many_omissions_and_full_drilldown()
 }
 
 #[test]
-fn cli_projection_preserves_existing_failures_and_human_output() {
+fn cli_concise_preserves_failures_raw_indexes_and_human_context() {
     let f = Fixture::new();
+    let full = f.read(&["work", "prepare", "W"]);
+    let raw = f.read(&["context", "compile", "--work", "W"]);
+    for field in ["selected_chunks", "selected_entities", "omitted_chunks"] {
+        assert!(raw["work_context"][field].is_array());
+    }
+    assert!(raw.get("response_view").is_none());
+    let failed = f.run(&["work", "prepare", "W", "--budget", "1"]);
+    assert!(!failed.status.success());
     for view in ["full", "summary", "action"] {
-        let args = [
+        let out = f.run(&[
             "work",
             "prepare",
             "W",
@@ -178,15 +230,26 @@ fn cli_projection_preserves_existing_failures_and_human_output() {
             "1",
             "--response-view",
             view,
-        ];
-        let original = f.run(&args);
-        let mut opted = args.to_vec();
-        opted.push("--compact-indexes");
-        let compact = f.run(&opted);
-        assert!(!original.status.success());
-        assert_eq!(original.status.code(), compact.status.code());
-        assert_eq!(original.stdout, compact.stdout);
-        assert_eq!(original.stderr, compact.stderr);
+        ]);
+        assert_eq!(out.status.code(), failed.status.code());
+        assert_eq!(out.stdout, failed.stdout);
+        assert_eq!(out.stderr, failed.stderr);
+        let human = Command::new(env!("CARGO_BIN_EXE_awr"))
+            .arg("--project")
+            .arg(&f.0)
+            .args(["work", "prepare", "W", "--response-view", view])
+            .output()
+            .unwrap();
+        assert!(human.status.success());
+        let text = String::from_utf8(human.stdout).unwrap();
+        assert!(
+            text.contains(
+                full["context"]["work_context"]["rendered_context"]
+                    .as_str()
+                    .unwrap()
+            )
+        );
+        assert!(!text.contains("Use full_result only when investigating"));
     }
     fs::write(
         f.0.join("work.yaml"),
@@ -197,25 +260,18 @@ fn cli_projection_preserves_existing_failures_and_human_output() {
     .unwrap();
     f.read(&["source", "reindex"]);
     for view in ["full", "summary", "action"] {
-        let args = ["work", "prepare", "W", "--response-view", view];
-        let original = f.run(&args);
-        let mut opted = args.to_vec();
-        opted.push("--compact-indexes");
-        let compact = f.run(&opted);
-        assert!(!original.status.success());
-        assert_eq!(original.status.code(), compact.status.code());
-        assert_eq!(original.stdout, compact.stdout);
-        assert_eq!(original.stderr, compact.stderr);
+        let out = f.run(&["work", "prepare", "W", "--response-view", view]);
+        assert!(!out.status.success());
+        let value: Value = serde_json::from_slice(&out.stdout).unwrap();
+        assert_eq!(value["ok"], false);
+        assert_eq!(value["context"]["completeness"]["complete"], false);
+        assert!(value["response_view"].get("detail_counts").is_none());
+        assert!(value["response_view"].get("detail_note").is_none());
+        assert!(
+            value["context"]["work_context"]
+                .get("omitted_chunks")
+                .is_some()
+        );
+        assert!(String::from_utf8_lossy(&out.stderr).contains("context"));
     }
-    let human = |opted: bool| {
-        let mut cmd = Command::new(env!("CARGO_BIN_EXE_awr"));
-        cmd.arg("--project")
-            .arg(&f.0)
-            .args(["work", "prepare", "W", "--response-view", "action"]);
-        if opted {
-            cmd.arg("--compact-indexes");
-        }
-        cmd.output().unwrap()
-    };
-    assert_eq!(human(false).stdout, human(true).stdout);
 }

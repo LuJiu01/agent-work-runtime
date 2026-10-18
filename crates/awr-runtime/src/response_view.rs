@@ -1,7 +1,7 @@
 //! Optional presentation only. Domain checks and stored receipts always use full results.
 use serde_json::{Value, json};
 
-/// Opt-in low-noise prepare presentation. Only optional selection indexes move
+/// Concise prepare presentation. Only optional selection indexes move
 /// to the existing full-result query; required facts and diagnostics stay inline.
 pub fn compact_prepared_response(mut value: Value) -> Value {
     if value["ok"] != true
@@ -34,6 +34,9 @@ pub fn compact_prepared_response(mut value: Value) -> Value {
             .unwrap()
             .push(json!(path));
         value["response_view"]["detail_counts"] = json!({path:count});
+        value["response_view"]["detail_note"] = json!(
+            "Optional chunks were omitted by whole-chunk budget selection; required context is complete. Use full_result only when investigating context selection."
+        );
     }
     value
 }

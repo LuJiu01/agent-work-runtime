@@ -312,8 +312,8 @@ operation must re-check permissions, claims, and source versions.
 | --- | --- |
 | `awr work assess` / `awr_work_assess` JSON | Remain authoritative for management. Envelope maps from it; do not rename tip fields. |
 | `awr work prepare` / `awr_work_prepare` `management` object | Remain embedded. Explain adds an **optional** negotiated field/view; default `full` unchanged. |
-| `response_view=summary` | Keep omitting only `context.work_context.selected_*` indexes as today. |
-| `response_view=action` | Keep guidance card + existing omitted management identity/optional fields. Envelope action-rationale mirrors guidance without dropping required context. |
+| `response_view=summary` | Omit selected indexes and summarize recognized optional budget-omission indexes with count/reason metadata and a full-details query; preserve required context and errors. See the [concise-view contract](../integrations/host-workflow.md#optional-concise-results). Explain does not introduce additional omissions. |
+| `response_view=action` | Keep the guidance card, existing duplicate/optional-field removal and the same optional index summary as `summary`. Envelope action-rationale mirrors guidance without dropping required context. |
 | `status --view action` queues | Unchanged; later layers may cite queue items as delivery_observation refs. |
 | `decision show` / `object show` | **Not used** for assessment explain. Capability negotiation must not overload those commands. |
 | MCP grouped tool contracts | New explain fields appear only when the client negotiates the capability / view; unnegotiated clients keep prior shapes. |

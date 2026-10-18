@@ -58,30 +58,37 @@ exposes twelve lifecycle/continuity tools below; HTTP adds `awr_projects_list`.
 
 Input objects reject unknown fields. Total tool arguments are limited to 1 MiB; a completion mapping has the same 64 KiB cap as the CLI. Full source SHAs and timestamps use the core domain conventions; `verified_at` is Unix milliseconds. Tools return structured JSON and matching serialized text for clients that consume text content. The context token budget covers `work_context.rendered_context`, not the entire MCP envelope.
 
-### Optional prepare index compaction
+### Concise prepare omission indexes
 
-`awr_work_prepare` accepts `compact_indexes: true` with `response_view: summary`
-or `action`. This opt-in presentation defers the optional `omitted_chunks` index
-when every entry records an optional whole-chunk budget omission. It returns a
-bounded entry count in `response_view.detail_counts` and lists the deferred path
-in `response_view.omitted_fields`. Zero omissions add no metadata. For example:
+`awr_work_prepare` with `response_view: "summary"` or `"action"` summarizes
+nonempty optional omission indexes by default on successful, complete results.
+No extra option is required. When every entry records
+`insufficient_budget_for_whole_chunk`, the response defers the `omitted_chunks`
+array, reports the total in `response_view.detail_counts`, and lists its path
+in `response_view.omitted_fields`. A bounded `detail_note` explains the common
+budget-selection reason, required-context completeness and when to inspect
+`full_result`. Zero omissions add no metadata. For example:
 
 ```json
-{"work":"W","budget":5000,"response_view":"action","compact_indexes":true}
+{"work":"W","budget":5000,"response_view":"action"}
 ```
 
-The CLI equivalent is `awr --json work prepare W --response-view action
---compact-indexes`. Without the option (or with `compact_indexes: false`), the
-existing output is unchanged. `full` responses, incomplete contexts, errors and
-unknown omission reasons retain their fields. The projection changes neither
-`ok`, CLI exit status nor MCP `isError`. It does not impose a response token
-limit or alter the existing rendered-context `budget`.
+The CLI equivalent is `awr --json work prepare W --response-view action`.
+This changes concise JSON field availability within the existing view metadata
+version. Request `full` for every entry; a missing array does not mean zero
+omissions. Unspecified/default `full`, explicit `full`, `context compile`,
+incomplete contexts, errors and unknown omission reasons retain their fields.
+The projection changes neither `ok`, CLI exit status nor MCP `isError`. It does
+not impose a response token limit or alter the rendered-context `budget`.
 
 Required rendered text, `context_hash`, source identity, scope, claims/blockers,
-evidence gaps and recovery diagnostics remain inline. Use the existing
-`response_view.full_result` query for detailed indexes. It reads fresh state:
-compare `project_revision` and `context_hash` before treating details as the same
-snapshot. No report, receipt or source is rewritten.
+evidence gaps and recovery diagnostics retain each view's existing semantics.
+The note does not change rendered text or guidance. Use the existing
+`response_view.full_result` query only when investigating context selection.
+It reads fresh state: compare `project_revision` and `context_hash` before
+treating details as the same snapshot. Shared HTTP callers must retain their
+original explicit `project` routing key. No report, receipt or source is
+rewritten.
 
 ## Read behavior
 

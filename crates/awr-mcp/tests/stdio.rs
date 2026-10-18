@@ -503,7 +503,7 @@ fn small_observation() -> Value {
 mod index_contract;
 
 #[tokio::test]
-async fn compact_indexes_stdio_is_opt_in_bounded_and_preserves_full_drilldown() {
+async fn default_concise_stdio_is_bounded_and_preserves_full_drilldown() {
     let f = Fixture::new();
     let mut work = fs::read_to_string(f.root.join("work.yaml")).unwrap();
     for n in 0..40 {
@@ -521,20 +521,14 @@ async fn compact_indexes_stdio_is_opt_in_bounded_and_preserves_full_drilldown() 
         .iter()
         .find(|t| t["name"] == "awr_work_prepare")
         .unwrap();
-    assert_eq!(
-        prepare["input_schema"]["properties"]["compact_indexes"]["default"],
-        false
-    );
-    assert!(
-        prepare["input_schema"]["properties"]
-            .get("response_budget")
-            .is_none()
-    );
+    for field in ["compact_indexes", "response_budget"] {
+        assert!(prepare["input_schema"]["properties"].get(field).is_none());
+    }
     let full = success(
         call(
             &client,
             "awr_work_prepare",
-            json!({"work":"W","budget":100000}),
+            json!({"work":"W","budget":100000,"branch":"main","source_sha":SHA}),
         )
         .await,
     );
@@ -546,11 +540,16 @@ async fn compact_indexes_stdio_is_opt_in_bounded_and_preserves_full_drilldown() 
     ];
     let before = f.logical_state();
     for (case, budget) in budgets.into_iter().enumerate() {
-        for view in ["full", "summary", "action"] {
-            let args = json!({"work":"W","budget":budget,"response_view":view,"explain":true});
-            let original = call(&client, "awr_work_prepare", args.clone()).await;
-            let legacy = success(original.clone());
-            let count = legacy["context"]["work_context"]["omitted_chunks"]
+        for explain in [false, true] {
+            let args = json!({"work":"W","budget":budget,"explain":explain,"branch":"main","source_sha":SHA});
+            let full = success(call(&client, "awr_work_prepare", args.clone()).await);
+            let mut explicit = args.clone();
+            explicit["response_view"] = json!("full");
+            assert_eq!(
+                success(call(&client, "awr_work_prepare", explicit).await),
+                full
+            );
+            let count = full["context"]["work_context"]["omitted_chunks"]
                 .as_array()
                 .unwrap()
                 .len();
@@ -559,40 +558,25 @@ async fn compact_indexes_stdio_is_opt_in_bounded_and_preserves_full_drilldown() 
                 1 => assert_eq!(count, 1),
                 _ => assert!(count > 10),
             }
-            let mut opted = args.clone();
-            opted["compact_indexes"] = json!(true);
-            let result = call(&client, "awr_work_prepare", opted.clone()).await;
-            if view == "action" {
+            for view in ["summary", "action"] {
+                let mut args = args.clone();
+                args["response_view"] = json!(view);
+                let result = call(&client, "awr_work_prepare", args.clone()).await;
+                let concise = success(result.clone());
+                index_contract::assert_prepared_view(&full, &concise, count);
                 let routed = success(
                     call(
                         &client,
                         "awr_context",
-                        json!({"child_tool":"awr_work_prepare","arguments":opted}),
+                        json!({"child_tool":"awr_work_prepare","arguments":args}),
                     )
                     .await,
                 );
-                assert_eq!(routed, body(&result));
-            }
-            assert_eq!(result.is_error, original.is_error);
-            let compact = success(result.clone());
-            let mut disabled = args;
-            disabled["compact_indexes"] = json!(false);
-            assert_eq!(
-                body(&call(&client, "awr_work_prepare", disabled).await),
-                legacy
-            );
-            if view == "full" {
-                assert_eq!(compact, legacy);
-            } else {
-                index_contract::assert_projection(&legacy, &compact, count);
-                if count > 0 {
-                    assert!(
-                        awr_context::token_count(&serde_json::to_string(&result).unwrap())
-                            < awr_context::token_count(&serde_json::to_string(&original).unwrap())
-                    );
-                }
-                let query = &compact["response_view"]["full_result"];
-                assert!(query["arguments"].get("compact_indexes").is_none());
+                assert_eq!(routed, concise);
+                let query = &concise["response_view"]["full_result"];
+                assert_eq!(query["arguments"]["branch"], "main");
+                assert_eq!(query["arguments"]["source_sha"], SHA);
+                assert_eq!(query["arguments"]["budget"], budget);
                 let detail = success(
                     call(
                         &client,
@@ -603,13 +587,16 @@ async fn compact_indexes_stdio_is_opt_in_bounded_and_preserves_full_drilldown() 
                 );
                 assert_eq!(
                     detail["context"]["work_context"]["omitted_chunks"],
-                    legacy["context"]["work_context"]["omitted_chunks"]
+                    full["context"]["work_context"]["omitted_chunks"]
                 );
-                assert_eq!(detail["project_revision"], compact["project_revision"]);
+                assert_eq!(detail["project_revision"], concise["project_revision"]);
                 assert_eq!(
                     detail["context"]["work_context"]["context_hash"],
-                    compact["context"]["work_context"]["context_hash"]
+                    concise["context"]["work_context"]["context_hash"]
                 );
+                if view == "action" {
+                    assert!(serde_json::to_vec(&concise["guidance"]).unwrap().len() <= 1024);
+                }
             }
         }
     }
@@ -619,24 +606,24 @@ async fn compact_indexes_stdio_is_opt_in_bounded_and_preserves_full_drilldown() 
         "presentation reads must not mutate runtime state"
     );
     let session = f.session("W", true, None).session;
-    let args = json!({"work":"W","session":session.id,"budget":100000,"response_view":"action"});
-    let legacy = success(call(&client, "awr_work_prepare", args.clone()).await);
-    assert_eq!(
-        legacy["context"]["work_context"]["omitted_chunks"]
-            .as_array()
-            .unwrap()
-            .len(),
-        0
+    let concise = success(
+        call(
+            &client,
+            "awr_work_prepare",
+            json!({"work":"W","session":session.id,"budget":100000,"response_view":"action"}),
+        )
+        .await,
     );
-    assert!(!legacy["active_claims"].as_array().unwrap().is_empty());
-    let mut opted = args;
-    opted["compact_indexes"] = json!(true);
     assert_eq!(
-        success(call(&client, "awr_work_prepare", opted).await),
-        legacy
+        concise["context"]["work_context"]["omitted_chunks"],
+        json!([])
     );
-    let old_hash = legacy["context"]["work_context"]["context_hash"].clone();
-    let query = &legacy["response_view"]["full_result"];
+    assert!(!concise["active_claims"].as_array().unwrap().is_empty());
+    assert_eq!(
+        concise["response_view"]["full_result"]["arguments"]["session"],
+        json!(session.id)
+    );
+    let query = &concise["response_view"]["full_result"];
     fs::write(
         f.root.join("work.yaml"),
         fs::read_to_string(f.root.join("work.yaml"))
@@ -653,44 +640,29 @@ async fn compact_indexes_stdio_is_opt_in_bounded_and_preserves_full_drilldown() 
         )
         .await,
     );
-    assert_ne!(changed["project_revision"], legacy["project_revision"]);
-    assert_ne!(changed["context"]["work_context"]["context_hash"], old_hash);
+    assert_ne!(changed["project_revision"], concise["project_revision"]);
+    assert_ne!(
+        changed["context"]["work_context"]["context_hash"],
+        concise["context"]["work_context"]["context_hash"]
+    );
     client.cancel().await.unwrap();
 }
 
 #[tokio::test]
-async fn compact_indexes_stdio_preserves_errors_and_rejects_invalid_options() {
+async fn concise_stdio_preserves_budget_errors_and_incomplete_context() {
     let f = Fixture::new();
     let client = f.client().await;
-    for invalid in [json!(null), json!(1), json!("true")] {
-        error(
-            call(
-                &client,
-                "awr_work_prepare",
-                json!({"work":"W","compact_indexes":invalid}),
-            )
-            .await,
-            "InvalidInput",
-        );
-    }
-    error(
-        call(
-            &client,
-            "awr_work_get",
-            json!({"work":"W","compact_indexes":true}),
-        )
-        .await,
-        "InvalidInput",
-    );
+    let baseline = call(&client, "awr_work_prepare", json!({"work":"W","budget":1})).await;
+    assert_eq!(baseline.is_error, Some(true));
     for view in ["full", "summary", "action"] {
-        let args = json!({"work":"W","budget":1,"response_view":view});
-        let original = call(&client, "awr_work_prepare", args.clone()).await;
-        let mut opted = args;
-        opted["compact_indexes"] = json!(true);
-        let compact = call(&client, "awr_work_prepare", opted).await;
-        assert_eq!(original.is_error, Some(true));
-        assert_eq!(compact.is_error, original.is_error);
-        assert_eq!(body(&compact), body(&original));
+        let result = call(
+            &client,
+            "awr_work_prepare",
+            json!({"work":"W","budget":1,"response_view":view}),
+        )
+        .await;
+        assert_eq!(result.is_error, baseline.is_error);
+        assert_eq!(body(&result), body(&baseline));
     }
     fs::write(
         f.root.join("work.yaml"),
@@ -701,15 +673,20 @@ async fn compact_indexes_stdio_preserves_errors_and_rejects_invalid_options() {
     )
     .unwrap();
     f.reindex();
+    let baseline = call(&client, "awr_work_prepare", json!({"work":"W"})).await;
     for view in ["full", "summary", "action"] {
-        let args = json!({"work":"W","response_view":view});
-        let original = call(&client, "awr_work_prepare", args.clone()).await;
-        let mut opted = args;
-        opted["compact_indexes"] = json!(true);
-        let compact = call(&client, "awr_work_prepare", opted).await;
-        assert_eq!(original.is_error, Some(true));
-        assert_eq!(compact.is_error, original.is_error);
-        assert_eq!(body(&compact), body(&original));
+        let result = call(
+            &client,
+            "awr_work_prepare",
+            json!({"work":"W","response_view":view}),
+        )
+        .await;
+        assert_eq!(result.is_error, Some(true));
+        let value = body(&result);
+        assert_eq!(value["context"], body(&baseline)["context"]);
+        assert_eq!(value["context"]["completeness"]["complete"], false);
+        assert!(value["response_view"].get("detail_counts").is_none());
+        assert!(value["response_view"].get("detail_note").is_none());
     }
     client.cancel().await.unwrap();
 }
@@ -724,17 +701,14 @@ async fn summary_views_preserve_context_and_queryable_full_transition_receipts()
     let mut concise_args = args.clone();
     concise_args["response_view"] = json!("summary");
     let concise = success(call(&client, "awr_work_prepare", concise_args).await);
-    for field in [
-        "rendered_context",
-        "context_hash",
-        "identity",
-        "omitted_chunks",
-    ] {
-        assert_eq!(
-            full["context"]["work_context"][field],
-            concise["context"]["work_context"][field]
-        );
-    }
+    index_contract::assert_prepared_view(
+        &full,
+        &concise,
+        full["context"]["work_context"]["omitted_chunks"]
+            .as_array()
+            .unwrap()
+            .len(),
+    );
     for field in [
         "management",
         "diagnostics",
