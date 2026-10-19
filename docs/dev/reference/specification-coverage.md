@@ -87,17 +87,19 @@ work_items:
     spec_refs:
       - specification: configuration-spec
         item: NEW
-        approved_version: "2"
         source_fingerprint: "sha256:<64 hexadecimal characters from source list>"
         criterion: Save the reviewed configuration
 ```
 
 `specification` is a stable registered decision key, not a filesystem path.
-`approved_version` and `source_fingerprint` are both required. The fingerprint
-binds the whole document, including approval metadata: changing bytes without
-bumping its human version still requires review. Adoption is an explicit source
-assertion, not independent proof that a person reviewed it. Do not automatically
-refresh a task's fingerprint to make a warning disappear.
+`source_fingerprint` is the required version pin. It resolves to the existing
+document-version provenance; no database-assigned `source_id` belongs in this
+source-owned reference. The fingerprint binds the whole document, including
+approval metadata: changing bytes without bumping its human version still requires
+review. `specification.version` and the report's `observed_version` retain that
+human label for display, without a separate approval/version comparison. Adoption
+is an explicit source assertion, not independent proof that a person reviewed it.
+Do not automatically refresh a task's fingerprint to make a warning disappear.
 
 `criterion`, when present, must exactly match one current acceptance string.
 Omitting it declares a work-wide association, not per-criterion coverage.
@@ -110,6 +112,32 @@ part of the planning contract and cannot bypass an active execution claim.
 After upgrading, explicitly reindex: the ledger and decision adapter versions
 change so previously ignored metadata is projected. No database schema migration
 or additional task authority is introduced.
+
+The earlier unreleased prototype's per-reference `approved_version` field is no
+longer accepted. Remove it explicitly from those source bindings and reindex;
+there is no automatic source migration. That source edit changes the existing
+task-contract fingerprint. Existing proof is assessed by the normal evidence
+rules below, without rewriting reports or backfilling stamps.
+
+### Composition with task contracts and evidence
+
+Declared `spec_refs` participate in the existing YAML `section_fingerprint`,
+including pin, item or criterion changes that leave acceptance text unchanged.
+Work-aware evidence reads and completion use the [existing currency rules](../../series/concepts.md#delivery-and-acceptance):
+when the request is for the current ledger hash, eligible ledger-stamped proof
+can survive unrelated task edits, while a changed owning task contract makes
+that stamped path historical. Other requested revisions and generic
+`evidence show` remain source-SHA strict. Unstamped or Git-bound proof is not
+automatically stamped;
+when its requested SHA still matches, an unstamped record can remain current.
+The checker adds no evidence-version field, completion gate or receipt evaluator.
+
+An external specification edit can therefore report `needs_review` while proof
+remains current for the unchanged old task contract. That proof does not verify
+the revised specification. Explicit rebinding and re-verification follow the
+existing source-editing and evidence workflows. Completion retains its exact
+selected reports, including extra required proof; another passing report cannot
+replace damaged selected proof. No automatic completion revocation is performed.
 
 ## Inspect without changing state
 
@@ -146,8 +174,8 @@ replacement identifiers, requirement coverage and reason codes:
 
 | Result | Meaning |
 | --- | --- |
-| Reference `current` | Its explicit version, fingerprint, item and optional criterion resolve; the work association is admitted and active. |
-| Reference `needs_review` | An approved version/content changed, an item/document was superseded or withdrawn, or the mapped work is cancelled/archived. |
+| Reference `current` | Its pinned fingerprint, item and optional criterion resolve; the work association is admitted and active. This is specification alignment, distinct from evidence currency. |
+| Reference `needs_review` | Approved source bytes changed, an item/document was superseded or withdrawn, or the mapped work is cancelled/archived. |
 | `unknown` | Missing/ambiguous/unapproved specification, unresolved item/criterion/replacement, draft/unknown work scope, or missing explicit specification declarations. |
 | `historical` | A resolved superseded document, or its cancelled/archived task reference; retained for traceability without a current coverage gap. |
 | Requirement `covered` | At least one current declared task association exists. This is coverage, not a test result. |

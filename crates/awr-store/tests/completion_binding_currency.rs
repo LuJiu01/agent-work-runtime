@@ -12,6 +12,7 @@ const C: &str = "The report contains the requested analysis";
 
 fn work(f: &Fixture) -> WorkItem {
     WorkItem {
+        spec_refs: vec![],
         ordinary_completion: None,
         archived: false,
         meta: f.meta("W"),

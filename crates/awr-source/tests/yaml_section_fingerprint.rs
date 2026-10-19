@@ -170,7 +170,7 @@ fn writable_set_edits_change_the_section_fingerprint() {
 #[test]
 fn specification_bindings_change_only_the_owning_work_section() {
     let reference = serde_json::json!({
-        "specification":"export-spec", "item":"EXPORT", "approved_version":"1",
+        "specification":"export-spec", "item":"EXPORT",
         "source_fingerprint":format!("sha256:{}", "a".repeat(64)),
         "criterion":"Export the reviewed format"
     });
@@ -180,9 +180,9 @@ fn specification_bindings_change_only_the_owning_work_section() {
     ]});
     let read = |value: &serde_json::Value| parse(&value.to_string()).unwrap();
     let base = read(&ledger);
-    assert_eq!(base.work_items[0].spec_refs[0].approved_version, "1");
+    assert_eq!(base.work_items[0].spec_refs[0].item, "EXPORT");
 
-    ledger["work_items"][1]["spec_refs"][0]["approved_version"] = "2".into();
+    ledger["work_items"][1]["spec_refs"][0]["item"] = "EXPORT-V2".into();
     let sibling = read(&ledger);
     assert_eq!(section_fp(&base), section_fp(&sibling));
     assert_ne!(
@@ -190,17 +190,45 @@ fn specification_bindings_change_only_the_owning_work_section() {
         sibling.work_items[1].meta.source_ref.section_fingerprint
     );
 
-    ledger["work_items"][0]["spec_refs"][0]["approved_version"] = "2".into();
-    ledger["work_items"][0]["spec_refs"][0]["source_fingerprint"] =
-        format!("sha256:{}", "b".repeat(64)).into();
-    let rebound = read(&ledger);
-    assert_eq!(
-        base.work_items[0].acceptance,
-        rebound.work_items[0].acceptance
-    );
-    assert_ne!(section_fp(&base), section_fp(&rebound));
+    for (field, value) in [
+        ("source_fingerprint", format!("sha256:{}", "b".repeat(64))),
+        ("item", "EXPORT-V2".into()),
+        ("criterion", "Another exact acceptance criterion".into()),
+    ] {
+        let mut changed = ledger.clone();
+        changed["work_items"][0]["spec_refs"][0][field] = value.into();
+        let rebound = read(&changed);
+        assert_eq!(
+            base.work_items[0].acceptance,
+            rebound.work_items[0].acceptance
+        );
+        assert_ne!(section_fp(&base), section_fp(&rebound), "{field}");
+        assert_eq!(
+            sibling.work_items[1].meta.source_ref.section_fingerprint,
+            rebound.work_items[1].meta.source_ref.section_fingerprint
+        );
 
-    ledger["work_items"][0]["status"] = "in_progress".into();
-    ledger["work_items"][0]["next_action"] = "Review the export".into();
-    assert_eq!(section_fp(&rebound), section_fp(&read(&ledger)));
+        changed["work_items"][0]["status"] = "in_progress".into();
+        changed["work_items"][0]["next_action"] = "Review the export".into();
+        assert_eq!(section_fp(&rebound), section_fp(&read(&changed)));
+    }
+}
+
+#[test]
+fn specification_refs_require_one_pin_and_reject_duplicates_or_prototype_version_fields() {
+    let reference = serde_json::json!({
+        "specification":"export-spec", "item":"EXPORT",
+        "source_fingerprint":format!("sha256:{}", "a".repeat(64))
+    });
+    let ledger = |refs| serde_json::json!({"work_items":[{"id":"W","spec_refs":refs}]}).to_string();
+    assert!(parse(&ledger(vec![reference.clone()])).is_ok());
+    assert!(parse(&ledger(vec![reference.clone(), reference.clone()])).is_err());
+    for field in ["specification", "item", "source_fingerprint"] {
+        let mut incomplete = reference.clone();
+        incomplete.as_object_mut().unwrap().remove(field);
+        assert!(parse(&ledger(vec![incomplete])).is_err(), "{field}");
+    }
+    let mut prototype = reference;
+    prototype["approved_version"] = "1".into();
+    assert!(parse(&ledger(vec![prototype])).is_err());
 }

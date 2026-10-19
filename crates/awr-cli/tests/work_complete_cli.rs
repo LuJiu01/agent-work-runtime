@@ -415,6 +415,80 @@ fn shared_ledger_completion_preserves_stamped_evidence_and_selected_reports() {
 }
 
 #[test]
+fn specification_review_keeps_task_proof_current_but_cannot_replace_selected_reports() {
+    let f = Fixture::new();
+    f.organize();
+    fs::create_dir(f.root.join("decisions")).unwrap();
+    let path = f.root.join("decisions/spec.md");
+    fs::write(&path, "---\nid: SPEC\nstatus: accepted\nspecification:\n  version: '1'\n  items:\n    - id: R\n      disposition: required\n---\n# Specification\n\n## Decision\nUse the reviewed requirement.\n").unwrap();
+    let mapping = f.root.join(".awr/project.toml");
+    fs::write(&mapping, format!("{}\n[[sources]]\ndomain='decisions'\nrole='supporting'\npath='decisions'\nadapter='markdown-directory-v1'\n", fs::read_to_string(&mapping).unwrap())).unwrap();
+    let work_path = f.root.join("work.yaml");
+    let binding = json!({"specification":"SPEC","item":"R","source_fingerprint":awr_source::fingerprint(&fs::read(&path).unwrap()),"criterion":C1});
+    let body = fs::read_to_string(&work_path).unwrap();
+    fs::write(
+        &work_path,
+        body.replacen(
+            "  title: Deliver the report\n",
+            &format!("  title: Deliver the report\n  spec_refs: [{binding}]\n"),
+            1,
+        ),
+    )
+    .unwrap();
+    f.ok(&["source", "reindex"]);
+    assert_eq!(f.ok(&["spec", "check"])["status"], "matched");
+    let ledger_sha = || {
+        awr_source::fingerprint(&fs::read(&work_path).unwrap())
+            .trim_start_matches("sha256:")
+            .to_owned()
+    };
+    let sha = ledger_sha();
+    let mut report = f.report();
+    report["source_sha"] = json!(sha);
+    let selected = f.evidence("E", &report, |d| d.source_sha = Some(sha.clone()));
+    let required = f.evidence("R", &report, |d| d.source_sha = Some(sha.clone()));
+    let mut input = f.input();
+    input["source_sha"] = json!(sha);
+    input["required_evidence"] = json!(["R"]);
+    Fixture::success(&f.complete(&input));
+    let current_sha = ledger_sha();
+    let verified = || {
+        f.ok(&["intake", "inspect", "--source-sha", &current_sha])["organization"]["verified_completed"].clone()
+    };
+    assert_eq!(verified(), 1);
+    fs::write(
+        &path,
+        format!(
+            "{}\nThe authoritative requirement changed.\n",
+            fs::read_to_string(&path).unwrap()
+        ),
+    )
+    .unwrap();
+    f.ok(&["source", "reindex"]);
+    assert_eq!(
+        f.ok(&["spec", "check"])["references"][0]["status"],
+        "needs_review"
+    );
+    assert_eq!(verified(), 1);
+    assert_eq!(ledger_sha(), current_sha);
+
+    report["source_sha"] = json!(current_sha);
+    f.evidence("replacement", &report, |d| {
+        d.source_sha = Some(current_sha.clone())
+    });
+    for proof in [selected, required] {
+        let proof_path = f.root.join(&proof.locator);
+        let bytes = fs::read(&proof_path).unwrap();
+        let mut changed: Value = serde_json::from_slice(&bytes).unwrap();
+        changed["checks"][0]["details"] = json!("A different passing observation");
+        fs::write(&proof_path, serde_json::to_vec_pretty(&changed).unwrap()).unwrap();
+        assert_eq!(verified(), 0, "{} must remain selected", proof.external_key);
+        fs::write(&proof_path, bytes).unwrap();
+        assert_eq!(verified(), 1);
+    }
+}
+
+#[test]
 fn ledger_drift_cannot_drop_unstamped_extra_required_evidence() {
     let f = Fixture::new();
     f.organize();

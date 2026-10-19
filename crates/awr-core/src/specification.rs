@@ -26,6 +26,7 @@ pub struct SpecificationItem {
 #[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
 #[serde(deny_unknown_fields)]
 pub struct Specification {
+    /// Human edition label; source_fingerprint is the binding's version pin.
     pub version: String,
     pub items: Vec<SpecificationItem>,
 }
@@ -36,7 +37,6 @@ pub struct SpecificationReference {
     /// Stable external decision key, never an arbitrary file to open.
     pub specification: String,
     pub item: String,
-    pub approved_version: String,
     /// Exact bytes adopted by the task, including decision lifecycle metadata.
     pub source_fingerprint: String,
     /// Exact current acceptance text, or an explicitly work-wide association.
@@ -77,7 +77,6 @@ pub fn validate_specification_references(refs: &[SpecificationReference]) -> Res
         || refs.iter().any(|r| {
             !name(&r.specification, 512)
                 || !name(&r.item, 512)
-                || !name(&r.approved_version, 256)
                 || !r
                     .source_fingerprint
                     .strip_prefix("sha256:")
@@ -88,13 +87,12 @@ pub fn validate_specification_references(refs: &[SpecificationReference]) -> Res
                 || !seen.insert((
                     &r.specification,
                     &r.item,
-                    &r.approved_version,
                     &r.source_fingerprint,
                     &r.criterion,
                 ))
         })
     {
-        return Err(Error::InvalidInput("spec_refs requires at most 1000 distinct references with specification, item, approved_version, sha256 source_fingerprint and optional exact criterion text".into()));
+        return Err(Error::InvalidInput("spec_refs requires at most 1000 distinct references with specification, item, sha256 source_fingerprint and optional exact criterion text".into()));
     }
     Ok(())
 }

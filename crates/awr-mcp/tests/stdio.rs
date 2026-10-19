@@ -493,7 +493,7 @@ async fn specification_check_is_discoverable_read_only_and_conservative() {
         serde_json::to_string_pretty(&metadata).unwrap()
     );
     fs::write(f.root.join("decisions/spec.md"), &document).unwrap();
-    let reference = json!({"specification":"SPEC","item":"OLD","approved_version":"1","source_fingerprint":format!("sha256:{}","a".repeat(64)),"criterion":CRITERION});
+    let reference = json!({"specification":"SPEC","item":"OLD","source_fingerprint":format!("sha256:{}","a".repeat(64)),"criterion":CRITERION});
     fs::write(
         f.root.join("work.yaml"),
         WORK.replace(
@@ -524,9 +524,25 @@ async fn specification_check_is_discoverable_read_only_and_conservative() {
     );
     assert_eq!(result["status"], "needs_review");
     assert_eq!(result["references"][0]["replacement"], "NEW");
+    assert_eq!(result["references"][0]["observed_version"], "2");
+    assert_eq!(result["references"][0]["reference"], reference);
     assert_eq!(result["counts"]["uncovered"], 1);
     assert_eq!(result["counts"]["not_required"], 2);
     assert_eq!(result["read_only"], true);
+    let (store, _) = f.store();
+    let expected = awr_runtime::check_specifications(
+        &store,
+        &f.root,
+        &awr_runtime::SpecificationCheckRequest {
+            spec: Some("SPEC".into()),
+            limit: 1000,
+        },
+    )
+    .unwrap();
+    for (key, value) in expected.as_object().unwrap() {
+        assert_eq!(&result[key], value, "{key}");
+    }
+    drop(store);
     let unknown = success(call(&client, "awr_spec_check", json!({"spec":"missing"})).await);
     assert_eq!(unknown["status"], "unknown");
     error(
@@ -560,7 +576,7 @@ async fn specification_queue_briefs_are_bounded_and_details_preserve_bindings() 
     };
     let f = Fixture::new();
     let criterion = "Reviewed requirement ".to_owned() + &"x".repeat(4000);
-    let refs = (0..100).map(|i|json!({"specification":"SPEC","item":format!("R{i}"),"approved_version":"1","source_fingerprint":format!("sha256:{}","a".repeat(64)),"criterion":criterion})).collect::<Vec<_>>();
+    let refs = (0..100).map(|i|json!({"specification":"SPEC","item":format!("R{i}"),"source_fingerprint":format!("sha256:{}","a".repeat(64)),"criterion":criterion})).collect::<Vec<_>>();
     fs::write(f.root.join("work.yaml"), serde_json::to_vec(&json!({"work_items":[{"id":"W","title":"Review specification","status":"ready","next_action":"Review","acceptance":[criterion],"spec_refs":refs}]})).unwrap()).unwrap();
     f.reindex();
     let client = f.client().await;
@@ -631,7 +647,7 @@ async fn specification_document_history_and_unregistered_replacements_are_distin
         fs::write(f.root.join("decisions/old-spec.md"),format!("---\n{}\n---\n# Old specification\n\n## Decision\nRetain the historical requirement.\n",metadata)).unwrap()
     };
     write_old(&old);
-    fs::write(f.root.join("work.yaml"),serde_json::to_vec(&json!({"work_items":[{"id":"W","status":"planned","acceptance":[CRITERION],"spec_refs":[{"specification":"NEW","item":"R","approved_version":"1","source_fingerprint":replacement["source_fingerprint"],"criterion":CRITERION}]}]})).unwrap()).unwrap();
+    fs::write(f.root.join("work.yaml"),serde_json::to_vec(&json!({"work_items":[{"id":"W","status":"planned","acceptance":[CRITERION],"spec_refs":[{"specification":"NEW","item":"R","source_fingerprint":replacement["source_fingerprint"],"criterion":CRITERION}]}]})).unwrap()).unwrap();
     f.reindex();
     let client = f.client().await;
     let before = f.logical_state();
@@ -698,7 +714,7 @@ async fn specification_history_keeps_extraction_warnings_separate_from_receipt_v
             .source_ref
             .source_fingerprint
     };
-    fs::write(f.root.join("work.yaml"), serde_json::to_vec(&json!({"work_items":[{"id":"W","status":"planned","spec_refs":[{"specification":"LATEST","item":"R","approved_version":"1","source_fingerprint":fingerprint}]}]})).unwrap()).unwrap();
+    fs::write(f.root.join("work.yaml"), serde_json::to_vec(&json!({"work_items":[{"id":"W","status":"planned","spec_refs":[{"specification":"LATEST","item":"R","source_fingerprint":fingerprint}]}]})).unwrap()).unwrap();
     f.reindex();
     let client = f.client().await;
     let before = f.logical_state();

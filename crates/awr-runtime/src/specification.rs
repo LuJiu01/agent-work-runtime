@@ -319,9 +319,6 @@ pub fn check_specifications(
                         }
                         Some(spec) => {
                             observed_version = Some(spec.version.clone());
-                            if r.approved_version != spec.version {
-                                reasons.push("approved_version_changed");
-                            }
                             let items = &item_indexes[&d.item.meta.id];
                             match items.get(r.item.as_str()) {
                                 None => {

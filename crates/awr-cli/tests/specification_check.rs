@@ -22,7 +22,7 @@ impl Project {
         for work in works.as_array_mut().unwrap() {
             if let Some(refs) = work.get_mut("spec_refs").and_then(Value::as_array_mut) {
                 for r in refs {
-                    if r["specification"] == "dashboard" && r["approved_version"] == "0.80" {
+                    if r["specification"] == "dashboard" {
                         r["source_fingerprint"] = json!(fingerprint);
                     }
                 }
@@ -110,10 +110,53 @@ impl Project {
             &preview["project_revision"].to_string(),
         ]);
     }
+    fn ledger_sha(&self) -> String {
+        format!(
+            "{:x}",
+            sha2::Sha256::digest(fs::read(self.0.join("work.yaml")).unwrap())
+        )
+    }
+    fn evidence(&self, key: &str, work: &str, sha: &str, linked: bool) -> awr_core::Evidence {
+        let locator = format!("{key}.json");
+        let report = json!({"version":1,"work_item":work,"source_sha":sha,"command":"synthetic specification verification","scope":[work],"verified_at":1,"checks":[{"name":"configuration","passed":true,"details":"Verified the declared task contract","criteria":["Save the reviewed configuration"]}]});
+        let bytes = serde_json::to_vec(&report).unwrap();
+        fs::write(self.0.join(&locator), &bytes).unwrap();
+        let mut store = awr_store::Store::open_existing(&self.0.join(".awr/state.db")).unwrap();
+        let project = store
+            .project_by_root(&self.0.canonicalize().unwrap())
+            .unwrap();
+        let draft = awr_core::EvidenceDraft {
+            external_key: key.into(),
+            work_item_key: linked.then(|| work.into()),
+            evidence_type: "completion_report".into(),
+            level: awr_core::EvidenceLevel::LocallyVerified,
+            summary: "Verified the declared task contract".into(),
+            locator,
+            sha256: Some(format!("{:x}", sha2::Sha256::digest(&bytes))),
+            source_sha: Some(sha.into()),
+            command: Some("synthetic specification verification".into()),
+            scope: vec![work.into()],
+            branch_id: None,
+            verified_at: Some(1),
+        };
+        store
+            .record_evidence(project.id, project.project_revision, draft)
+            .unwrap()
+            .0
+    }
+    fn currency(&self, work: &str, key: &str, sha: &str) -> Value {
+        self.ok(&["work", "show", work, "--source-sha", sha, "--cached"])["evidence"]
+            .as_array()
+            .unwrap()
+            .iter()
+            .find(|e| e["external_key"] == key)
+            .unwrap()["currency"]
+            .clone()
+    }
 }
 
-fn reference(item: &str, version: &str) -> Value {
-    json!({"specification":"dashboard","item":item,"approved_version":version,"source_fingerprint":format!("sha256:{}","a".repeat(64)),"criterion":"Save the reviewed configuration"})
+fn reference(item: &str) -> Value {
+    json!({"specification":"dashboard","item":item,"source_fingerprint":format!("sha256:{}","a".repeat(64)),"criterion":"Save the reviewed configuration"})
 }
 
 #[test]
@@ -123,7 +166,7 @@ fn superseded_reference_is_reported_without_rewriting_sources_or_runtime() {
             {"id":"C64","disposition":"superseded","superseded_by":"C90"},
             {"id":"C90","disposition":"required"}
         ]),
-        json!([{"id":"W","title":"Save configuration","status":"planned","acceptance":["Save the reviewed configuration"],"spec_refs":[reference("C64","0.74")]}]),
+        json!([{"id":"W","title":"Save configuration","status":"planned","acceptance":["Save the reviewed configuration"],"spec_refs":[reference("C64")]}]),
     );
     let source = fs::read(p.0.join("work.yaml")).unwrap();
     let spec = fs::read(p.0.join("decisions/dashboard.md")).unwrap();
@@ -137,8 +180,9 @@ fn superseded_reference_is_reported_without_rewriting_sources_or_runtime() {
         result["references"][0]["reasons"]
             .as_array()
             .unwrap()
-            .contains(&json!("approved_version_changed"))
+            .contains(&json!("item_superseded"))
     );
+    assert_eq!(result["references"][0]["observed_version"], "0.80");
     assert_eq!(result["read_only"], true);
     assert_eq!(fs::read(p.0.join("work.yaml")).unwrap(), source);
     assert_eq!(fs::read(p.0.join("decisions/dashboard.md")).unwrap(), spec);
@@ -154,7 +198,7 @@ fn future_coverage_distinguishes_missing_work_cancelled_and_out_of_scope() {
             json!({"id":"OUT","disposition":"out_of_scope"}),
         ])
         .collect::<Vec<_>>();
-    let works=(1..=9).map(|i|json!({"id":format!("W{i}"),"status":"planned","acceptance":["Save the reviewed configuration"],"spec_refs":[reference(&format!("F{i}"),"0.80")]})).collect::<Vec<_>>();
+    let works=(1..=9).map(|i|json!({"id":format!("W{i}"),"status":"planned","acceptance":["Save the reviewed configuration"],"spec_refs":[reference(&format!("F{i}"))]})).collect::<Vec<_>>();
     let p = Project::new(json!(items), json!(works));
     let result = p.ok(&["spec", "check", "--spec", "dashboard"]);
     let requirements = result["requirements"].as_array().unwrap();
@@ -176,14 +220,14 @@ fn future_coverage_distinguishes_missing_work_cancelled_and_out_of_scope() {
 
 #[test]
 fn unregistered_specification_and_unresolved_criterion_stay_unknown_despite_fresh_sources() {
-    let mut unknown = reference("C90", "0.80");
+    let mut unknown = reference("C90");
     unknown["specification"] = json!("unregistered");
-    let mut bad_criterion = reference("C90", "0.80");
+    let mut bad_criterion = reference("C90");
     bad_criterion["criterion"] = json!("Not an acceptance criterion");
     let p = Project::new(
         json!([{"id":"C90","disposition":"required"}]),
         json!([
-            {"id":"W","status":"planned","acceptance":["Save the reviewed configuration"],"spec_refs":[unknown,bad_criterion,reference("MISSING","0.80")]}
+            {"id":"W","status":"planned","acceptance":["Save the reviewed configuration"],"spec_refs":[unknown,bad_criterion,reference("MISSING")]}
         ]),
     );
     let result = p.ok(&["spec", "check"]);
@@ -211,7 +255,7 @@ fn changing_bytes_without_bumping_version_requires_review_and_stale_reads_write_
     let p = Project::new(
         json!([{"id":"C90","disposition":"required"}]),
         json!([
-            {"id":"W","status":"planned","acceptance":["Save the reviewed configuration"],"spec_refs":[reference("C90","0.80")]}
+            {"id":"W","status":"planned","acceptance":["Save the reviewed configuration"],"spec_refs":[reference("C90")]}
         ]),
     );
     assert_eq!(p.ok(&["spec", "check"])["status"], "matched");
@@ -239,11 +283,169 @@ fn changing_bytes_without_bumping_version_requires_review_and_stale_reads_write_
 }
 
 #[test]
+fn specification_drift_and_rebinding_compose_with_work_aware_evidence_rules() {
+    let items = json!([{"id":"R","disposition":"required"},{"id":"R2","disposition":"future"}]);
+    let p = Project::new(
+        items.clone(),
+        json!([
+            {"id":"W","status":"planned","acceptance":["Save the reviewed configuration","Review the export"],"spec_refs":[reference("R")]},
+            {"id":"OTHER","status":"planned","acceptance":["Save the reviewed configuration"],"spec_refs":[reference("R")]}
+        ]),
+    );
+    let ledger: Value = serde_json::from_slice(&fs::read(p.0.join("work.yaml")).unwrap()).unwrap();
+    let original_sha = p.ledger_sha();
+    assert!(
+        p.evidence("ledger", "W", &original_sha, true)
+            .section_fingerprint
+            .is_some()
+    );
+    assert!(
+        p.evidence("other", "OTHER", &original_sha, true)
+            .section_fingerprint
+            .is_some()
+    );
+    let git_sha = "b".repeat(40);
+    assert!(
+        p.evidence("git", "W", &git_sha, true)
+            .section_fingerprint
+            .is_none()
+    );
+    assert!(
+        p.evidence("unstamped", "W", &original_sha, false)
+            .section_fingerprint
+            .is_none()
+    );
+    let finding = |report: Value, key: &str| {
+        let mut row = report["references"]
+            .as_array()
+            .unwrap()
+            .iter()
+            .find(|r| r["work"] == key)
+            .unwrap()
+            .clone();
+        row.as_object_mut().unwrap().remove("source_ref");
+        row
+    };
+    let baseline = p.ok(&["spec", "check"]);
+    let mut sibling = ledger["work_items"].clone();
+    sibling[1]["spec_refs"][0]["item"] = json!("R2");
+    p.works(sibling);
+    assert_eq!(p.currency("W", "ledger", &p.ledger_sha()), "current");
+    assert_eq!(p.currency("OTHER", "other", &p.ledger_sha()), "historical");
+    assert_eq!(
+        finding(p.ok(&["spec", "check"]), "W"),
+        finding(baseline.clone(), "W")
+    );
+    // Generic evidence inspection stays strict even when the work-aware path matches.
+    assert_eq!(
+        p.ok(&[
+            "evidence",
+            "show",
+            "ledger",
+            "--source-sha",
+            &p.ledger_sha()
+        ])["currency"],
+        "historical"
+    );
+
+    for (field, value) in [
+        ("source_fingerprint", format!("sha256:{}", "c".repeat(64))),
+        ("item", "R2".into()),
+        ("criterion", "Review the export".into()),
+    ] {
+        let mut changed = ledger["work_items"].clone();
+        changed[0]["spec_refs"][0][field] = json!(value);
+        p.works(changed);
+        let sha = p.ledger_sha();
+        assert_eq!(p.currency("W", "ledger", &sha), "historical", "{field}");
+        assert_eq!(p.currency("OTHER", "other", &sha), "current", "{field}");
+        assert_eq!(
+            finding(p.ok(&["spec", "check"]), "OTHER"),
+            finding(baseline.clone(), "OTHER")
+        );
+        // A changed contract does not invent stamps or override an exact code/SHA match.
+        assert_eq!(p.currency("W", "git", &git_sha), "current");
+        assert_eq!(p.currency("W", "git", &"d".repeat(40)), "historical");
+        assert_eq!(p.currency("W", "unstamped", &original_sha), "current");
+        assert_eq!(p.currency("W", "unstamped", &sha), "historical");
+        assert_eq!(
+            p.ok(&["work", "show", "W", "--cached"])["acceptance"],
+            ledger["work_items"][0]["acceptance"]
+        );
+    }
+
+    p.works(ledger["work_items"].clone());
+    p.spec("accepted", "0.80", json!([{"id":"R","disposition":"required"},{"id":"R2","disposition":"future"},{"id":"NEW","disposition":"future"}]));
+    p.ok(&["source", "reindex"]);
+    let state = p.logical_state();
+    let result = p.ok(&["spec", "check"]);
+    assert_eq!(result["references"][0]["status"], "needs_review");
+    assert_eq!(
+        result["references"][0]["reasons"],
+        json!(["approved_source_changed"])
+    );
+    assert_eq!(result["references"][0]["observed_version"], "0.80");
+    assert_eq!(p.logical_state(), state);
+    assert_eq!(p.currency("W", "ledger", &p.ledger_sha()), "current");
+    assert_eq!(p.currency("W", "git", &git_sha), "current");
+    assert_eq!(p.ledger_sha(), original_sha);
+}
+
+#[test]
+fn stable_keys_survive_independent_initialization_without_transferring_local_adoption() {
+    let items = json!([{"id":"R","disposition":"required"}]);
+    let p = Project::new(
+        items.clone(),
+        json!([{"id":"W","status":"planned","spec_refs":[{
+            "specification":"dashboard","item":"R","source_fingerprint":format!("sha256:{}","a".repeat(64))
+        }]}]),
+    );
+    let ledger = fs::read(p.0.join("work.yaml")).unwrap();
+    let works: Value = serde_json::from_slice(&ledger).unwrap();
+    let q = Project::new(items, works["work_items"].clone());
+    assert_ne!(
+        p.version("dashboard")["source_id"],
+        q.version("dashboard")["source_id"]
+    );
+    assert_eq!(q.ok(&["spec", "check"])["status"], "matched");
+    assert_eq!(fs::read(q.0.join("work.yaml")).unwrap(), ledger);
+
+    p.document("new", json!({"id":"new","status":"proposed","specification":{"version":"1","items":[{"id":"R","disposition":"required"}]}}));
+    p.ok(&["source", "reindex"]);
+    p.adopt("dashboard", "new");
+    let refs = json!([{"specification":"new","item":"R","source_fingerprint":p.version("new")["source_fingerprint"]}]);
+    p.works(json!([{"id":"W","status":"planned","spec_refs":refs}]));
+    assert_eq!(p.ok(&["spec", "check"])["status"], "matched");
+    for file in ["dashboard.md", "new.md"] {
+        fs::copy(
+            p.0.join("decisions").join(file),
+            q.0.join("decisions").join(file),
+        )
+        .unwrap();
+    }
+    let works: Value = serde_json::from_slice(&fs::read(p.0.join("work.yaml")).unwrap()).unwrap();
+    q.works(works["work_items"].clone());
+    let bytes = fs::read(q.0.join("work.yaml")).unwrap();
+    let state = q.logical_state();
+    let result = q.ok(&["spec", "check"]);
+    assert_eq!(result["references"][0]["status"], "unknown");
+    assert!(
+        result["references"][0]["reasons"]
+            .as_array()
+            .unwrap()
+            .contains(&json!("specification_not_currently_approved"))
+    );
+    assert_eq!(result["references"][0]["reference"], refs[0]);
+    assert_eq!(q.logical_state(), state);
+    assert_eq!(fs::read(q.0.join("work.yaml")).unwrap(), bytes);
+}
+
+#[test]
 fn proposed_decisions_and_replacement_cycles_never_prove_coverage() {
     let p = Project::new(
         json!([{"id":"C90","disposition":"required"}]),
         json!([
-            {"id":"W","status":"planned","acceptance":["Save the reviewed configuration"],"spec_refs":[reference("C90","0.80")]}
+            {"id":"W","status":"planned","acceptance":["Save the reviewed configuration"],"spec_refs":[reference("C90")]}
         ]),
     );
     p.spec(
@@ -286,7 +488,7 @@ fn cancelled_work_does_not_cover_a_future_item_and_limit_never_silently_truncate
     let p = Project::new(
         json!([{"id":"C90","disposition":"future"}]),
         json!([
-            {"id":"W","status":"cancelled","acceptance":["Save the reviewed configuration"],"spec_refs":[reference("C90","0.80")]}
+            {"id":"W","status":"cancelled","acceptance":["Save the reviewed configuration"],"spec_refs":[reference("C90")]}
         ]),
     );
     let r = p.ok(&["spec", "check"]);
@@ -349,14 +551,14 @@ fn malformed_contracts_are_rejected_without_promoting_previous_projection() {
 fn adapter_upgrade_requires_explicit_reindex_and_restores_declared_fields() {
     let p = Project::new(
         json!([{"id":"C90","disposition":"future"}]),
-        json!([{"id":"W","status":"planned","acceptance":["Save the reviewed configuration"],"spec_refs":[reference("C90","0.80")]}]),
+        json!([{"id":"W","status":"planned","acceptance":["Save the reviewed configuration"],"spec_refs":[reference("C90")]}]),
     );
     let ledger = fs::read(p.0.join("work.yaml")).unwrap();
     let spec = fs::read(p.0.join("decisions/dashboard.md")).unwrap();
     // Simulate the previous adapters: identical source bytes, fields not projected.
     {
         let db = rusqlite::Connection::open(p.0.join(".awr/state.db")).unwrap();
-        db.execute_batch("UPDATE sources SET config_json=json_set(config_json,'$.adapter_version',CASE adapter WHEN 'yaml-ledger-v1' THEN 4 ELSE 3 END); UPDATE work_items SET payload_json=json_remove(payload_json,'$.spec_refs'); UPDATE decisions SET payload_json=json_remove(payload_json,'$.specification');").unwrap();
+        db.execute_batch("UPDATE sources SET config_json=json_set(config_json,'$.adapter_version',CASE adapter WHEN 'yaml-ledger-v1' THEN 5 ELSE 3 END); UPDATE work_items SET payload_json=json_remove(payload_json,'$.spec_refs'); UPDATE decisions SET payload_json=json_remove(payload_json,'$.specification');").unwrap();
     }
     let before = p.logical_state();
     let stale = p.run(&["spec", "check"]);
@@ -378,7 +580,7 @@ fn adapter_upgrade_requires_explicit_reindex_and_restores_declared_fields() {
 fn reviewed_reference_edits_use_existing_batch_and_active_claim_guards() {
     let p = Project::new(
         json!([{"id":"C90","disposition":"future"}]),
-        json!([{"id":"W","status":"planned","acceptance":["Save the reviewed configuration"],"spec_refs":[reference("C90","0.80")]}]),
+        json!([{"id":"W","status":"planned","acceptance":["Save the reviewed configuration"],"spec_refs":[reference("C90")]}]),
     );
     let source = p.ok(&["source", "list"])["sources"]
         .as_array()
@@ -433,7 +635,7 @@ fn reviewed_reference_edits_use_existing_batch_and_active_claim_guards() {
     let mut request = request;
     request["request_key"] = json!("restore-reviewed-reference");
     request["change"]["source_fingerprint"] = source["fingerprint"].clone();
-    let mut restored = reference("C90", "0.80");
+    let mut restored = reference("C90");
     restored["source_fingerprint"] = json!(format!(
         "sha256:{:x}",
         sha2::Sha256::digest(fs::read(p.0.join("decisions/dashboard.md")).unwrap())
@@ -457,7 +659,7 @@ fn reviewed_reference_edits_use_existing_batch_and_active_claim_guards() {
 #[test]
 fn adopted_history_is_traceable_without_current_gaps_but_live_old_refs_need_review() {
     let p = Project::new(json!([{"id":"R","disposition":"required"}]), json!([]));
-    let mut old_ref = reference("R", "0.80");
+    let mut old_ref = reference("R");
     old_ref["source_fingerprint"] = p.version("dashboard")["source_fingerprint"].clone();
     p.document("new", json!({"id":"new","status":"proposed","specification":{"version":"1","items":[{"id":"R","disposition":"required"}]}}));
     p.ok(&["source", "reindex"]);
@@ -467,7 +669,7 @@ fn adopted_history_is_traceable_without_current_gaps_but_live_old_refs_need_revi
         p.version("new")["source_fingerprint"],
         before_adoption["source_fingerprint"]
     );
-    let new_ref = json!({"specification":"new","item":"R","approved_version":"1","source_fingerprint":p.version("new")["source_fingerprint"],"criterion":"Save the reviewed configuration"});
+    let new_ref = json!({"specification":"new","item":"R","source_fingerprint":p.version("new")["source_fingerprint"],"criterion":"Save the reviewed configuration"});
     let mut works = json!([
         {"id":"NEW","status":"planned","acceptance":["Save the reviewed configuration"],"spec_refs":[new_ref]},
         {"id":"CANCELLED","status":"cancelled","acceptance":["Save the reviewed configuration"],"spec_refs":[old_ref]},
@@ -555,7 +757,7 @@ fn document_replacement_targets_must_resolve_identity_version_and_approval() {
         }
         p.document("dashboard", json!({"id":"dashboard","status":"superseded","superseded_by":target,"specification":{"version":"0.80","items":[{"id":"R","disposition":"required"}]}}));
         p.ok(&["source", "reindex"]);
-        let mut r = reference("R", "0.80");
+        let mut r = reference("R");
         r["source_fingerprint"] = p.version("dashboard")["source_fingerprint"].clone();
         p.works(json!([{"id":"W","status":"planned","acceptance":["Save the reviewed configuration"],"spec_refs":[r]}]));
         let state = p.logical_state();
@@ -584,7 +786,7 @@ fn long_spec_refs_stay_out_of_queue_briefs_and_remain_in_explicit_details() {
         .collect::<Vec<_>>();
     let refs = (0..100)
         .map(|i| {
-            let mut r = reference(&format!("R{i}"), "0.80");
+            let mut r = reference(&format!("R{i}"));
             r["criterion"] = json!(criterion);
             r
         })
@@ -626,7 +828,7 @@ fn multi_step_adoption_resolves_history_and_invalidated_receipts_remain_unknown(
     p.document("latest", json!({"id":"latest","status":"proposed","specification":{"version":"2","items":[{"id":"R","disposition":"required"}]}}));
     p.ok(&["source", "reindex"]);
     p.adopt("second", "latest");
-    p.works(json!([{"id":"W","status":"planned","acceptance":["Save the reviewed configuration"],"spec_refs":[{"specification":"latest","item":"R","approved_version":"2","source_fingerprint":p.version("latest")["source_fingerprint"]}]}]));
+    p.works(json!([{"id":"W","status":"planned","acceptance":["Save the reviewed configuration"],"spec_refs":[{"specification":"latest","item":"R","source_fingerprint":p.version("latest")["source_fingerprint"]}]}]));
     let state = p.logical_state();
     let r = p.ok(&["spec", "check", "--limit", "5"]);
     assert_eq!(r["status"], "matched", "{r}");
@@ -678,7 +880,7 @@ fn extraction_warnings_preserve_valid_history_but_invalid_adoptions_stay_unknown
         p.document("latest", json!({"id":"latest","status":"proposed","specification":{"version":"2","items":[{"id":"R","disposition":"required"}]}}));
         p.ok(&["source", "reindex"]);
         p.adopt("second", "latest");
-        p.works(json!([{"id":"W","status":"planned","spec_refs":[{"specification":"latest","item":"R","approved_version":"2","source_fingerprint":p.version("latest")["source_fingerprint"]}]}]));
+        p.works(json!([{"id":"W","status":"planned","spec_refs":[{"specification":"latest","item":"R","source_fingerprint":p.version("latest")["source_fingerprint"]}]}]));
         let bytes = fs::read(&path).unwrap();
         let ledger = fs::read(p.0.join("work.yaml")).unwrap();
         let state = p.logical_state();

@@ -490,7 +490,7 @@ impl YamlLedgerAdapter {
                         let refs: Vec<awr_core::SpecificationReference> = serde_json::from_value(value.clone()).map_err(|_| invalid(
                             &format!("{pointer}/spec_refs"), "ledger.spec_refs",
                             "spec_refs does not match the explicit specification reference schema",
-                            "Use a list of specification, item, approved_version, source_fingerprint and optional criterion records.",
+                            "Use a list of specification, item, source_fingerprint and optional criterion records.",
                         ))?;
                         awr_core::validate_specification_references(&refs).map_err(|_| invalid(
                             &format!("{pointer}/spec_refs"), "ledger.spec_refs",
