@@ -793,6 +793,10 @@ fn verify_completed(
     let binding = store
         .current_completion_binding(project, &work.meta.external_key, branch)?
         .filter(|binding| binding.source_sha == sha);
+    // The binding is proof only for the exact record set it names, so the store-side
+    // validation must see it unchanged: it rechecks every named record's currency,
+    // immutability and namespace. Narrowing or dropping the binding here would skip
+    // those checks instead of tightening them.
     if let Some(binding) = &binding {
         store.check_completion_binding(project, work, branch, binding)?;
     }
@@ -880,4 +884,248 @@ fn verify_completed(
         ));
     }
     Ok(())
+}
+
+#[cfg(test)]
+mod completion_binding_guard_tests {
+    use super::*;
+    use awr_store::SourceRegistration;
+
+    const SHA: &str = "bbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbb";
+    const CRITERION: &str = "The report contains the requested analysis";
+
+    fn work(meta: ProjectionMeta) -> WorkItem {
+        WorkItem {
+            ordinary_completion: None,
+            archived: false,
+            meta,
+            title: "W".into(),
+            kind: None,
+            owner: None,
+            required: true,
+            raw_status: "completed".into(),
+            status: WorkStatus::Completed,
+            priority: None,
+            milestone: None,
+            score: None,
+            evidence_level: Some(EvidenceLevel::Designed),
+            summary: "".into(),
+            next_action: "none".into(),
+            blocker: None,
+            acceptance: vec![CRITERION.into()],
+            tags: vec![],
+            paths: vec![],
+        }
+    }
+
+    /// The runtime cannot produce this state through its own operations: a binding is
+    /// only written after every named record was current. The completion receipt is
+    /// therefore planted directly, and the bound record is recorded on main while the
+    /// request asks for a branch, which makes it non-current.
+    ///
+    /// The assertions are the organization report, not a call counter: only the
+    /// store-side binding check produces the "not current, fully bound evidence"
+    /// refusal, while skipping the check drops the record as non-current and the same
+    /// gap carries "selected evidence ... no longer meets the current verification
+    /// requirements" instead. No test hook is needed in production code, and the store
+    /// boundary itself stays pinned in
+    /// `crates/awr-store/tests/completion_binding_currency.rs`.
+    #[test]
+    fn a_partially_current_binding_is_refused_through_the_store_check() {
+        let root = std::env::temp_dir().join(format!("awr-binding-guard-{}", Id::new()));
+        std::fs::create_dir(&root).unwrap();
+        let mut store = Store::open(&root.join("state.db")).unwrap();
+        let project = store.register_project(&root, "example", "Example").unwrap();
+        let source = store
+            .register_source(
+                project.id,
+                &SourceRegistration {
+                    domain: "ledger",
+                    role: "primary",
+                    locator: "file:///example/ledger.yaml",
+                    format: "yaml",
+                    adapter: "yaml-ledger-v1",
+                },
+            )
+            .unwrap();
+        // A minimal context profile keeps `rules_defined` true without a rules source.
+        let source = store
+            .configure_source(&source, serde_json::json!({"context_profile": "minimal"}))
+            .unwrap();
+        let source_ref = SourceRef {
+            source_id: source.id,
+            locator: source.locator.clone(),
+            source_revision: source.revision + 1,
+            source_fingerprint: "snapshot-1".into(),
+            pointer: Some("/W".into()),
+            start_line: None,
+            end_line: None,
+            section_fingerprint: None,
+        };
+        let work = work(ProjectionMeta {
+            id: Id::new(),
+            external_key: "W".into(),
+            revision: 1,
+            source_ref: source_ref.clone(),
+        });
+        let goal = Goal {
+            meta: ProjectionMeta {
+                id: Id::new(),
+                external_key: "G".into(),
+                revision: 1,
+                source_ref: SourceRef {
+                    pointer: Some("/G".into()),
+                    ..source_ref.clone()
+                },
+            },
+            title: "Ship".into(),
+            status: "active".into(),
+            priority: None,
+            success_criteria: vec![],
+            summary: "Deliver the work".into(),
+        };
+        let edge = Edge {
+            id: Id::new(),
+            project_id: project.id,
+            from_kind: EntityKind::WorkItem,
+            from_key: "W".into(),
+            relation: "supports".into(),
+            to_kind: EntityKind::Goal,
+            to_key: "G".into(),
+            required: true,
+            revision: 1,
+            source_ref: source_ref.clone(),
+        };
+        let source = store
+            .commit_source_projection(
+                &source,
+                "snapshot-1",
+                ProjectionBatch {
+                    goals: vec![goal],
+                    work_items: vec![work.clone()],
+                    edges: vec![edge],
+                    ..Default::default()
+                },
+            )
+            .unwrap();
+        let revision = store.project(project.id).unwrap().project_revision;
+        let branch = store
+            .create_branch(
+                project.id,
+                revision,
+                BranchDraft {
+                    name: "review".into(),
+                    parent_branch_id: None,
+                    git_binding: None,
+                    actor: "tester".into(),
+                    reason: "Pin the completion binding check".into(),
+                },
+            )
+            .unwrap()
+            .0;
+        let revision = store.project(project.id).unwrap().project_revision;
+        let draft = EvidenceDraft {
+            external_key: "E".into(),
+            work_item_key: Some("W".into()),
+            evidence_type: "completion_report".into(),
+            level: EvidenceLevel::LocallyVerified,
+            summary: "Checked report".into(),
+            locator: "reports/check.json".into(),
+            sha256: Some("a".repeat(64)),
+            source_sha: Some(SHA.into()),
+            command: Some("verify report".into()),
+            scope: vec!["W".into()],
+            branch_id: None,
+            verified_at: Some(100),
+        };
+        let (record, _) = store.record_evidence(project.id, revision, draft).unwrap();
+        let binding = CompletionBinding {
+            version: 1,
+            source_sha: SHA.into(),
+            minimum_level: EvidenceLevel::LocallyVerified,
+            acceptance: vec![AcceptanceEvidenceBinding {
+                criterion: CRITERION.into(),
+                evidence: vec![record.id],
+            }],
+            evidence: vec![record],
+        };
+        let payload = serde_json::json!({
+            "target_revision": work.meta.revision,
+            "source_id": source.id,
+            "target_after_hash": mutation_projection_hash(&serde_json::to_value(&work).unwrap())
+                .unwrap(),
+            "work_action": {
+                "action": "complete",
+                "from": "in_progress",
+                "to": "completed",
+                "completion": binding,
+            },
+        });
+        let connection = rusqlite::Connection::open(root.join("state.db")).unwrap();
+        connection
+            .execute(
+                "INSERT INTO events(id,project_id,work_item_id,session_id,branch_id,event_type,importance,summary,payload_json,project_revision,created_at) VALUES(?1,?2,?3,NULL,?4,'work.completed','normal','',?5,?6,?7)",
+                rusqlite::params![
+                    Id::new().to_string(),
+                    project.id.to_string(),
+                    work.meta.id.to_string(),
+                    branch.id.to_string(),
+                    payload.to_string(),
+                    i64::try_from(store.project(project.id).unwrap().project_revision).unwrap(),
+                    now_millis().unwrap()
+                ],
+            )
+            .unwrap();
+        drop(connection);
+        let project = store.project(project.id).unwrap();
+        let works = store.work_items(project.id).unwrap();
+        let readiness = store
+            .ready_work(project.id, Some(branch.id), now_millis().unwrap())
+            .unwrap();
+        let report = inspect_organization(
+            &store,
+            &project,
+            Some(branch.id),
+            Some(SHA),
+            true,
+            &works,
+            &readiness,
+        )
+        .unwrap();
+        assert_eq!(
+            report.verified_completed, 0,
+            "a partially current binding must not be counted as verified"
+        );
+        assert_eq!(
+            report.completion_verification_failed, 1,
+            "the refusal must reach the failed counter, not the verified counter"
+        );
+        let failures = report
+            .gaps
+            .iter()
+            .filter(|gap| gap.code == "completion_verification_failed")
+            .collect::<Vec<_>>();
+        assert_eq!(
+            failures.len(),
+            1,
+            "the refusal must be reported once per inspection, not once per named record"
+        );
+        let gap = failures[0];
+        // Only `check_completion_binding` produces this message. Had the organization
+        // layer skipped or narrowed the binding, the record would have been dropped as
+        // non-current (`:820-825`) and the failure would read "selected evidence ...
+        // no longer meets the current verification requirements" (`:861-864`).
+        assert!(
+            gap.detail.contains("not current, fully bound evidence"),
+            "{}",
+            gap.detail
+        );
+        assert!(
+            !gap.detail
+                .contains("no longer meets the current verification requirements"),
+            "{}",
+            gap.detail
+        );
+        let _ = std::fs::remove_dir_all(&root);
+    }
 }
