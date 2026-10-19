@@ -194,7 +194,7 @@ fn completion_preflight_round_trips_without_rewriting_evidence_or_losing_its_bra
             "command":"inspect fixture","scope":["W"],"verified_at":1,
             "checks":[{"name":"review","passed":true,"details":"fixture result",
                 "criteria":["Preserve work and branch ownership"]}]});
-        fs::write(f.0.join("report.json"), report.to_string()).unwrap();
+        fs::write(f.0.join("report.json"), format!("{}\n", report)).unwrap();
         let revision = f.revision();
         let source = fs::read(f.0.join("work.yaml")).unwrap();
         let mut args = vec![

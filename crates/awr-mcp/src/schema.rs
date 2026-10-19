@@ -145,7 +145,7 @@ fn workflow_tools() -> Vec<Tool> {
         ),
         tool(
             "awr_completion_prepare",
-            "Validate actual report bytes and current acceptance coverage; derive hash/evidence mapping. No verification execution or completion. Level is caller asserted.",
+            "Validate actual report bytes and current acceptance coverage; derive hash/evidence mapping. No verification execution or completion. Level is caller asserted. Returns a nullable advisory warning when the report is not in canonical form (exactly one trailing LF); the warning is descriptive only and the report file is never modified or refused.",
             object(
                 json!({"work":text(),"report":text(),"evidence_key":text(),"source_sha":text(),"level":levels(),"branch":branch()}),
                 &["work", "report", "evidence_key", "source_sha", "level"],

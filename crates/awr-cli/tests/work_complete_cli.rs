@@ -1303,3 +1303,175 @@ fn completion_binding_errors_name_fields_without_submitted_values() {
     assert!(!message.contains("private-9f8e7d6c5b4a"), "{message}");
     assert!(!message.contains("secret-scope-9f8e7d6c5b4a"), "{message}");
 }
+
+#[test]
+fn work_prepare_completion_warns_on_non_canonical_reports_without_touching_the_file() {
+    let f = Fixture::new();
+    f.organize();
+    // The report is authored without the final newline that lint would add —
+    // the form json.dumps, JSON.stringify and serde_json::to_writer produce.
+    let report = f.report();
+    let locator = "report-prepare.json";
+    let bytes = serde_json::to_vec_pretty(&report).unwrap();
+    assert!(!bytes.ends_with(b"\n"));
+    fs::write(f.root.join(locator), &bytes).unwrap();
+
+    // The rule is advisory for this release: the preflight succeeds, keeps
+    // the byte-exact digest of the stored report, and returns a warning that
+    // names the canonical form and the digest its bytes would have.
+    let prepared = f.ok(&[
+        "work",
+        "prepare-completion",
+        "W",
+        "--report",
+        locator,
+        "--evidence-key",
+        "E-PREP",
+        "--source-sha",
+        SHA,
+    ]);
+    let warning = prepared["warning"].as_str().unwrap();
+    assert!(warning.contains("no trailing newline"), "{warning}");
+    assert!(warning.contains("canonical form"), "{warning}");
+    let canonical = [bytes.as_slice(), b"\n"].concat();
+    let would = awr_source::fingerprint(&canonical)
+        .trim_start_matches("sha256:")
+        .to_string();
+    assert!(warning.contains(&would), "{warning}");
+    // The digest binds the exact stored bytes and the caller's file is
+    // untouched.
+    assert_eq!(
+        prepared["report_sha256"].as_str().unwrap(),
+        awr_source::fingerprint(&bytes).trim_start_matches("sha256:")
+    );
+    assert_eq!(fs::read(f.root.join(locator)).unwrap(), bytes.as_slice());
+
+    // More than one trailing newline is equally non-canonical.
+    let doubled = [bytes.as_slice(), b"\n\n"].concat();
+    fs::write(f.root.join(locator), &doubled).unwrap();
+    let prepared = f.ok(&[
+        "work",
+        "prepare-completion",
+        "W",
+        "--report",
+        locator,
+        "--evidence-key",
+        "E-PREP",
+        "--source-sha",
+        SHA,
+    ]);
+    let warning = prepared["warning"].as_str().unwrap();
+    assert!(warning.contains("more than one newline"), "{warning}");
+    assert!(warning.contains(&would), "{warning}");
+
+    // Windows CRLF endings are non-canonical too: a single CRLF warns with
+    // the LF-converted digest, and doubled CRLFs count as multiple endings.
+    let crlf = [bytes.as_slice(), b"\r\n"].concat();
+    fs::write(f.root.join(locator), &crlf).unwrap();
+    let prepared = f.ok(&[
+        "work",
+        "prepare-completion",
+        "W",
+        "--report",
+        locator,
+        "--evidence-key",
+        "E-PREP",
+        "--source-sha",
+        SHA,
+    ]);
+    let warning = prepared["warning"].as_str().unwrap();
+    assert!(warning.contains("CRLF"), "{warning}");
+    assert!(warning.contains(&would), "{warning}");
+    assert_eq!(
+        prepared["report_sha256"].as_str().unwrap(),
+        awr_source::fingerprint(&crlf).trim_start_matches("sha256:")
+    );
+    let doubled_crlf = [bytes.as_slice(), b"\r\n\r\n"].concat();
+    fs::write(f.root.join(locator), &doubled_crlf).unwrap();
+    let prepared = f.ok(&[
+        "work",
+        "prepare-completion",
+        "W",
+        "--report",
+        locator,
+        "--evidence-key",
+        "E-PREP",
+        "--source-sha",
+        SHA,
+    ]);
+    let warning = prepared["warning"].as_str().unwrap();
+    assert!(warning.contains("more than one newline"), "{warning}");
+    assert!(warning.contains(&would), "{warning}");
+
+    // A bare trailing CR (no LF) is not a line ending: it warns as a missing
+    // newline, with the digest the exact stored bytes plus one LF would have
+    // (the bare-`\r` case the second-round review asked to cover).
+    let bare_cr = [bytes.as_slice(), b"\r"].concat();
+    fs::write(f.root.join(locator), &bare_cr).unwrap();
+    let prepared = f.ok(&[
+        "work",
+        "prepare-completion",
+        "W",
+        "--report",
+        locator,
+        "--evidence-key",
+        "E-PREP",
+        "--source-sha",
+        SHA,
+    ]);
+    let warning = prepared["warning"].as_str().unwrap();
+    assert!(warning.contains("no trailing newline"), "{warning}");
+    let bare_cr_canonical = [bare_cr.as_slice(), b"\n"].concat();
+    assert!(
+        warning.contains(awr_source::fingerprint(&bare_cr_canonical).trim_start_matches("sha256:")),
+        "{warning}"
+    );
+
+    // The canonical form produces no warning; the digest still binds the
+    // exact stored bytes and completion verifies strictly.
+    fs::write(f.root.join(locator), &canonical).unwrap();
+    let prepared = f.ok(&[
+        "work",
+        "prepare-completion",
+        "W",
+        "--report",
+        locator,
+        "--evidence-key",
+        "E-PREP",
+        "--source-sha",
+        SHA,
+    ]);
+    assert!(prepared["warning"].is_null(), "{}", prepared["warning"]);
+    assert_eq!(
+        prepared["report_sha256"].as_str().unwrap(),
+        awr_source::fingerprint(&canonical).trim_start_matches("sha256:")
+    );
+
+    // Registering the prepared digest and completing verifies strictly.
+    let selected = f.evidence("E-PREP", &report, |d| {
+        d.locator = locator.into();
+        d.sha256 = Some(
+            prepared["report_sha256"]
+                .as_str()
+                .unwrap()
+                .trim_start_matches("sha256:")
+                .into(),
+        );
+    });
+    assert!(selected.sha256.is_some());
+    let input = json!({
+        "version": 1,
+        "source_sha": SHA,
+        "acceptance": [
+            {"criterion": C1, "evidence": ["E-PREP"]},
+            {"criterion": C2, "evidence": ["E-PREP"]}
+        ]
+    });
+    let result = f.complete(&input);
+    assert!(
+        result.status.success(),
+        "{} {}",
+        String::from_utf8_lossy(&result.stdout),
+        String::from_utf8_lossy(&result.stderr)
+    );
+}

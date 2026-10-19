@@ -140,7 +140,7 @@ fn preparation_keeps_required_gaps_and_preflight_rejects_invented_success() {
     let sha = "aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa";
     let mut report = json!({"version":1,"work_item":"W","source_sha":sha,"command":"inspect fixture","scope":["W"],"verified_at":1,
         "checks":[{"name":"review","passed":true,"details":"fixture result","criteria":["差异可复核"]}]});
-    h.write("report.json", &report.to_string());
+    h.write("report.json", &format!("{}\n", report));
     let args = [
         "work",
         "prepare-completion",
@@ -160,10 +160,10 @@ fn preparation_keeps_required_gaps_and_preflight_rejects_invented_success() {
         "差异可复核"
     );
     report["checks"][0]["passed"] = json!(false);
-    h.write("report.json", &report.to_string());
+    h.write("report.json", &format!("{}\n", report));
     h.error(&args, "EvidenceMissing");
     report["checks"][0].as_object_mut().unwrap().remove("name");
-    h.write("report.json", &report.to_string());
+    h.write("report.json", &format!("{}\n", report));
     h.error(&args, "InvalidInput");
 }
 

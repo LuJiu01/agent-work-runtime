@@ -50,6 +50,14 @@ report; the file digest is computed by AWR. The supplied source SHA must match t
 report and must include any changes relevant to verification in its accompanying
 source evidence. AWR does not assume a clean Git checkout.
 
+The result also carries a `warning` field: `null` when the report is in canonical
+form (exactly one trailing LF line ending), otherwise a descriptive message naming
+the deviation (no trailing newline, more than one newline, or a CRLF line ending),
+the digest the canonical bytes would have, and the fact that the binding stays on
+the exact stored bytes. The warning is advisory only — the preflight accepts
+non-canonical reports, never modifies the caller's file, and never refuses on
+line-ending grounds.
+
 The CLI's `evidence` object is ready for `awr evidence add --input` without
 renaming fields: it contains `work_item_key` and an explicit `branch_id` resolved
 from the preflight snapshot. Omitting `--branch` selects that snapshot's current

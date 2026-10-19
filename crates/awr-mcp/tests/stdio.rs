@@ -831,14 +831,49 @@ async fn report_preflight_derives_bytes_and_coverage_without_recording_evidence(
     let bytes = serde_json::to_vec(&report).unwrap();
     fs::write(f.root.join("report.json"), &bytes).unwrap();
     let args = json!({"work":"W","report":"report.json","evidence_key":"E","source_sha":SHA,"level":"locally_verified"});
+    // The canonical-form rule is advisory for this release: a report without
+    // a trailing newline (the json.dumps/JSON.stringify shape) still
+    // preflights, binds the digest to the exact stored bytes, and returns a
+    // warning naming the canonical form and the digest it would have. The
+    // caller's file is never rewritten.
     let result = success(call(&client, "awr_completion_prepare", args.clone()).await);
+    let warning = result["warning"].as_str().unwrap();
+    assert!(warning.contains("no trailing newline"), "{warning}");
+    assert!(warning.contains("canonical form"), "{warning}");
+    let normalized = [bytes.as_slice(), b"\n"].concat();
+    assert!(
+        warning.contains(&format!("{:x}", Sha256::digest(&normalized))),
+        "{warning}"
+    );
+    assert_eq!(
+        result["report_sha256"],
+        format!("{:x}", Sha256::digest(&bytes))
+    );
+    assert_eq!(fs::read(f.root.join("report.json")).unwrap(), bytes);
+    // Windows CRLF endings are non-canonical but advisory only: the digest
+    // still binds the exact stored CRLF bytes and the warning names the
+    // LF-converted canonical form.
+    let crlf = [bytes.as_slice(), b"\r\n"].concat();
+    fs::write(f.root.join("report.json"), &crlf).unwrap();
+    let result = success(call(&client, "awr_completion_prepare", args.clone()).await);
+    let warning = result["warning"].as_str().unwrap();
+    assert!(warning.contains("CRLF"), "{warning}");
+    assert_eq!(
+        result["report_sha256"],
+        format!("{:x}", Sha256::digest(&crlf))
+    );
+    // The canonical form produces no warning; the digest binds to the
+    // exact stored bytes.
+    fs::write(f.root.join("report.json"), &normalized).unwrap();
+    let result = success(call(&client, "awr_completion_prepare", args.clone()).await);
+    assert_eq!(result["warning"], Value::Null);
     assert_eq!(result["evidence"]["work"], "W");
     assert_eq!(result["evidence"].get("branch"), Some(&Value::Null));
     assert!(result["evidence"].get("work_item_key").is_none());
     assert!(result["evidence"].get("branch_id").is_none());
     assert_eq!(
         result["report_sha256"],
-        format!("{:x}", Sha256::digest(&bytes))
+        format!("{:x}", Sha256::digest(&normalized))
     );
     assert_eq!(
         result["completion"]["acceptance"][0]["criterion"],
@@ -847,13 +882,21 @@ async fn report_preflight_derives_bytes_and_coverage_without_recording_evidence(
     assert_eq!(result["completion_claimed"], false);
     assert_eq!(result["verification_executed"], false);
     report["checks"][0]["criteria"] = json!([]);
-    fs::write(f.root.join("report.json"), report.to_string()).unwrap();
+    fs::write(
+        f.root.join("report.json"),
+        format!("{}\n", report.to_string()),
+    )
+    .unwrap();
     error(
         call(&client, "awr_completion_prepare", args.clone()).await,
         "EvidenceMissing",
     );
     report["checks"][0].as_object_mut().unwrap().remove("name");
-    fs::write(f.root.join("report.json"), report.to_string()).unwrap();
+    fs::write(
+        f.root.join("report.json"),
+        format!("{}\n", report.to_string()),
+    )
+    .unwrap();
     let err = error(
         call(&client, "awr_completion_prepare", args).await,
         "InvalidInput",

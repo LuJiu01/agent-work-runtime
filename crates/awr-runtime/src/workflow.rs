@@ -109,6 +109,44 @@ pub fn prepare_completion(
         None,
         1024 * 1024,
     )?;
+    // Canonical report form is exactly one trailing LF line ending. The form
+    // is advisory: common hosts write reports via json.dumps, JSON.stringify
+    // or serde_json::to_writer, none of which append a newline, so the
+    // preflight keeps accepting such reports and returns a descriptive
+    // warning with the digest the canonical bytes would have. Line endings
+    // are counted as LF or CRLF units, so Windows-formatted reports get the
+    // same treatment (CRLF is non-canonical but never refused). The
+    // preflight still never modifies the caller's report file.
+    let mut content_end = bytes.len();
+    let mut endings = 0usize;
+    loop {
+        if content_end >= 1 && bytes[content_end - 1] == b'\n' {
+            content_end -= 1;
+            if content_end >= 1 && bytes[content_end - 1] == b'\r' {
+                content_end -= 1;
+            }
+            endings += 1;
+        } else {
+            break;
+        }
+    }
+    let warning = if endings != 1 || bytes.ends_with(b"\r\n") {
+        let mut canonical = bytes[..content_end].to_vec();
+        canonical.push(b'\n');
+        let would = format!("{:x}", Sha256::digest(&canonical));
+        let shape = if endings == 0 {
+            "it has no trailing newline"
+        } else if endings > 1 {
+            "it ends with more than one newline"
+        } else {
+            "it ends with a CRLF line ending instead of a single LF"
+        };
+        Some(format!(
+            "report is not in canonical form: {shape}; the canonical form ends with exactly one trailing newline and its digest would be {would}"
+        ))
+    } else {
+        None
+    };
     let report = CompletionReport::parse(&bytes, &request.report).map_err(Error::InvalidSource)?;
     let evidence = Evidence {
         id: Id::new(),
@@ -161,6 +199,7 @@ pub fn prepare_completion(
         "verified_at":evidence.verified_at});
     Ok(
         json!({"version":1,"stage":"report_validated","report_sha256":evidence.sha256,
+        "warning":warning,
         "evidence":draft,"completion":completion,"verification_executed":false,
         "completion_claimed":false,"level_basis":"caller_assertion",
         "next_action":"record_evidence_then_complete_with_current_revision_and_owned_session"}),

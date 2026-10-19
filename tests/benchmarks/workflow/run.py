@@ -262,7 +262,7 @@ def run_work(rpc, cli_binary, root, rec, strategy, scenario, key, executions):
     began = time.perf_counter_ns()
     report = dict(version=1,work_item=key,source_sha=SHA,command='Independently inspect the synthetic handoff artifacts',scope=[key],verified_at=time.time_ns()//1_000_000,
                   checks=[dict(name=f'criterion-{i}',passed=True,details='Actual artifact fields and limitations checked',criteria=[criterion]) for i,criterion in enumerate(criteria)])
-    data = encoded(report); report_path = key+'-report.json'; (root/report_path).write_bytes(data)
+    data = encoded(report)+b'\n'; report_path = key+'-report.json'; (root/report_path).write_bytes(data)
     rec.add('assemble_actual_report','maintenance',data,b'',(time.perf_counter_ns()-began)/1e6,host_operation=True)
     preflight = rpc.call('awr_completion_prepare',dict(work=key,report=report_path,evidence_key='PROOF-'+key,source_sha=SHA,level='locally_verified'))
     require(preflight['report_sha256']==digest(root/report_path),'report hash was invented or changed')
