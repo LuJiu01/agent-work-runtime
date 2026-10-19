@@ -219,3 +219,37 @@ class WorkflowTest(unittest.TestCase):
         self.wf.capabilities.discard('workflow.response_summary')
         legacy=self.wf.prepare(response_view='summary')
         self.assertIn('selected_chunks',legacy['context']['work_context'])
+
+    def test_summarized_omissions_preserve_consumption_and_checkpoint(self):
+        self.begin()
+        source = self.root/'work.yaml'
+        source.write_text(source.read_text() + ''.join(
+            f'- id: HISTORY-{n}\n  title: Review support item {n}\n  status: completed\n'
+            for n in range(40)))
+        self.wf.host.ok('source', 'reindex')
+        budget = self.wf.prepare()['context']['work_context']['required_tokens'] + 1
+        call = self.wf.host.call
+
+        def constrained(*args, **kwargs):
+            if args[:2] == ('work', 'prepare'):
+                args += ('--budget', str(budget))
+            return call(*args, **kwargs)
+
+        with patch.object(self.wf.host, 'call', side_effect=constrained):
+            full = self.wf.prepare()
+            pack = full['context']['work_context']
+            count = len(pack['omitted_chunks'])
+            self.assertGreater(count, 1)
+            for view in ('summary', 'action'):
+                value = self.wf.prepare(response_view=view)
+                concise = value['context']['work_context']
+                self.assertNotIn('omitted_chunks', concise)
+                self.assertEqual(value['response_view']['detail_counts'],
+                                 {'context.work_context.omitted_chunks': count})
+                self.assertIn('required context is complete', value['response_view']['detail_note'])
+                self.assertTrue(value['context']['completeness']['complete'])
+                for field in ('rendered_context', 'context_hash', 'identity'):
+                    self.assertEqual(concise[field], pack[field])
+                self.wf.acknowledge(concise['context_hash'])
+            checkpoint = self.wf.checkpoint(pack['context_hash'], 'Read the guide context', 'Review the guide')
+            self.assertEqual(self.wf.state['checkpoint'], checkpoint['checkpoint']['id'])

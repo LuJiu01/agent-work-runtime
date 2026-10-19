@@ -592,6 +592,120 @@ async fn compaction_http_isolated_recoverable_and_wait_guidance_has_priority() {
     server.stop().await;
 }
 
+#[path = "../../../tests/common/compact_indexes.rs"]
+mod index_contract;
+
+#[tokio::test]
+async fn default_concise_http_keeps_full_details_in_the_original_project() {
+    for mode in ["flat", "hierarchical"] {
+        let a = ProjectFixture::new("Review concise prepare indexes");
+        let b = ProjectFixture::new("Separate project");
+        let mut source = fs::read_to_string(a.root.join("work.yaml")).unwrap();
+        for n in 0..40 {
+            source.push_str(&format!(
+                "- id: HISTORY-{n}\n  title: Review support item {n}\n  status: completed\n"
+            ));
+        }
+        fs::write(a.root.join("work.yaml"), source).unwrap();
+        a.reindex();
+        let mut server = Server::start_mode(&registry(&a, &b), mode).await;
+        let args = json!({"project":"alpha","work":"W","branch":"main","goals":["GUIDE"],"source_sha":"a".repeat(40),"budget":100000});
+        let initial = ok(server.call(WRITER, "awr_work_prepare", args.clone()).await);
+        let pack = &initial["context"]["work_context"];
+        let budgets = [
+            100000,
+            pack["token_estimate"].as_u64().unwrap() - 1,
+            pack["required_tokens"].as_u64().unwrap() + 50,
+        ];
+        let revision = a.revision();
+        let mut last_query = Value::Null;
+        let mut last_concise = Value::Null;
+        for (case, budget) in budgets.into_iter().enumerate() {
+            let mut args = args.clone();
+            args["budget"] = json!(budget);
+            let full = ok(server.call(WRITER, "awr_work_prepare", args.clone()).await);
+            let count = full["context"]["work_context"]["omitted_chunks"]
+                .as_array()
+                .unwrap()
+                .len();
+            match case {
+                0 => assert_eq!(count, 0),
+                1 => assert_eq!(count, 1),
+                _ => assert!(count > 10),
+            }
+            for view in ["summary", "action"] {
+                let mut args = args.clone();
+                args["response_view"] = json!(view);
+                let concise = ok(server.call(WRITER, "awr_work_prepare", args).await);
+                index_contract::assert_prepared_view(&full, &concise, count);
+                let query = &concise["response_view"]["full_result"];
+                assert_eq!(query["arguments"]["branch"], "main");
+                assert_eq!(query["arguments"]["goals"], json!(["GUIDE"]));
+                assert_eq!(query["arguments"]["source_sha"], "a".repeat(40));
+                assert_eq!(query["arguments"]["budget"], budget);
+                // Project routing is transport metadata; retain the original explicit key.
+                let mut query_args = query["arguments"].clone();
+                query_args["project"] = json!("alpha");
+                let detail = ok(server
+                    .call(WRITER, query["tool"].as_str().unwrap(), query_args.clone())
+                    .await);
+                assert_eq!(
+                    detail["context"]["work_context"]["identity"]["project_id"],
+                    json!(a.id)
+                );
+                assert_eq!(
+                    detail["context"]["work_context"]["omitted_chunks"],
+                    full["context"]["work_context"]["omitted_chunks"]
+                );
+                assert_eq!(detail["project_revision"], concise["project_revision"]);
+                assert_eq!(
+                    detail["context"]["work_context"]["context_hash"],
+                    concise["context"]["work_context"]["context_hash"]
+                );
+                last_query = query_args;
+                last_concise = concise;
+            }
+        }
+        assert_eq!(a.revision(), revision, "prepare presentation is read-only");
+        let baseline = server
+            .call(
+                WRITER,
+                "awr_work_prepare",
+                json!({"project":"alpha","work":"W","budget":1}),
+            )
+            .await;
+        assert_eq!(baseline["isError"], true);
+        for view in ["summary", "action"] {
+            let failed = server
+                .call(
+                    WRITER,
+                    "awr_work_prepare",
+                    json!({"project":"alpha","work":"W","budget":1,"response_view":view}),
+                )
+                .await;
+            assert_eq!(failed, baseline);
+        }
+        fs::write(
+            a.root.join("work.yaml"),
+            fs::read_to_string(a.root.join("work.yaml"))
+                .unwrap()
+                .replace("Draft the guide", "Review the guide"),
+        )
+        .unwrap();
+        a.reindex();
+        let changed = ok(server.call(WRITER, "awr_work_prepare", last_query).await);
+        assert_ne!(
+            changed["project_revision"],
+            last_concise["project_revision"]
+        );
+        assert_ne!(
+            changed["context"]["work_context"]["context_hash"],
+            last_concise["context"]["work_context"]["context_hash"]
+        );
+        server.stop().await;
+    }
+}
+
 #[tokio::test]
 async fn concise_http_results_keep_client_isolation_and_unknown_outcomes() {
     let a = ProjectFixture::new("Write a concise team guide");
@@ -615,6 +729,28 @@ async fn concise_http_results_keep_client_isolation_and_unknown_outcomes() {
         concise["context"]["work_context"]["rendered_context"]
     );
     assert_eq!(full["management"], concise["management"]);
+    for budget in [1, 100000] {
+        let args = json!({"project":"alpha","work":"W","session":started["session"]["id"],"response_view":"action","budget":budget});
+        let result = server.call(WRITER, "awr_work_prepare", args).await;
+        assert!(
+            result["structuredContent"]["response_view"]
+                .get("detail_counts")
+                .is_none()
+        );
+        assert!(
+            result["structuredContent"]["response_view"]
+                .get("detail_note")
+                .is_none()
+        );
+        if budget == 1 {
+            assert_eq!(result["isError"], true);
+        } else {
+            assert_eq!(
+                ok(result)["context"]["work_context"]["omitted_chunks"],
+                json!([])
+            );
+        }
+    }
     let args = json!({"project":"alpha","work":"W","session":started["session"]["id"],"action":"progress","reason":"Reviewed guide context","next_action":"Review the draft guide","request_id":"concise-write","expected_revision":a.revision(),"response_view":"summary"});
     let conn = rusqlite::Connection::open(a.root.join(".awr/state.db")).unwrap();
     conn.execute_batch("CREATE TRIGGER fixture_concise_response BEFORE INSERT ON events WHEN new.event_type='mcp.operation_finished' BEGIN SELECT RAISE(ABORT,'synthetic lost response'); END;").unwrap();

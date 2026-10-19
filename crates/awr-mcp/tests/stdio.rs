@@ -499,6 +499,198 @@ fn small_observation() -> Value {
         "independently_schedulable_units":1,"plan_valid":true,"outcome_known":true})
 }
 
+#[path = "../../../tests/common/compact_indexes.rs"]
+mod index_contract;
+
+#[tokio::test]
+async fn default_concise_stdio_is_bounded_and_preserves_full_drilldown() {
+    let f = Fixture::new();
+    let mut work = fs::read_to_string(f.root.join("work.yaml")).unwrap();
+    for n in 0..40 {
+        work.push_str(&format!(
+            "- id: HISTORY-{n}\n  title: Review support item {n}\n  status: completed\n"
+        ));
+    }
+    fs::write(f.root.join("work.yaml"), work).unwrap();
+    f.reindex();
+    let client = f.client().await;
+    let manifest = success(call(&client, "awr_context", json!({})).await);
+    let prepare = manifest["children"]
+        .as_array()
+        .unwrap()
+        .iter()
+        .find(|t| t["name"] == "awr_work_prepare")
+        .unwrap();
+    for field in ["compact_indexes", "response_budget"] {
+        assert!(prepare["input_schema"]["properties"].get(field).is_none());
+    }
+    let full = success(
+        call(
+            &client,
+            "awr_work_prepare",
+            json!({"work":"W","budget":100000,"branch":"main","source_sha":SHA}),
+        )
+        .await,
+    );
+    let pack = &full["context"]["work_context"];
+    let budgets = [
+        100000,
+        pack["token_estimate"].as_u64().unwrap() - 1,
+        pack["required_tokens"].as_u64().unwrap() + 50,
+    ];
+    let before = f.logical_state();
+    for (case, budget) in budgets.into_iter().enumerate() {
+        for explain in [false, true] {
+            let args = json!({"work":"W","budget":budget,"explain":explain,"branch":"main","source_sha":SHA});
+            let full = success(call(&client, "awr_work_prepare", args.clone()).await);
+            let mut explicit = args.clone();
+            explicit["response_view"] = json!("full");
+            assert_eq!(
+                success(call(&client, "awr_work_prepare", explicit).await),
+                full
+            );
+            let count = full["context"]["work_context"]["omitted_chunks"]
+                .as_array()
+                .unwrap()
+                .len();
+            match case {
+                0 => assert_eq!(count, 0),
+                1 => assert_eq!(count, 1),
+                _ => assert!(count > 10),
+            }
+            for view in ["summary", "action"] {
+                let mut args = args.clone();
+                args["response_view"] = json!(view);
+                let result = call(&client, "awr_work_prepare", args.clone()).await;
+                let concise = success(result.clone());
+                index_contract::assert_prepared_view(&full, &concise, count);
+                let routed = success(
+                    call(
+                        &client,
+                        "awr_context",
+                        json!({"child_tool":"awr_work_prepare","arguments":args}),
+                    )
+                    .await,
+                );
+                assert_eq!(routed, concise);
+                let query = &concise["response_view"]["full_result"];
+                assert_eq!(query["arguments"]["branch"], "main");
+                assert_eq!(query["arguments"]["source_sha"], SHA);
+                assert_eq!(query["arguments"]["budget"], budget);
+                let detail = success(
+                    call(
+                        &client,
+                        query["tool"].as_str().unwrap(),
+                        query["arguments"].clone(),
+                    )
+                    .await,
+                );
+                assert_eq!(
+                    detail["context"]["work_context"]["omitted_chunks"],
+                    full["context"]["work_context"]["omitted_chunks"]
+                );
+                assert_eq!(detail["project_revision"], concise["project_revision"]);
+                assert_eq!(
+                    detail["context"]["work_context"]["context_hash"],
+                    concise["context"]["work_context"]["context_hash"]
+                );
+                if view == "action" {
+                    assert!(serde_json::to_vec(&concise["guidance"]).unwrap().len() <= 1024);
+                }
+            }
+        }
+    }
+    assert_eq!(
+        before,
+        f.logical_state(),
+        "presentation reads must not mutate runtime state"
+    );
+    let session = f.session("W", true, None).session;
+    let concise = success(
+        call(
+            &client,
+            "awr_work_prepare",
+            json!({"work":"W","session":session.id,"budget":100000,"response_view":"action"}),
+        )
+        .await,
+    );
+    assert_eq!(
+        concise["context"]["work_context"]["omitted_chunks"],
+        json!([])
+    );
+    assert!(!concise["active_claims"].as_array().unwrap().is_empty());
+    assert_eq!(
+        concise["response_view"]["full_result"]["arguments"]["session"],
+        json!(session.id)
+    );
+    let query = &concise["response_view"]["full_result"];
+    fs::write(
+        f.root.join("work.yaml"),
+        fs::read_to_string(f.root.join("work.yaml"))
+            .unwrap()
+            .replace("Draft the analysis", "Review the analysis"),
+    )
+    .unwrap();
+    f.reindex();
+    let changed = success(
+        call(
+            &client,
+            query["tool"].as_str().unwrap(),
+            query["arguments"].clone(),
+        )
+        .await,
+    );
+    assert_ne!(changed["project_revision"], concise["project_revision"]);
+    assert_ne!(
+        changed["context"]["work_context"]["context_hash"],
+        concise["context"]["work_context"]["context_hash"]
+    );
+    client.cancel().await.unwrap();
+}
+
+#[tokio::test]
+async fn concise_stdio_preserves_budget_errors_and_incomplete_context() {
+    let f = Fixture::new();
+    let client = f.client().await;
+    let baseline = call(&client, "awr_work_prepare", json!({"work":"W","budget":1})).await;
+    assert_eq!(baseline.is_error, Some(true));
+    for view in ["full", "summary", "action"] {
+        let result = call(
+            &client,
+            "awr_work_prepare",
+            json!({"work":"W","budget":1,"response_view":view}),
+        )
+        .await;
+        assert_eq!(result.is_error, baseline.is_error);
+        assert_eq!(body(&result), body(&baseline));
+    }
+    fs::write(
+        f.root.join("work.yaml"),
+        WORK.replace(
+            "acceptance: [Deliver the reviewed analysis]",
+            "acceptance: []",
+        ),
+    )
+    .unwrap();
+    f.reindex();
+    let baseline = call(&client, "awr_work_prepare", json!({"work":"W"})).await;
+    for view in ["full", "summary", "action"] {
+        let result = call(
+            &client,
+            "awr_work_prepare",
+            json!({"work":"W","response_view":view}),
+        )
+        .await;
+        assert_eq!(result.is_error, Some(true));
+        let value = body(&result);
+        assert_eq!(value["context"], body(&baseline)["context"]);
+        assert_eq!(value["context"]["completeness"]["complete"], false);
+        assert!(value["response_view"].get("detail_counts").is_none());
+        assert!(value["response_view"].get("detail_note").is_none());
+    }
+    client.cancel().await.unwrap();
+}
+
 #[tokio::test]
 async fn summary_views_preserve_context_and_queryable_full_transition_receipts() {
     let f = Fixture::new();
@@ -509,17 +701,14 @@ async fn summary_views_preserve_context_and_queryable_full_transition_receipts()
     let mut concise_args = args.clone();
     concise_args["response_view"] = json!("summary");
     let concise = success(call(&client, "awr_work_prepare", concise_args).await);
-    for field in [
-        "rendered_context",
-        "context_hash",
-        "identity",
-        "omitted_chunks",
-    ] {
-        assert_eq!(
-            full["context"]["work_context"][field],
-            concise["context"]["work_context"][field]
-        );
-    }
+    index_contract::assert_prepared_view(
+        &full,
+        &concise,
+        full["context"]["work_context"]["omitted_chunks"]
+            .as_array()
+            .unwrap()
+            .len(),
+    );
     for field in [
         "management",
         "diagnostics",

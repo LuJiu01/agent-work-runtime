@@ -84,12 +84,27 @@ accept `response_view: "summary"`. The default is `full`. Hosts negotiate the CL
 capability `workflow.response_summary`; MCP clients inspect the tool schema.
 `Workflow.prepare`, `progress` and `finish` accept `response_view="summary"`.
 
-Preparation omits only `selected_chunks` and `selected_entities`, two indexes of
-the returned packet. Rendered context, hash, identity, source versions,
-completeness, omitted-chunk reasons, claims, readiness, waits and management
-requirements are retained. Every preparation is a fresh query. To retrieve full
-indexes, repeat the read in full mode and compare its revision and context hash;
-that query may observe newer sources.
+Preparation omits `selected_chunks` and `selected_entities`, two indexes of the
+returned packet. Successful, complete `summary`/`action` preparation also defers
+a nonempty `omitted_chunks` index when every entry has the optional
+`insufficient_budget_for_whole_chunk` reason. `response_view.detail_counts`
+reports its total, `omitted_fields` identifies the deferred path, and a bounded
+`detail_note` explains the common reason, required-context completeness and
+when to inspect `full_result`. A single entry without entity annotations stays
+inline, avoiding summary bookkeeping for a short index. Zero omissions add no
+bookkeeping; unknown reasons keep the original index. Rendered context, hash,
+identity, source versions, completeness, claims, readiness, waits and management requirements
+retain each view's semantics, including action's existing duplicate-field
+removal. The note does not change the rendered context or action instruction.
+
+This evolves the concise JSON representation within `response_view.version: 1`;
+it does not preserve every previous concise field. A missing `omitted_chunks`
+array must not be treated as zero omissions: read the declared count or request
+`full` for the complete index and per-entry reasons. Every preparation, including
+`full_result`, is a fresh query. Compare `project_revision` and `context_hash`
+before treating details as the same snapshot; the query may observe newer
+sources. Shared HTTP callers must retain their original explicit `project`
+routing key. Fetch details only when investigating context selection.
 
 Successful transitions return changes, transition, target, intent, source outcome
 and recovery information without repeating the full proposal patch and event

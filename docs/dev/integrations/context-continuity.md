@@ -181,7 +181,10 @@ rules, required management actions, observation provenance, diagnostics, waits
 and claims. It lists omissions and how to query full detail. The byte cap applies
 to the card, not to indispensable context; AWR never truncates a hard requirement
 to satisfy a display budget. Error and partial-write paths keep their existing
-facts. `full` and `summary` contracts remain available and unchanged.
+facts. `full` remains unchanged. Both concise views summarize recognized optional
+budget-omission indexes by default with count/reason metadata and a full-details
+query; this changes concise JSON field availability without changing required
+context or the action card. See the [concise-view contract](host-workflow.md#optional-concise-results).
 
 Hosts negotiate `workflow.action_guidance`. The Python preparation command
 defaults to action and falls back to a supported summary/full read on older

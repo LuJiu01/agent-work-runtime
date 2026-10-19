@@ -135,9 +135,9 @@ fn workflow_tools() -> Vec<Tool> {
         ),
         tool(
             "awr_work_prepare",
-            "Prepare readiness and required context. Consume context before checkpointing; no claim or completion-policy change. Optional explain attaches assessment.explain without a new tool name.",
+            "Prepare readiness and required context. Summary/action aggregate optional budget-omission indexes with a count, reason and full_result query; full retains details. Consume context before checkpointing; no claim or completion-policy change. Optional explain attaches assessment.explain without a new tool name.",
             object(
-                json!({"work":text(),"session":optional(text()),"branch":branch(),"goals":strings(),"source_sha":optional(text()),"budget":{"type":"integer","minimum":1,"maximum":100000},"explain":{"type":"boolean","default":false,"description":"Opt-in assessment.explain field; default false preserves legacy full/summary/action."}}),
+                json!({"work":text(),"session":optional(text()),"branch":branch(),"goals":strings(),"source_sha":optional(text()),"budget":{"type":"integer","minimum":1,"maximum":100000},"explain":{"type":"boolean","default":false,"description":"Opt-in assessment.explain field; default false omits the explanation independently of response_view."}}),
                 &["work"],
             ),
             true,

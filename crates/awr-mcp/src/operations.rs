@@ -173,6 +173,9 @@ pub(crate) fn call_as(
                     }
                 }
             }
+            if name == "awr_work_prepare" && !errored {
+                value = awr_runtime::compact_prepared_response(value);
+            }
             let displayed = if errored {
                 CallToolResult::structured_error(value)
             } else {
