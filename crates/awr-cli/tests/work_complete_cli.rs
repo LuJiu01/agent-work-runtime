@@ -420,7 +420,7 @@ fn specification_review_keeps_task_proof_current_but_cannot_replace_selected_rep
     f.organize();
     fs::create_dir(f.root.join("decisions")).unwrap();
     let path = f.root.join("decisions/spec.md");
-    fs::write(&path, "---\nid: SPEC\nstatus: accepted\nspecification:\n  version: '1'\n  items:\n    - id: R\n      disposition: required\n---\n# Specification\n\n## Decision\nUse the reviewed requirement.\n").unwrap();
+    fs::write(&path, "---\nid: SPEC\nstatus: accepted\naffected_keys: [W]\nspecification:\n  version: '1'\n  items:\n    - id: R\n      disposition: required\n---\n# Specification\n\n## Decision\nUse the reviewed requirement.\n").unwrap();
     let mapping = f.root.join(".awr/project.toml");
     fs::write(&mapping, format!("{}\n[[sources]]\ndomain='decisions'\nrole='supporting'\npath='decisions'\nadapter='markdown-directory-v1'\n", fs::read_to_string(&mapping).unwrap())).unwrap();
     let work_path = f.root.join("work.yaml");

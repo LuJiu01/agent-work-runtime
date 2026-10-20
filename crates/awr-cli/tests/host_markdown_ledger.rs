@@ -169,7 +169,7 @@ fn specification_refs_cannot_be_created_or_edited_in_markdown() {
 #[test]
 fn previous_markdown_projections_require_explicit_reindex_before_spec_check() {
     let h = Host::new(LIST);
-    h.sql("UPDATE sources SET config_json=json_set(config_json,'$.adapter_version',5) WHERE adapter='markdown-ledger-v1';");
+    h.sql("UPDATE sources SET config_json=json_set(config_json,'$.adapter_version',4) WHERE adapter='markdown-ledger-v1';");
     let revision = h.revision();
     h.error(&["spec", "check"], "SourceStale");
     assert_eq!(h.revision(), revision);

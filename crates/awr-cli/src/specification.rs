@@ -79,6 +79,15 @@ pub fn run(root: &Path, command: &SpecificationCommand, json_output: bool) -> Re
                 r["status"].as_str().unwrap()
             );
         }
+        for d in value["association_diagnostics"].as_array().unwrap() {
+            println!(
+                "association: {} -> {}: {} ({})",
+                d["specification"].as_str().unwrap(),
+                d["work"].as_str().unwrap(),
+                d["status"].as_str().unwrap(),
+                d["reasons"]
+            );
+        }
         for d in value["diagnostics"].as_array().unwrap() {
             println!("unknown: {}", d.as_str().unwrap());
         }

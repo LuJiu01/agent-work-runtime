@@ -4,7 +4,7 @@
 references. They report changed versions, superseded items, missing task coverage
 and unresolved references. They do not read arbitrary PRD paths, scan prose for
 requirements, create tasks, change acceptance, or establish implementation or
-completion. This capability is on development `main`, outside the 0.5.1 release.
+completion. This capability is unreleased on `main`; it is not included in 0.6.0.
 
 ## One authoritative specification
 
@@ -28,6 +28,7 @@ An illustrative document in that registered directory:
 ---
 id: configuration-spec
 status: accepted
+affected_keys: [BUILD-CONFIG]
 specification:
   version: "2"
   items:
@@ -57,21 +58,14 @@ supersession continues to use the existing `superseded_by: DocumentVersion`
 metadata, returned with the specification's source reference. No replacement is
 inferred from dates, names or similarity.
 
-Document replacements are checked by registered source identity, external key
-and version. A validated adoption receipt can identify the reviewed bytes before
-approval changed lifecycle metadata; a current file hash alone is not a substitute
-for that receipt. Unregistered, ambiguous, changed or unapproved targets and
-replacement cycles remain `unknown`. Receipt content and object identity are
-validated by the source adapter, independently of prose extraction warnings.
-An invalid receipt is not used as proof of its former approved version; unrelated
-warnings remain visible without invalidating that proof. This is a derived source
-projection, not independent evidence of human review.
-
-An explicitly superseded document with a fully resolved approved replacement is
-reported as `historical`, with its source reference and item count retained. Its
-old requirements do not enter current coverage counts. Active task references to
-it still need review. Cancelled/archived task references to resolved historical
-documents remain traceable as `historical`; unresolved references remain unknown.
+Cross-document replacement traversal is deferred. A superseded or otherwise not
+currently accepted document remains `unknown` with a diagnostic. Its declared
+items remain visible as unknown requirements; no `historical` document or reference
+state is produced. Selection limits reported findings to that document; source
+freshness is still verified project-wide.
+Adoption content and identity checks retain the existing source-adapter behavior;
+the checker uses that approval status internally without adding a validity field
+to the public decision model or deriving approval from prose extraction warnings.
 
 ## Bind an explicit task or acceptance criterion
 
@@ -116,11 +110,28 @@ After upgrading, explicitly reindex: the ledger and decision adapter versions
 change so previously ignored metadata is projected. No database schema migration
 or additional task authority is introduced.
 
-The earlier unreleased prototype's per-reference `approved_version` field is no
-longer accepted. Remove it explicitly from those source bindings and reindex;
-there is no automatic source migration. That source edit changes the existing
-task-contract fingerprint. Existing proof is assessed by the normal evidence
-rules below, without rewriting reports or backfilling stamps.
+### Applicability cross-check
+
+`spec_refs` alone determine specification alignment and requirement coverage.
+`affected_keys` retain their existing decision applicability meaning for related
+work, evidence relevance and workstream scope. The checker does not rewrite them.
+It reports contradictions separately in `association_diagnostics`:
+
+| Reason | Meaning |
+| --- | --- |
+| `referencing_work_not_in_affected_keys` | A task references this specification but is absent from its applicability list. |
+| `affected_work_without_spec_ref` | A listed task has no explicit reference to this specification. |
+| `affected_key_not_resolved` | A listed key cannot resolve to registered work or a registered goal scope. |
+
+The existing `*` applicability wildcard matches registered work; it does not
+create references or prove coverage. Goal keys retain their existing scope
+meaning and do not become task associations. Cancelled/archived work still has
+its declarations checked, but cannot supply current requirement coverage.
+A valid explicit reference can remain `current` and its item `covered` while an
+applicability mismatch makes the overall result `needs_review`. An unresolved or
+ambiguous source key makes the overall result `unknown`. A listed task
+without a reference never fills a requirement gap. These diagnostics include
+source provenance and obey the same selection and row/byte limits as other rows.
 
 ### Composition with task contracts and evidence
 
@@ -161,10 +172,9 @@ with workstreams enabled, or callers with scoped workstream grants, receive
 specification-check action; choosing that tool is not a workaround. Team/Postgres
 and authenticated cross-workstream inspection are outside this capability.
 
-Ordinary `ready`/`status` and MCP queue briefs show `spec_refs_count` and a
-`spec_refs_detail` selector. They do not repeat every binding or acceptance text.
-Read the complete bindings explicitly with `awr work show WORK`, MCP
-`awr_work_get`, or the bounded `spec check` report.
+Read complete task bindings explicitly with `awr work show WORK`, MCP
+`awr_work_get`, or the bounded `spec check` report. Ordinary status and ready
+queues retain their existing brief shape and do not perform specification checks.
 
 The check itself uses a coherent private snapshot, verifies current indexed
 sources before and after, and persists neither source edits nor runtime events.
@@ -178,9 +188,8 @@ replacement identifiers, requirement coverage and reason codes:
 | Result | Meaning |
 | --- | --- |
 | Reference `current` | Its pinned fingerprint, item and optional criterion resolve; the work association is admitted and active. This is specification alignment, distinct from evidence currency. |
-| Reference `needs_review` | Approved source bytes changed, an item/document was superseded or withdrawn, or the mapped work is cancelled/archived. |
-| `unknown` | Missing/ambiguous/unapproved specification, unresolved item/criterion/replacement, draft/unknown work scope, or missing explicit specification declarations. |
-| `historical` | A resolved superseded document, or its cancelled/archived task reference; retained for traceability without a current coverage gap. |
+| Reference `needs_review` | Approved source bytes changed, an item was superseded or withdrawn, or the mapped work is cancelled/archived. |
+| `unknown` | Missing/ambiguous/unapproved specification, unresolved item/criterion/replacement, non-current document approval, draft/unknown work scope, or missing explicit specification declarations. |
 | Requirement `covered` | At least one current declared task association exists. This is coverage, not a test result. |
 | Requirement `uncovered` | An explicit required/future item has no declared task reference. |
 | Requirement `not_required` | Explicitly cancelled/out of scope, or superseded with a resolved replacement. |
@@ -190,7 +199,7 @@ reported gaps. Unknowns take precedence over `needs_review`. References to
 unregistered keys remain unknown even when every configured source is fresh;
 unregistered files are never opened or silently imported.
 
-`limit` bounds the complete combined specification/requirement/reference row
+`limit` bounds the complete combined specification/requirement/reference/association-diagnostic row
 count (default 1000, maximum 10000). Oversized selections return `BudgetExceeded`
 without silently truncating findings; select a specification or raise the limit
 within the ceiling. Reports also have a 4 MiB serialized ceiling. There is no

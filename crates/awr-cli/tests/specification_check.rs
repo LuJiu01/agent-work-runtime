@@ -37,7 +37,7 @@ impl Project {
         p
     }
     fn spec(&self, status: &str, version: &str, items: Value) {
-        let metadata = json!({"id":"dashboard","status":status,"specification":{"version":version,"items":items}});
+        let metadata = json!({"id":"dashboard","status":status,"affected_keys":["*"],"specification":{"version":version,"items":items}});
         fs::write(
             self.0.join("decisions/dashboard.md"),
             format!("---\n{}\n---\n# Dashboard\n\n## Decision\nUse the explicitly approved requirements.\n", serde_json::to_string_pretty(&metadata).unwrap()),
@@ -56,7 +56,11 @@ impl Project {
         assert!(
             output.status.success(),
             "{args:?}: {}",
-            String::from_utf8_lossy(&output.stderr)
+            format!(
+                "{} {}",
+                String::from_utf8_lossy(&output.stderr),
+                String::from_utf8_lossy(&output.stdout)
+            )
         );
         serde_json::from_slice(&output.stdout).unwrap()
     }
@@ -64,7 +68,10 @@ impl Project {
         let db = rusqlite::Connection::open(self.0.join(".awr/state.db")).unwrap();
         db.query_row("SELECT (SELECT project_revision FROM projects LIMIT 1), (SELECT count(*) FROM events), (SELECT count(*) FROM sessions), (SELECT count(*) FROM claims)", [], |r| Ok((r.get(0)?,r.get(1)?,r.get(2)?,r.get(3)?))).unwrap()
     }
-    fn document(&self, key: &str, metadata: Value) {
+    fn document(&self, key: &str, mut metadata: Value) {
+        if metadata.get("affected_keys").is_none() {
+            metadata["affected_keys"] = json!(["*"]);
+        }
         fs::write(self.0.join(format!("decisions/{key}.md")), format!("---\n{}\n---\n# Synthetic specification\n\n## Decision\nUse the explicit requirements.\n",serde_json::to_string_pretty(&metadata).unwrap())).unwrap();
     }
     fn version(&self, key: &str) -> Value {
@@ -415,7 +422,10 @@ fn stable_keys_survive_independent_initialization_without_transferring_local_ado
     p.adopt("dashboard", "new");
     let refs = json!([{"specification":"new","item":"R","source_fingerprint":p.version("new")["source_fingerprint"]}]);
     p.works(json!([{"id":"W","status":"planned","spec_refs":refs}]));
-    assert_eq!(p.ok(&["spec", "check"])["status"], "matched");
+    assert_eq!(
+        p.ok(&["spec", "check", "--spec", "new"])["status"],
+        "matched"
+    );
     for file in ["dashboard.md", "new.md"] {
         fs::copy(
             p.0.join("decisions").join(file),
@@ -558,7 +568,7 @@ fn adapter_upgrade_requires_explicit_reindex_and_restores_declared_fields() {
     // Simulate the previous adapters: identical source bytes, fields not projected.
     {
         let db = rusqlite::Connection::open(p.0.join(".awr/state.db")).unwrap();
-        db.execute_batch("UPDATE sources SET config_json=json_set(config_json,'$.adapter_version',CASE adapter WHEN 'yaml-ledger-v1' THEN 5 ELSE 3 END); UPDATE work_items SET payload_json=json_remove(payload_json,'$.spec_refs'); UPDATE decisions SET payload_json=json_remove(payload_json,'$.specification');").unwrap();
+        db.execute_batch("UPDATE sources SET config_json=json_set(config_json,'$.adapter_version',CASE adapter WHEN 'yaml-ledger-v1' THEN 4 ELSE 3 END); UPDATE work_items SET payload_json=json_remove(payload_json,'$.spec_refs'); UPDATE decisions SET payload_json=json_remove(payload_json,'$.specification');").unwrap();
     }
     let before = p.logical_state();
     let stale = p.run(&["spec", "check"]);
@@ -657,128 +667,6 @@ fn reviewed_reference_edits_use_existing_batch_and_active_claim_guards() {
 }
 
 #[test]
-fn adopted_history_is_traceable_without_current_gaps_but_live_old_refs_need_review() {
-    let p = Project::new(json!([{"id":"R","disposition":"required"}]), json!([]));
-    let mut old_ref = reference("R");
-    old_ref["source_fingerprint"] = p.version("dashboard")["source_fingerprint"].clone();
-    p.document("new", json!({"id":"new","status":"proposed","specification":{"version":"1","items":[{"id":"R","disposition":"required"}]}}));
-    p.ok(&["source", "reindex"]);
-    let before_adoption = p.version("new");
-    p.adopt("dashboard", "new");
-    assert_ne!(
-        p.version("new")["source_fingerprint"],
-        before_adoption["source_fingerprint"]
-    );
-    let new_ref = json!({"specification":"new","item":"R","source_fingerprint":p.version("new")["source_fingerprint"],"criterion":"Save the reviewed configuration"});
-    let mut works = json!([
-        {"id":"NEW","status":"planned","acceptance":["Save the reviewed configuration"],"spec_refs":[new_ref]},
-        {"id":"CANCELLED","status":"cancelled","acceptance":["Save the reviewed configuration"],"spec_refs":[old_ref]},
-        {"id":"ARCHIVED","status":"completed","archived":true,"acceptance":["Save the reviewed configuration"],"spec_refs":[old_ref]}
-    ]);
-    p.works(works.clone());
-    let bytes = fs::read(p.0.join("work.yaml")).unwrap();
-    let old = fs::read(p.0.join("decisions/dashboard.md")).unwrap();
-    let state = p.logical_state();
-    let r = p.ok(&["spec", "check"]);
-    assert_eq!(r["status"], "matched", "{r}");
-    assert_eq!(r["counts"]["covered"], 1);
-    assert_eq!(r["requirements"].as_array().unwrap().len(), 1);
-    assert_eq!(
-        r["specifications"]
-            .as_array()
-            .unwrap()
-            .iter()
-            .find(|d| d["key"] == "dashboard")
-            .unwrap()["status"],
-        "historical"
-    );
-    let human = Command::new(env!("CARGO_BIN_EXE_awr"))
-        .args([
-            "--project",
-            p.0.to_str().unwrap(),
-            "spec",
-            "check",
-            "--spec",
-            "dashboard",
-        ])
-        .output()
-        .unwrap();
-    assert!(human.status.success());
-    assert!(String::from_utf8_lossy(&human.stdout).contains("historical"));
-    assert_eq!(fs::read(p.0.join("work.yaml")).unwrap(), bytes);
-    assert_eq!(fs::read(p.0.join("decisions/dashboard.md")).unwrap(), old);
-    assert_eq!(p.logical_state(), state);
-    works.as_array_mut().unwrap().push(json!({"id":"LIVE","status":"planned","acceptance":["Save the reviewed configuration"],"spec_refs":[old_ref]}));
-    p.works(works);
-    let r = p.ok(&["spec", "check"]);
-    assert_eq!(r["status"], "needs_review");
-    let live = r["references"]
-        .as_array()
-        .unwrap()
-        .iter()
-        .find(|r| r["work"] == "LIVE")
-        .unwrap();
-    assert_eq!(live["status"], "needs_review");
-    assert!(
-        live["reasons"]
-            .as_array()
-            .unwrap()
-            .contains(&json!("specification_superseded"))
-    );
-}
-
-#[test]
-fn document_replacement_targets_must_resolve_identity_version_and_approval() {
-    for case in [
-        "missing",
-        "identity",
-        "version",
-        "approval",
-        "declaration",
-        "cycle",
-        "status_conflict",
-    ] {
-        let p = Project::new(json!([{"id":"R","disposition":"required"}]), json!([]));
-        p.document("new", json!({"id":"new","status":if case=="approval" {"proposed"}else{"accepted"},"specification":{"version":"1","items":[{"id":"R","disposition":"required"}]}}));
-        if case == "cycle" {
-            p.document("new", json!({"id":"new","status":"superseded","superseded_by":p.version("dashboard"),"specification":{"version":"1","items":[{"id":"R","disposition":"required"}]}}));
-        } else if case == "declaration" {
-            p.document("new", json!({"id":"new","status":"accepted"}));
-        } else if case == "status_conflict" {
-            p.document("new", json!({"id":"new","status":"accepted","superseded_by":p.version("dashboard"),"specification":{"version":"1","items":[{"id":"R","disposition":"required"}]}}));
-        }
-        p.ok(&["source", "reindex"]);
-        let mut target = p.version("new");
-        match case {
-            "missing" => target["external_key"] = json!("missing"),
-            "identity" => target["source_id"] = json!(Id::new()),
-            "version" => target["source_fingerprint"] = json!(format!("sha256:{}", "b".repeat(64))),
-            _ => (),
-        }
-        p.document("dashboard", json!({"id":"dashboard","status":"superseded","superseded_by":target,"specification":{"version":"0.80","items":[{"id":"R","disposition":"required"}]}}));
-        p.ok(&["source", "reindex"]);
-        let mut r = reference("R");
-        r["source_fingerprint"] = p.version("dashboard")["source_fingerprint"].clone();
-        p.works(json!([{"id":"W","status":"planned","acceptance":["Save the reviewed configuration"],"spec_refs":[r]}]));
-        let state = p.logical_state();
-        let result = p.ok(&["spec", "check"]);
-        assert_eq!(
-            result["references"][0]["status"], "unknown",
-            "{case}: {result}"
-        );
-        assert!(
-            result["references"][0]["reasons"]
-                .as_array()
-                .unwrap()
-                .iter()
-                .any(|r| r.as_str().unwrap().starts_with("document_replacement_")),
-            "{case}: {result}"
-        );
-        assert_eq!(p.logical_state(), state);
-    }
-}
-
-#[test]
 fn long_spec_refs_stay_out_of_queue_briefs_and_remain_in_explicit_details() {
     let criterion = "Reviewed requirement ".to_owned() + &"x".repeat(4000);
     let items = (0..100)
@@ -796,7 +684,7 @@ fn long_spec_refs_stay_out_of_queue_briefs_and_remain_in_explicit_details() {
         json!([{"id":"W","title":"Review configuration","status":"ready","next_action":"Review","acceptance":[criterion],"spec_refs":refs}]),
     );
     let queue = p.ok(&["ready", "--limit", "1"]);
-    assert_eq!(queue["ready"][0]["spec_refs_count"], 100);
+    assert!(queue["ready"][0].get("spec_refs_count").is_none());
     assert!(queue["ready"][0].get("spec_refs").is_none());
     assert!(serde_json::to_vec(&queue).unwrap().len() < 16000);
     let status = p.ok(&["status", "--view", "full"]);
@@ -811,7 +699,7 @@ fn long_spec_refs_stay_out_of_queue_briefs_and_remain_in_explicit_details() {
     ledger["work_items"][0]["status"] = json!("in_progress");
     p.works(ledger["work_items"].clone());
     let status = p.ok(&["status", "--view", "full"]);
-    assert_eq!(status["current"][0]["spec_refs_count"], 100);
+    assert!(status["current"][0].get("spec_refs_count").is_none());
     assert!(status["current"][0].get("spec_refs").is_none());
     assert!(serde_json::to_vec(&status).unwrap().len() < 16000);
     let detail = p.ok(&["work", "show", "W"]);
@@ -820,121 +708,164 @@ fn long_spec_refs_stay_out_of_queue_briefs_and_remain_in_explicit_details() {
 }
 
 #[test]
-fn multi_step_adoption_resolves_history_and_invalidated_receipts_remain_unknown() {
-    let p = Project::new(json!([{"id":"R","disposition":"required"}]), json!([]));
-    p.document("second", json!({"id":"second","status":"proposed","specification":{"version":"1","items":[{"id":"R","disposition":"required"}]}}));
+fn affected_keys_mismatches_are_diagnostics_without_inferred_or_revoked_coverage() {
+    let items = json!([{"id":"R","disposition":"required"},{"id":"F","disposition":"future"}]);
+    let p = Project::new(items.clone(), json!([]));
+    p.document("dashboard", json!({"id":"dashboard","status":"accepted","affected_keys":["LISTED","MISSING"],"specification":{"version":"one","items":items}}));
     p.ok(&["source", "reindex"]);
-    p.adopt("dashboard", "second");
-    p.document("latest", json!({"id":"latest","status":"proposed","specification":{"version":"2","items":[{"id":"R","disposition":"required"}]}}));
-    p.ok(&["source", "reindex"]);
-    p.adopt("second", "latest");
-    p.works(json!([{"id":"W","status":"planned","acceptance":["Save the reviewed configuration"],"spec_refs":[{"specification":"latest","item":"R","source_fingerprint":p.version("latest")["source_fingerprint"]}]}]));
+    p.works(json!([
+        {"id":"W","status":"planned","spec_refs":[{"specification":"dashboard","item":"R","source_fingerprint":p.version("dashboard")["source_fingerprint"]}]},
+        {"id":"LISTED","status":"planned"}
+    ]));
+    let bytes = fs::read(p.0.join("work.yaml")).unwrap();
     let state = p.logical_state();
-    let r = p.ok(&["spec", "check", "--limit", "5"]);
-    assert_eq!(r["status"], "matched", "{r}");
-    assert_eq!(r["requirements"].as_array().unwrap().len(), 1);
+    let report = p.ok(&["spec", "check", "--limit", "7"]);
+    assert_eq!(report["status"], "unknown");
+    assert_eq!(report["references"][0]["status"], "current");
+    assert_eq!(report["counts"]["covered"], 1);
+    assert_eq!(report["counts"]["uncovered"], 1);
+    let rows = report["association_diagnostics"].as_array().unwrap();
+    assert_eq!(rows.len(), 3);
+    for (key, reason) in [
+        ("W", "referencing_work_not_in_affected_keys"),
+        ("LISTED", "affected_work_without_spec_ref"),
+        ("MISSING", "affected_key_not_resolved"),
+    ] {
+        let row = rows.iter().find(|r| r["work"] == key).unwrap();
+        assert_eq!(row["reasons"], json!([reason]));
+        assert!(row["source_ref"]["source_fingerprint"].is_string());
+        assert_eq!(row["work_source_ref"].is_null(), key == "MISSING");
+    }
+    let error = p.run(&["spec", "check", "--limit", "6"]);
+    assert!(!error.status.success());
     assert_eq!(
-        r["specifications"]
-            .as_array()
-            .unwrap()
-            .iter()
-            .filter(|d| d["status"] == "historical")
-            .count(),
-        2
+        serde_json::from_slice::<Value>(&error.stderr).unwrap()["code"],
+        "BudgetExceeded"
     );
     assert_eq!(p.logical_state(), state);
-    let path = p.0.join("decisions/second.md");
-    let mut bytes = fs::read_to_string(&path).unwrap();
-    bytes.push_str("\nContent changed after supersession.\n");
-    fs::write(path, bytes).unwrap();
+    assert_eq!(fs::read(p.0.join("work.yaml")).unwrap(), bytes);
+    let human = Command::new(env!("CARGO_BIN_EXE_awr"))
+        .args(["--project", p.0.to_str().unwrap(), "spec", "check"])
+        .output()
+        .unwrap();
+    assert!(human.status.success());
+    assert!(String::from_utf8_lossy(&human.stdout).contains("affected_work_without_spec_ref"));
+}
+
+#[test]
+fn association_checks_preserve_wildcards_goal_scope_and_cancelled_work_boundaries() {
+    let p = Project::new(json!([{"id":"R","disposition":"future"}]), json!([]));
+    p.document("dashboard", json!({"id":"dashboard","status":"accepted","affected_keys":["*","G"],"specification":{"version":"one","items":[{"id":"R","disposition":"future"}]}}));
     p.ok(&["source", "reindex"]);
-    let r = p.ok(&["spec", "check"]);
-    assert_eq!(r["status"], "unknown");
+    let ledger = json!({"goals":[{"id":"G","title":"Review the declared requirement"}],"work_items":[
+        {"id":"CANCELLED","status":"cancelled","spec_refs":[{"specification":"dashboard","item":"R","source_fingerprint":p.version("dashboard")["source_fingerprint"]}]},
+        {"id":"UNBOUND","status":"planned"}
+    ]});
+    fs::write(p.0.join("work.yaml"), serde_json::to_vec(&ledger).unwrap()).unwrap();
+    p.ok(&["source", "reindex"]);
+    let report = p.ok(&["spec", "check"]);
+    assert_eq!(report["counts"]["covered"], 0);
+    assert_eq!(report["requirements"][0]["status"], "needs_review");
     assert_eq!(
-        r["specifications"]
-            .as_array()
-            .unwrap()
-            .iter()
-            .find(|d| d["key"] == "second")
-            .unwrap()["diagnostic"],
-        "document_replacement_adoption_unverified"
+        report["association_diagnostics"].as_array().unwrap().len(),
+        1
     );
+    assert_eq!(report["association_diagnostics"][0]["work"], "UNBOUND");
     assert_eq!(
-        p.ok(&["spec", "check", "--spec", "latest"])["status"],
-        "matched"
+        report["association_diagnostics"][0]["reasons"],
+        json!(["affected_work_without_spec_ref"])
     );
 }
 
 #[test]
-fn extraction_warnings_preserve_valid_history_but_invalid_adoptions_stay_unknown() {
-    for invalidation in [
-        "content",
-        "identity",
-        "receipt_version",
-        "candidate_key",
-        "candidate_pin",
-    ] {
-        let p = Project::new(json!([{"id":"R","disposition":"required"}]), json!([]));
-        p.document("second", json!({"id":"second","status":"proposed","specification":{"version":"1","items":[{"id":"R","disposition":"required"}]}}));
-        let path = p.0.join("decisions/second.md");
-        let text = fs::read_to_string(&path)
+fn association_selection_retains_the_existing_duplicate_work_source_guard() {
+    let p = Project::new(json!([{"id":"R","disposition":"required"}]), json!([]));
+    p.document("other",json!({"id":"other","status":"accepted","affected_keys":["MISSING"],"specification":{"version":"one","items":[{"id":"X","disposition":"out_of_scope"}]}}));
+    p.ok(&["source", "reindex"]);
+    p.works(json!([{"id":"W","status":"planned","spec_refs":[{"specification":"dashboard","item":"R","source_fingerprint":p.version("dashboard")["source_fingerprint"]}]}]));
+    let selected = p.ok(&["spec", "check", "--spec", "dashboard"]);
+    assert_eq!(selected["status"], "matched");
+    assert_eq!(selected["association_diagnostics"], json!([]));
+    fs::write(
+        p.0.join("other.yaml"),
+        "work_items:\n- id: W\n  title: A distinct work with the same key\n  status: planned\n",
+    )
+    .unwrap();
+    let mapping = p.0.join(".awr/project.toml");
+    let text = fs::read_to_string(&mapping).unwrap();
+    fs::write(mapping,text+"\n[[sources]]\ndomain='ledger'\nrole='supporting'\npath='other.yaml'\nadapter='yaml-ledger-v1'\n").unwrap();
+    let rejected = p.run(&["source", "reindex"]);
+    assert!(!rejected.status.success());
+    let result: Value = serde_json::from_slice(&rejected.stdout).unwrap();
+    assert!(
+        result["issues"]
+            .as_array()
             .unwrap()
-            .replace("## Decision", "## Requirements");
-        fs::write(&path, text).unwrap();
+            .iter()
+            .any(|r| r["code"] == "SourceConflict")
+    );
+    let before = p.logical_state();
+    let rejected = p.run(&["spec", "check", "--spec", "dashboard"]);
+    assert!(!rejected.status.success());
+    assert_eq!(
+        serde_json::from_slice::<Value>(&rejected.stderr).unwrap()["code"],
+        "SourceStale"
+    );
+    assert_eq!(p.logical_state(), before);
+}
+
+#[test]
+fn superseded_documents_remain_unknown_without_traversing_replacement_chains() {
+    let p = Project::new(json!([{"id":"R","disposition":"required"}]), json!([]));
+    p.document("new",json!({"id":"new","status":"accepted","specification":{"version":"two","items":[{"id":"R","disposition":"required"}]}}));
+    p.ok(&["source", "reindex"]);
+    for target in [
+        p.version("new"),
+        json!({"source_id":Id::new(),"external_key":"missing","source_fingerprint":format!("sha256:{}","b".repeat(64))}),
+    ] {
+        p.document("dashboard",json!({"id":"dashboard","status":"superseded","superseded_by":target,"specification":{"version":"one","items":[{"id":"R","disposition":"required"}]}}));
         p.ok(&["source", "reindex"]);
-        p.adopt("dashboard", "second");
-        p.document("latest", json!({"id":"latest","status":"proposed","specification":{"version":"2","items":[{"id":"R","disposition":"required"}]}}));
-        p.ok(&["source", "reindex"]);
-        p.adopt("second", "latest");
-        p.works(json!([{"id":"W","status":"planned","spec_refs":[{"specification":"latest","item":"R","source_fingerprint":p.version("latest")["source_fingerprint"]}]}]));
-        let bytes = fs::read(&path).unwrap();
-        let ledger = fs::read(p.0.join("work.yaml")).unwrap();
+        p.works(json!([{"id":"W","status":"cancelled","spec_refs":[{"specification":"dashboard","item":"R","source_fingerprint":p.version("dashboard")["source_fingerprint"]}]}]));
         let state = p.logical_state();
-        let r = p.ok(&["spec", "check", "--limit", "5"]);
-        assert_eq!(r["status"], "matched", "{invalidation}: {r}");
-        assert_eq!(r["counts"]["covered"], 1);
-        assert_eq!(r["counts"]["unknown"], 0);
+        let report = p.ok(&["spec", "check", "--spec", "dashboard"]);
+        assert_eq!(report["status"], "unknown");
         assert_eq!(
-            r["specifications"]
-                .as_array()
-                .unwrap()
-                .iter()
-                .filter(|d| d["status"] == "historical")
-                .count(),
-            2
+            report["specifications"][0]["diagnostic"],
+            "specification_superseded"
         );
-        let db = rusqlite::Connection::open(p.0.join(".awr/state.db")).unwrap();
-        let warning: String = db.query_row("SELECT json_extract(payload_json,'$.warnings') FROM events WHERE event_type='source.projected' AND json_extract(payload_json,'$.source_id')=?1 ORDER BY project_revision DESC LIMIT 1", [p.version("second")["source_id"].as_str().unwrap()], |r| r.get(0)).unwrap();
-        assert_eq!(
-            serde_json::from_str::<Value>(&warning).unwrap(),
-            json!(["no decision statement identified; consult the source reference"])
-        );
-        drop(db);
+        assert_eq!(report["references"][0]["status"], "unknown");
+        assert_eq!(report["requirements"].as_array().unwrap().len(), 1);
         assert_eq!(p.logical_state(), state);
-        assert_eq!(fs::read(&path).unwrap(), bytes);
-        assert_eq!(fs::read(p.0.join("work.yaml")).unwrap(), ledger);
+    }
+}
 
-        if invalidation == "content" {
-            // Previous projections have no structured receipt validity; refresh explicitly.
-            let db = rusqlite::Connection::open(p.0.join(".awr/state.db")).unwrap();
-            db.execute_batch("UPDATE sources SET config_json=json_set(config_json,'$.adapter_version',4) WHERE adapter='markdown-directory-v1'; UPDATE decisions SET payload_json=json_remove(payload_json,'$.adoption_valid');").unwrap();
-            drop(db);
-            let state = p.logical_state();
-            let stale = p.run(&["spec", "check"]);
-            assert!(!stale.status.success());
-            assert_eq!(
-                serde_json::from_slice::<Value>(&stale.stderr).unwrap()["code"],
-                "SourceStale"
-            );
-            assert_eq!(p.logical_state(), state);
-            p.ok(&["source", "reindex"]);
-            assert_eq!(
-                p.ok(&["spec", "check", "--limit", "5"])["status"],
-                "matched"
-            );
-            assert_eq!(fs::read(&path).unwrap(), bytes);
-        }
-
+#[test]
+fn adoption_validity_stays_internal_and_reuses_existing_source_approval_checks() {
+    for invalidation in ["content", "identity", "candidate_key", "receipt_version"] {
+        let p = Project::new(json!([{"id":"R","disposition":"required"}]), json!([]));
+        p.document("new",json!({"id":"new","status":"proposed","specification":{"version":"two","items":[{"id":"R","disposition":"required"}]}}));
+        let path = p.0.join("decisions/new.md");
+        fs::write(
+            &path,
+            fs::read_to_string(&path)
+                .unwrap()
+                .replace("## Decision", "## Requirements"),
+        )
+        .unwrap();
+        p.ok(&["source", "reindex"]);
+        p.adopt("dashboard", "new");
+        p.works(json!([{"id":"W","status":"planned","spec_refs":[{"specification":"new","item":"R","source_fingerprint":p.version("new")["source_fingerprint"]}]}]));
+        let state = p.logical_state();
+        assert_eq!(
+            p.ok(&["spec", "check", "--spec", "new"])["status"],
+            "matched"
+        );
+        let store = awr_store::Store::open_existing(&p.0.join(".awr/state.db")).unwrap();
+        let project = store.project_by_root(&p.0.canonicalize().unwrap()).unwrap();
+        let public = serde_json::to_value(store.decision(project.id, "new").unwrap().item).unwrap();
+        assert!(public.get("adoption_valid").is_none());
+        drop(store);
+        assert_eq!(p.logical_state(), state);
         let text = fs::read_to_string(&path).unwrap();
         let (header, body) = text
             .strip_prefix("---\n")
@@ -943,23 +874,18 @@ fn extraction_warnings_preserve_valid_history_but_invalid_adoptions_stay_unknown
             .unwrap();
         let mut metadata: Value = serde_yaml_ng::from_str(header).unwrap();
         let body = match invalidation {
-            "content" => format!("{body}\nChanged reviewed requirements.\n"),
+            "content" => format!("{body}\nChanged approved requirements.\n"),
             "identity" => {
                 metadata["adoption"]["candidate"]["source_id"] = json!(Id::new());
-                body.to_owned()
+                body.into()
+            }
+            "candidate_key" => {
+                metadata["adoption"]["candidate"]["external_key"] = json!("different");
+                body.into()
             }
             "receipt_version" => {
                 metadata["adoption"]["version"] = json!(2);
-                body.to_owned()
-            }
-            "candidate_key" => {
-                metadata["adoption"]["candidate"]["external_key"] = json!("another-document");
-                body.to_owned()
-            }
-            "candidate_pin" => {
-                metadata["adoption"]["candidate"]["source_fingerprint"] =
-                    json!(format!("sha256:{}", "b".repeat(64)));
-                body.to_owned()
+                body.into()
             }
             _ => unreachable!(),
         };
@@ -973,30 +899,11 @@ fn extraction_warnings_preserve_valid_history_but_invalid_adoptions_stay_unknown
         .unwrap();
         p.ok(&["source", "reindex"]);
         let state = p.logical_state();
-        let r = p.ok(&["spec", "check"]);
-        assert_eq!(r["status"], "unknown", "{invalidation}: {r}");
+        let report = p.ok(&["spec", "check", "--spec", "new"]);
+        assert_eq!(report["status"], "unknown", "{invalidation}: {report}");
         assert_eq!(
-            r["specifications"]
-                .as_array()
-                .unwrap()
-                .iter()
-                .find(|d| d["key"]
-                    == if invalidation == "candidate_pin" {
-                        "dashboard"
-                    } else {
-                        "second"
-                    })
-                .unwrap()["diagnostic"],
-            if invalidation == "candidate_pin" {
-                "document_replacement_version_changed"
-            } else {
-                "document_replacement_adoption_unverified"
-            },
-            "{invalidation}: {r}"
-        );
-        assert_eq!(
-            p.ok(&["spec", "check", "--spec", "latest"])["status"],
-            "matched"
+            report["specifications"][0]["diagnostic"],
+            "specification_adoption_unverified"
         );
         assert_eq!(p.logical_state(), state);
     }

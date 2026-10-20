@@ -41,81 +41,25 @@ fn replacement(
     ((current.id != item.id).then(|| current.id.clone()), None)
 }
 
-/// Resolve only declared document identities and approval versions, never item equivalence.
-fn document_status(
-    start: &Projected<Decision>,
-    documents: &BTreeMap<&str, Vec<&Projected<Decision>>>,
-) -> (&'static str, Option<&'static str>) {
-    let mut current = start;
-    let mut seen = BTreeSet::new();
-    loop {
-        seen.insert(current.item.meta.id);
-        if current.source.freshness != Freshness::Fresh {
-            return ("unknown", Some("document_replacement_source_not_fresh"));
-        }
-        if current.item.specification.is_none() {
-            return (
-                "unknown",
-                Some("document_replacement_specification_not_declared"),
-            );
-        }
-        match current.item.status {
-            DecisionStatus::Accepted => {
-                if current.item.superseded_by.is_some() {
-                    return ("unknown", Some("document_replacement_status_conflict"));
-                }
-                return (
-                    if current.item.meta.id == start.item.meta.id {
-                        "current"
-                    } else {
-                        "historical"
-                    },
-                    None,
-                );
-            }
-            DecisionStatus::Superseded => (),
-            _ => return ("unknown", Some("document_replacement_not_approved")),
-        }
-        if current.item.adoption.is_some() && current.item.adoption_valid != Some(true) {
-            return ("unknown", Some("document_replacement_adoption_unverified"));
-        }
-        let Some(reference) = &current.item.superseded_by else {
-            return ("unknown", Some("document_replacement_not_declared"));
-        };
-        let Some(candidates) = documents.get(reference.external_key.as_str()) else {
-            return ("unknown", Some("document_replacement_not_registered"));
-        };
-        if candidates.len() != 1 {
-            return ("unknown", Some("document_replacement_ambiguous"));
-        }
-        let target = candidates[0];
-        if target.item.meta.source_ref.source_id != reference.source_id {
-            return ("unknown", Some("document_replacement_identity_mismatch"));
-        }
-        if seen.contains(&target.item.meta.id) {
-            return ("unknown", Some("document_replacement_cycle"));
-        }
-        // Adoption changes lifecycle bytes. Its validated candidate preserves the
-        // exact reviewed version, including on a later-superseded intermediate.
-        let version_matches = target
-            .item
-            .meta
-            .source_ref
-            .source_fingerprint
-            .eq_ignore_ascii_case(&reference.source_fingerprint)
-            || (target.item.adoption_valid == Some(true)
-                && target.item.adoption.as_ref().is_some_and(|a| {
-                    a.candidate.source_id == reference.source_id
-                        && a.candidate.external_key == reference.external_key
-                        && a.candidate
-                            .source_fingerprint
-                            .eq_ignore_ascii_case(&reference.source_fingerprint)
-                }));
-        if !version_matches {
-            return ("unknown", Some("document_replacement_version_changed"));
-        }
-        current = target;
+/// Approval content/identity validation remains in the existing source adapter.
+/// Its accepted status is sufficient here; no replacement history or public validity flag.
+fn specification_status(d: &Projected<Decision>) -> (&'static str, Option<&'static str>) {
+    if d.source.freshness != Freshness::Fresh {
+        return ("unknown", Some("specification_source_not_fresh"));
     }
+    if d.item.adoption.is_some() && d.item.status == DecisionStatus::Unknown {
+        return ("unknown", Some("specification_adoption_unverified"));
+    }
+    if d.item.status == DecisionStatus::Superseded {
+        return ("unknown", Some("specification_superseded"));
+    }
+    if d.item.status != DecisionStatus::Accepted {
+        return ("unknown", Some("specification_not_accepted"));
+    }
+    if d.item.superseded_by.is_some() {
+        return ("unknown", Some("specification_status_conflict"));
+    }
+    ("current", None)
 }
 
 /// Caller provides a coherent, source-verified snapshot. No filesystem or writes occur here.
@@ -147,7 +91,7 @@ pub fn check_specifications(
             (
                 d.item.meta.id,
                 if documents[d.item.meta.external_key.as_str()].len() == 1 {
-                    document_status(d, &documents)
+                    specification_status(d)
                 } else {
                     ("unknown", Some("specification_ambiguous"))
                 },
@@ -155,11 +99,6 @@ pub fn check_specifications(
         })
         .collect::<BTreeMap<_, _>>();
     let selected = |key: &str| request.spec.as_deref().is_none_or(|s| s == key);
-    let referenced_keys = works
-        .iter()
-        .flat_map(|w| &w.item.spec_refs)
-        .map(|r| r.specification.as_str())
-        .collect::<BTreeSet<_>>();
     let references_total = works
         .iter()
         .map(|w| {
@@ -172,9 +111,7 @@ pub fn check_specifications(
         .sum::<usize>();
     let requirements_total = decisions
         .iter()
-        .filter(|d| {
-            selected(&d.item.meta.external_key) && assessments[&d.item.meta.id].0 != "historical"
-        })
+        .filter(|d| selected(&d.item.meta.external_key))
         .filter_map(|d| d.item.specification.as_ref())
         .map(|s| s.items.len())
         .sum::<usize>();
@@ -191,14 +128,89 @@ pub fn check_specifications(
             budget: request.limit,
         });
     }
+    // Cross-check applicability without using it to infer or gate explicit coverage.
+    let mut works_by_key: BTreeMap<&str, &Projected<WorkItem>> = BTreeMap::new();
+    let mut referencing: BTreeMap<&str, BTreeSet<&str>> = BTreeMap::new();
+    for w in &works {
+        works_by_key.insert(&w.item.meta.external_key, w);
+        for r in &w.item.spec_refs {
+            referencing
+                .entry(&r.specification)
+                .or_default()
+                .insert(&w.item.meta.external_key);
+        }
+    }
+    let goal_keys = store
+        .goals(project.id)?
+        .into_iter()
+        .map(|g| g.item.meta.external_key)
+        .collect::<BTreeSet<_>>();
+    let mut association_diagnostics = vec![];
+    let mut association_issue =
+        |d: &Projected<Decision>, key: &str, reason: &str, status: &str| -> Result<()> {
+            let rows = required
+                .saturating_add(association_diagnostics.len())
+                .saturating_add(1);
+            if rows > request.limit {
+                return Err(Error::BudgetExceeded {
+                    required: rows,
+                    budget: request.limit,
+                });
+            }
+            association_diagnostics.push(
+                json!({"specification":d.item.meta.external_key,"work":key,
+            "status":status,"reasons":[reason],"source_ref":d.item.meta.source_ref,
+            "work_source_ref":works_by_key.get(key).map(|w|&w.item.meta.source_ref)}),
+            );
+            Ok(())
+        };
+    for d in decisions
+        .iter()
+        .filter(|d| selected(&d.item.meta.external_key) && d.item.specification.is_some())
+    {
+        let affected = d
+            .item
+            .affected_keys
+            .iter()
+            .map(String::as_str)
+            .collect::<BTreeSet<_>>();
+        let empty = BTreeSet::new();
+        let refs = referencing
+            .get(d.item.meta.external_key.as_str())
+            .unwrap_or(&empty);
+        for key in refs {
+            if !affected.contains(key) && !affected.contains("*") {
+                association_issue(
+                    d,
+                    key,
+                    "referencing_work_not_in_affected_keys",
+                    "needs_review",
+                )?;
+            }
+        }
+        let mut listed = affected
+            .iter()
+            .copied()
+            .filter(|key| *key != "*")
+            .collect::<BTreeSet<_>>();
+        if affected.contains("*") {
+            listed.extend(works_by_key.keys().copied());
+        }
+        for key in listed {
+            match works_by_key.get(key) {
+                None if goal_keys.contains(key) => continue,
+                None => association_issue(d, key, "affected_key_not_resolved", "unknown")?,
+                Some(_) if !refs.contains(key) => {
+                    association_issue(d, key, "affected_work_without_spec_ref", "needs_review")?
+                }
+                _ => (),
+            }
+        }
+    }
     // One transient item index per inspected specification, reused by refs and coverage.
     let item_indexes = decisions
         .iter()
-        .filter(|d| {
-            selected(&d.item.meta.external_key)
-                && (assessments[&d.item.meta.id].0 != "historical"
-                    || referenced_keys.contains(d.item.meta.external_key.as_str()))
-        })
+        .filter(|d| selected(&d.item.meta.external_key))
         .filter_map(|d| {
             d.item.specification.as_ref().map(|s| {
                 (
@@ -255,7 +267,6 @@ pub fn check_specifications(
             let mut unknown = false;
             let mut replacement_key = None;
             let mut observed_version = None;
-            let mut historical_document = false;
             if w.source.freshness != Freshness::Fresh {
                 unknown = true;
                 reasons.push("work_source_not_fresh");
@@ -286,17 +297,12 @@ pub fn check_specifications(
                 Some(ds) => {
                     let d = ds[0];
                     let (document_state, diagnostic) = assessments[&d.item.meta.id];
-                    historical_document = document_state == "historical";
-                    match document_state {
-                        "unknown" => {
-                            unknown = true;
-                            reasons.push("specification_not_currently_approved");
-                            if let Some(diagnostic) = diagnostic {
-                                reasons.push(diagnostic);
-                            }
+                    if document_state == "unknown" {
+                        unknown = true;
+                        reasons.push("specification_not_currently_approved");
+                        if let Some(diagnostic) = diagnostic {
+                            reasons.push(diagnostic);
                         }
-                        "historical" => reasons.push("specification_superseded"),
-                        _ => (),
                     }
                     if !r
                         .source_fingerprint
@@ -342,10 +348,6 @@ pub fn check_specifications(
             }
             let status = if unknown {
                 "unknown"
-            } else if historical_document
-                && (w.item.archived || w.item.status == WorkStatus::Cancelled)
-            {
-                "historical"
             } else if reasons.is_empty() {
                 "current"
             } else {
@@ -376,9 +378,6 @@ pub fn check_specifications(
             let Some(spec) = &d.item.specification else {
                 continue;
             };
-            if assessments[&d.item.meta.id].0 == "historical" {
-                continue;
-            }
             for item in &spec.items {
                 let (replacement, error) = replacement(&item_indexes[&d.item.meta.id], item);
                 let mapped = mapped_refs
@@ -437,6 +436,7 @@ pub fn check_specifications(
         .iter()
         .chain(requirements.iter())
         .chain(specifications.iter())
+        .chain(association_diagnostics.iter())
         .filter_map(|r| r["status"].as_str())
         .collect::<BTreeSet<_>>();
     let status = if !diagnostics.is_empty() || statuses.contains("unknown") {
@@ -448,6 +448,7 @@ pub fn check_specifications(
     };
     let report = json!({"version":1,"status":status,"selection":{"spec":request.spec},
         "specifications":specifications,"references":refs,"requirements":requirements,"counts":counts,"diagnostics":diagnostics,
+        "association_diagnostics":association_diagnostics,
         "read_only":true,"source_write_performed":false,"runtime_write_performed":false,
         "coverage_basis":"Explicit registered items and exact task references only; no prose scanning or inferred cancellations.",
         "boundary":"Matched/covered describe declared version bindings and task coverage, never semantic agreement, implementation, acceptance or completion. No source is modified."});
