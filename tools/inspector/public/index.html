@@ -163,9 +163,10 @@
             <span class="sub" id="sessionSub"></span>
           </header>
           <p class="why-note" data-note="sessions" hidden>
-            <span data-i18n="ui.active_sessions_note">These are conversations the runtime currently has open. Each row is one AWR session, not a host chat id. Packaged 0.4.0 hides this panel when the command is unsupported.</span>
+            <span data-i18n="ui.active_sessions_note">These are conversations the runtime currently has open. Each row is one AWR session, not a host chat id. Select a row to load session show. Packaged builds that return Unsupported hide this panel.</span>
           </p>
           <ul class="loops" id="sessionList"></ul>
+          <div class="session-detail" id="sessionDetail" hidden></div>
         </div>
 
         <div class="panel" id="eventPanel" hidden>

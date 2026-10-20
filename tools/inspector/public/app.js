@@ -119,6 +119,24 @@
       checkpoint: ['last_checkpoint_id'],
       startedAt:  ['started_at'],
     },
+    // awr session show --json: session plus latest/inherited checkpoint, claims and save attempts.
+    sessionShow: {
+      checkpoint: ['checkpoint'],
+      inherited:  ['inherited_checkpoint'],
+      claims:     ['claims'],
+      saves:      ['checkpoint_saves'],
+    },
+    checkpoint: {
+      id:         ['id'],
+      nextAction: ['next_action'],
+      openLoops:  ['open_loops'],
+    },
+    claim: {
+      agent:      ['agent_id', 'agent'],
+      status:     ['status'],
+      work:       ['work_item_id'],
+      expiresAt:  ['expires_at'],
+    },
     // event history uses event_brief: type, not event_type.
     event: {
       id:         ['id'],
@@ -210,6 +228,8 @@
     workDetail: {},        // Key to details.
     sources: null,
     sessions: { items: [], loaded: false, error: null, command: null, mayHaveMore: false },
+    selectedSession: null,
+    sessionDetail: null,
     events: { items: [], loaded: false, error: null, command: null, mayHaveMore: false },
     unsupported: new Set(),
     compile: null,
@@ -263,6 +283,7 @@
   }
 
   const detailGuard = createGenerationGuard();
+  const sessionGuard = createGenerationGuard();
   let sourceGeneration = 0;
 
   // ───────────────────────── API ─────────────────────────
@@ -944,6 +965,11 @@
       i18n.t('ui.no_active_sessions_detail'),
       (raw) => {
         const li = el('li');
+        const id = pick(raw, M.id, null);
+        const selected = id != null && String(id) === state.selectedSession;
+        li.style.cursor = 'pointer';
+        li.setAttribute('aria-selected', selected ? 'true' : 'false');
+        li.setAttribute('aria-expanded', selected ? 'true' : 'false');
         const status = pick(raw, M.status, '');
         li.appendChild(el('span', 'dot' + (status === 'active' ? ' ok' : '')));
         const agent = pick(raw, M.agent, i18n.t('ui.no_title_in_the_source'));
@@ -955,9 +981,165 @@
         ].filter(Boolean);
         li.appendChild(el('span', 'meta', bits.join(' · ')));
         li.appendChild(el('span', 'age', since(pick(raw, M.startedAt, null))));
+        if (id != null) {
+          li.addEventListener('click', () => {
+            void selectSession(id);
+          });
+        }
         return li;
       }
     );
+    renderSessionDetail();
+  }
+
+  function applySessionShow(id, response) {
+    const sid = id == null ? '' : String(id);
+    state.selectedSession = sid;
+    if (isUnsupported(response)) {
+      state.unsupported.add('session.show');
+      state.sessionDetail = {
+        id: sid,
+        loaded: true,
+        error: response.error,
+        data: null,
+        command: response.command,
+      };
+      return;
+    }
+    state.unsupported.delete('session.show');
+    if (response && response.ok) {
+      state.sessionDetail = {
+        id: sid,
+        loaded: true,
+        error: null,
+        data: response.data || {},
+        command: response.command,
+      };
+      return;
+    }
+    state.sessionDetail = {
+      id: sid,
+      loaded: true,
+      error: (response && response.error) || { code: 'Error', message: '' },
+      data: null,
+      command: response && response.command,
+    };
+  }
+
+  async function selectSession(id) {
+    const sid = id == null ? '' : String(id);
+    if (!sid) return;
+    if (state.selectedSession === sid && state.sessionDetail && state.sessionDetail.loaded) {
+      sessionGuard.invalidate();
+      state.selectedSession = null;
+      state.sessionDetail = null;
+      renderSessions();
+      return;
+    }
+    const token = sessionGuard.begin(sid);
+    state.selectedSession = sid;
+    state.sessionDetail = { id: sid, loaded: false, error: null, data: null, command: null };
+    renderSessions();
+
+    let response;
+    if (state.mode === 'demo') {
+      const demo = window.AWR_DEMO && window.AWR_DEMO.sessionShows
+        ? window.AWR_DEMO.sessionShows[sid]
+        : null;
+      response = demo
+        ? { ok: true, data: demo, command: 'awr session show ' + sid }
+        : { ok: false, error: { code: 'NotFound', message: i18n.t('ui.session_show_missing') } };
+    } else {
+      response = await callApi('/api/session?id=' + encodeURIComponent(sid));
+    }
+    if (!sessionGuard.isCurrent(token)) return;
+    applySessionShow(sid, response);
+    renderSessions();
+  }
+
+  function renderSessionDetail() {
+    const host = $('sessionDetail');
+    if (!host) return;
+    clear(host);
+    if (!state.selectedSession) {
+      host.hidden = true;
+      return;
+    }
+    host.hidden = false;
+    const bag = state.sessionDetail;
+    if (!bag || !bag.loaded) {
+      host.appendChild(el('p', 'sub', i18n.t('ui.session_detail_loading')));
+      return;
+    }
+    if (bag.error) {
+      host.appendChild(errorBlock(bag.error, bag.command));
+      return;
+    }
+    const data = bag.data || {};
+    const S = FIELD_MAP.sessionShow;
+    const C = FIELD_MAP.checkpoint;
+    const K = FIELD_MAP.claim;
+    const checkpoint = pick(data, S.checkpoint, null);
+    const inherited = pick(data, S.inherited, null);
+    const source = checkpoint || inherited;
+    const next = source ? pick(source, C.nextAction, null) : null;
+    const loops = source ? pick(source, C.openLoops, null) : null;
+    const claims = pick(data, S.claims, null);
+    const saves = pick(data, S.saves, null);
+
+    host.appendChild(el('h3', null, i18n.t('ui.session_show')));
+    if (bag.command) {
+      const cmd = el('div', 'cmd');
+      cmd.appendChild(el('span', 'prompt', '$'));
+      cmd.appendChild(el('code', null, bag.command));
+      host.appendChild(cmd);
+    }
+
+    const nextLine = el('p', null);
+    nextLine.appendChild(el('span', 'sub', i18n.t('ui.session_next_action') + ' '));
+    nextLine.appendChild(document.createTextNode(next || i18n.t('ui.session_no_checkpoint')));
+    host.appendChild(nextLine);
+
+    host.appendChild(el('p', 'sub', i18n.t('ui.session_open_loops')));
+    if (Array.isArray(loops) && loops.length) {
+      const ul = el('ul', 'open-loops');
+      for (const text of loops) ul.appendChild(el('li', null, String(text)));
+      host.appendChild(ul);
+    } else {
+      host.appendChild(el('p', null, i18n.t('ui.session_no_open_loops')));
+    }
+
+    if (inherited && pick(inherited, C.id, null) != null) {
+      host.appendChild(el(
+        'p',
+        'sub',
+        i18n.t('ui.session_inherited_checkpoint') + ' ' + pick(inherited, C.id)
+      ));
+    }
+
+    host.appendChild(el('p', 'sub', i18n.t('ui.session_claims')));
+    if (Array.isArray(claims) && claims.length) {
+      const ul = el('ul', 'open-loops');
+      for (const claim of claims) {
+        const bits = [
+          pick(claim, K.agent, null),
+          pick(claim, K.status, null),
+          pick(claim, K.work, null) != null ? 'work=' + pick(claim, K.work) : '',
+          pick(claim, K.expiresAt, null) != null ? until(pick(claim, K.expiresAt)) : '',
+        ].filter(Boolean);
+        ul.appendChild(el('li', null, bits.join(' · ')));
+      }
+      host.appendChild(ul);
+    } else {
+      host.appendChild(el('p', null, i18n.t('ui.session_no_claims')));
+    }
+
+    const incomplete = saves && typeof saves.incomplete_count === 'number'
+      ? saves.incomplete_count
+      : null;
+    if (incomplete != null) {
+      host.appendChild(el('p', 'sub', i18n.t('ui.session_incomplete_saves', { p0: incomplete })));
+    }
   }
 
   function renderEvents() {
@@ -1734,6 +1916,7 @@
     ++sourceGeneration;
     ++workPageGeneration;
     detailGuard.invalidate();
+    sessionGuard.invalidate();
     state.overviewWork = null;
     state.selectedWork = null;
     state.workFilter = 'all';
@@ -1745,16 +1928,19 @@
     state.status = null;
     state.sources = null;
     state.sessions = { items: [], loaded: false, error: null, command: null, mayHaveMore: false };
+    state.selectedSession = null;
+    state.sessionDetail = null;
     state.events = { items: [], loaded: false, error: null, command: null, mayHaveMore: false };
     state.unsupported = new Set();
     state.compile = null;
     state.raw = {};
     for (const id of ['fWork', 'workRows', 'workFilters', 'workPagination', 'workEmpty', 'workDetail',
-      'statusStrip', 'queueList', 'queueTabs', 'cpList', 'pendingList', 'sessionList', 'eventList',
+      'statusStrip', 'queueList', 'queueTabs', 'cpList', 'pendingList', 'sessionList', 'sessionDetail', 'eventList',
       'rawWorkBody', 'rawContextBody', 'rawOverviewBody', 'rawSourcesBody']) clear($(id));
     for (const id of ['navWorkCount', 'navSourceCount', 'workSub', 'queueSub', 'gapSub', 'pendingSub',
       'sessionSub', 'eventSub', 'srcTitle', 'srcSub', 'srcCmd', 'compileHint']) setText(id, '');
     if ($('sessionPanel')) $('sessionPanel').hidden = true;
+    if ($('sessionDetail')) $('sessionDetail').hidden = true;
     if ($('eventPanel')) $('eventPanel').hidden = true;
     $('fGoal').value = '';
     $('fIntent').value = '';
@@ -2260,7 +2446,7 @@
       teamWeb: () => teamWeb,
       createGenerationGuard, state, detailGuard, renderWorkDetail, normStatus, renderWork, loadWorkPage,
       renderPacketSize, doCompile, renderQueueList, fillWorkSelect, loadAll,
-      renderSessions, renderEvents, applyListResponse,
+      renderSessions, renderEvents, applyListResponse, applySessionShow, selectSession,
     };
   }
 })();

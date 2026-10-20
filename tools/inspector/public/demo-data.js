@@ -278,6 +278,38 @@
       },
     ],
 
+    sessionShows: {
+      101: {
+        session: {
+          id: 101,
+          agent_id: 'lin',
+          provider: 'cursor',
+          model: 'composer',
+          status: 'active',
+          work_item_id: 1,
+          last_checkpoint_id: 7,
+        },
+        checkpoint: {
+          id: 7,
+          session_id: 101,
+          next_action: i18n.t('demo.session_show_next'),
+          open_loops: [i18n.t('demo.session_show_loop')],
+          created_at: Date.now() - 4 * 60000,
+        },
+        inherited_checkpoint: null,
+        claims: [{
+          id: 8,
+          work_item_id: 1,
+          session_id: 101,
+          agent_id: 'lin',
+          status: 'active',
+          expires_at: Date.now() + 50 * 60000,
+        }],
+        checkpoint_saves: { incomplete_count: 0, attempts: [] },
+        resumed_successor: null,
+      },
+    },
+
     events: [
       {
         id: 501,

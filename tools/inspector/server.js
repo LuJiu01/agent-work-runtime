@@ -264,6 +264,7 @@ const COMMANDS = {
   contextCompile: { argv: ['context', 'compile'], write: false },
   sourceReindex: { argv: ['source', 'reindex'], write: true },
   sessionList: { argv: ['session', 'list', '--active'], write: false },
+  sessionShow: { argv: ['session', 'show'], write: false },
   eventHistory: { argv: ['event', 'history'], write: false },
   // Project map: the official read-only commands behind the snapshot (see public/project-map/extract.js).
   mapWorkGraph: { argv: ['work', 'graph'], write: false },
@@ -662,6 +663,14 @@ const routes = {
       return { ok: false, error: { code: 'BadRequest', message: 'limit must be an integer from 1 to 100' } };
     }
     return runCommand('sessionList', ['--limit', String(limit)]);
+  },
+
+  'GET /api/session': async (url) => {
+    const id = asKey(url.searchParams.get('id'));
+    if (!id) {
+      return { ok: false, error: { code: 'BadRequest', message: 'A valid id parameter is required' } };
+    }
+    return runCommand('sessionShow', [id]);
   },
 
   'GET /api/events': async (url) => {

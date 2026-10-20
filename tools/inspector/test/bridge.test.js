@@ -598,6 +598,47 @@ test('session list and event history are forwarded with a bounded limit', async 
   }
 });
 
+test('session show is forwarded with a validated id', async () => {
+  const dir = fs.mkdtempSync(path.join(os.tmpdir(), 'awr-argv-'));
+  const argvLog = path.join(dir, 'argv.jsonl');
+  let b;
+  try {
+    b = await startBridge({ env: { STUB_ARGV_OUT: argvLog } });
+    const shown = await (await fetch(`${b.base}/api/session?id=11`, { headers: GUARD })).json();
+    assert.equal(shown.ok, true, JSON.stringify(shown));
+    assert.equal(shown.data.checkpoint.next_action, 'Wire the session show panel');
+    assert.match(shown.command, /session show 11/);
+    const calls = fs.readFileSync(argvLog, 'utf8').trim().split('\n').map(JSON.parse);
+    const showArgs = calls.find((args) => args.includes('session') && args.includes('show'));
+    assert.ok(showArgs);
+    assert.equal(showArgs[showArgs.indexOf('show') + 1], '11');
+  } finally {
+    if (b) await b.stop();
+    fs.rmSync(dir, { recursive: true, force: true });
+  }
+});
+
+test('session show rejects a missing or invalid id before execution', async () => {
+  const dir = fs.mkdtempSync(path.join(os.tmpdir(), 'awr-argv-'));
+  const argvLog = path.join(dir, 'argv.jsonl');
+  let b;
+  try {
+    b = await startBridge({ env: { STUB_ARGV_OUT: argvLog } });
+    const before = fs.existsSync(argvLog) ? fs.readFileSync(argvLog, 'utf8') : '';
+    for (const pathName of ['/api/session', '/api/session?id=', '/api/session?id=bad%20id']) {
+      const invalid = await (await fetch(`${b.base}${pathName}`, { headers: GUARD })).json();
+      assert.equal(invalid.ok, false);
+      assert.equal(invalid.error.code, 'BadRequest');
+      assert.ok(!invalid.command, 'Do not spawn a child process');
+    }
+    const after = fs.existsSync(argvLog) ? fs.readFileSync(argvLog, 'utf8') : '';
+    assert.equal(after, before, 'Do not spawn a child process');
+  } finally {
+    if (b) await b.stop();
+    fs.rmSync(dir, { recursive: true, force: true });
+  }
+});
+
 test('session and event routes default to limit 20', async () => {
   const sessions = await (await fetch(`${bridge.base}/api/sessions`, { headers: GUARD })).json();
   assert.equal(sessions.ok, true, JSON.stringify(sessions));

@@ -448,6 +448,15 @@ tr.expando td { background: var(--surface-2); white-space: normal; }
 /* Lists */
 
 .loops { list-style: none; margin: 0; padding: 0; }
+.loops li[aria-selected="true"] { background: var(--accent-wash); }
+.session-detail { padding: 4px 18px 16px; border-top: 1px solid var(--line-soft); }
+.session-detail h3 { margin: 12px 0 8px; font-size: 13px; font-weight: 600; }
+.session-detail .cmd { margin: 0 0 10px; }
+.session-detail .open-loops { margin: 4px 0 10px 18px; padding: 0; }
+.session-detail .open-loops li {
+  display: list-item; padding: 2px 0; border: 0; background: none;
+  grid-template-columns: none;
+}
 .loops li {
   display: grid; grid-template-columns: auto minmax(0, 1fr) auto;
   gap: 3px 13px; align-items: baseline; padding: 13px 18px;

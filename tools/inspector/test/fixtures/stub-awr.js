@@ -171,6 +171,39 @@ if (mode === 'slow') {
   });
 } else if (joined.includes('source reindex')) {
   emit({ ok: true, project_revision: 8 });
+} else if (joined.includes('session show')) {
+  emit({
+    ok: true,
+    project_revision: 7,
+    session: {
+      id: 11,
+      agent_id: 'stub-agent',
+      provider: 'stub',
+      model: 'stub-model',
+      status: 'active',
+      work_item_id: 1,
+      last_checkpoint_id: 3,
+      started_at: 1700000000000,
+    },
+    checkpoint: {
+      id: 3,
+      session_id: 11,
+      next_action: 'Wire the session show panel',
+      open_loops: ['Confirm checkpoint JSON', 'Render open loops'],
+      created_at: 1700000000000,
+    },
+    inherited_checkpoint: null,
+    claims: [{
+      id: 9,
+      work_item_id: 1,
+      session_id: 11,
+      agent_id: 'stub-agent',
+      status: 'active',
+      expires_at: 1700003600000,
+    }],
+    checkpoint_saves: { incomplete_count: 0, attempts: [] },
+    resumed_successor: null,
+  });
 } else if (joined.includes('session list')) {
   emit({
     ok: true,
