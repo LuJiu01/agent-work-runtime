@@ -2,6 +2,7 @@
 //! Callers refresh source projections before acquisition. Cleanup remains possible with stale sources.
 use awr_core::{Claim, Event, Id, Revision, Session, SessionDraft, SessionOutcome, SessionStarted};
 pub use awr_core::{Error, Result};
+use std::path::Path;
 mod artifact;
 mod branch;
 mod branch_close;
@@ -166,6 +167,42 @@ pub use workflow::{
 pub const ARTIFACT_IMPORT_CAP: u64 = 64 * 1024 * 1024;
 pub const REGISTERED_CONTENT_READ_CAP: u64 = 16 * 1024 * 1024;
 
+/// Refuse a locator that provably resolves outside the project root and its authorized roots.
+///
+/// This is the write-side twin of the read-path rule, so registration cannot store a record
+/// that `read_registered_file` is already guaranteed to reject. Both sides call
+/// `read::within_project_or_authorized`, so the containment rule exists once. Only provable
+/// escapes are refused: a locator that cannot be resolved yet keeps its previous behaviour,
+/// because this guard does not predict where a caller will place the file next.
+fn reject_provably_outside_root(store: &Store, project: Id, locator: &str) -> Result<()> {
+    // Project locators carry their own rule: `awr_source::Locator` resolves them
+    // against the project root only and refuses every escaping component at parse
+    // time. Returning early keeps this guard's domain disjoint from that rule, so
+    // the two checks cannot disagree about which one sees the locator first.
+    if locator.starts_with("project://") {
+        return Ok(());
+    }
+    let project = store.project(project)?;
+    let Ok(root) = project.root.canonicalize() else {
+        return Ok(());
+    };
+    let candidate = if Path::new(locator).is_absolute() {
+        Path::new(locator).to_path_buf()
+    } else {
+        root.join(locator)
+    };
+    let Ok(path) = candidate.canonicalize() else {
+        return Ok(());
+    };
+    if read::within_project_or_authorized(&root, &path)? {
+        Ok(())
+    } else {
+        Err(Error::RuleViolation(
+            "registered file is outside project and authorized roots".into(),
+        ))
+    }
+}
+
 pub struct Runtime<'a> {
     store: &'a mut Store,
     project: Id,
@@ -176,6 +213,7 @@ impl<'a> Runtime<'a> {
         expected: Revision,
         draft: awr_core::EvidenceDraft,
     ) -> Result<(awr_core::Evidence, Event)> {
+        reject_provably_outside_root(self.store, self.project, &draft.locator)?;
         self.store.record_evidence(self.project, expected, draft)
     }
     pub fn handoff(
