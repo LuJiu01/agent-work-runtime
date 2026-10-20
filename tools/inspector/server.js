@@ -265,6 +265,7 @@ const COMMANDS = {
   sourceReindex: { argv: ['source', 'reindex'], write: true },
   sessionList: { argv: ['session', 'list', '--active'], write: false },
   sessionShow: { argv: ['session', 'show'], write: false },
+  recoveryInspect: { argv: ['recovery', 'inspect'], write: false },
   eventHistory: { argv: ['event', 'history'], write: false },
   // Project map: the official read-only commands behind the snapshot (see public/project-map/extract.js).
   mapWorkGraph: { argv: ['work', 'graph'], write: false },
@@ -671,6 +672,14 @@ const routes = {
       return { ok: false, error: { code: 'BadRequest', message: 'A valid id parameter is required' } };
     }
     return runCommand('sessionShow', [id]);
+  },
+
+  'GET /api/recovery': async (url) => {
+    const session = asKey(url.searchParams.get('session'));
+    if (!session) {
+      return { ok: false, error: { code: 'BadRequest', message: 'A valid session parameter is required' } };
+    }
+    return runCommand('recoveryInspect', ['--session', session]);
   },
 
   'GET /api/events': async (url) => {

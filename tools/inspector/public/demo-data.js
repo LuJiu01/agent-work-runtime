@@ -204,8 +204,8 @@
         basis: 'project-wide registered runtime findings',
         total: 2,
         items: [
+          { code: 'active_session', kind: 'session', id: 101 },
           { code: 'execution_outcome_unknown', kind: 'execution', id: 'exe_4411' },
-          { code: 'mutation_proposal_pending', kind: 'proposal', id: 'prp_9002' },
         ],
       },
       organization: {
@@ -307,6 +307,31 @@
         }],
         checkpoint_saves: { incomplete_count: 0, attempts: [] },
         resumed_successor: null,
+      },
+    },
+
+    recoveryInspects: {
+      101: {
+        session: { id: 101, agent_id: 'lin', status: 'active', work_item_id: 1 },
+        checkpoint: {
+          id: 7,
+          next_action: i18n.t('demo.session_show_next'),
+          open_loops: [i18n.t('demo.session_show_loop')],
+        },
+        executions: [{
+          execution_id: 'exe_4411',
+          operation_key: 'live-report',
+          purpose: 'slow_child',
+          origin_session_id: 101,
+          state: 'unknown',
+          verified: false,
+          basis: 'missing supervisor',
+          next_action: 'Inspect the registered execution before retrying',
+        }],
+        all_execution_states_verified: false,
+        source_refresh_performed: false,
+        side_effects_performed: false,
+        next_step: 'Use doctor, then session resume. Do not retry automatically.',
       },
     },
 

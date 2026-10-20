@@ -137,6 +137,26 @@
       work:       ['work_item_id'],
       expiresAt:  ['expires_at'],
     },
+    // awr recovery inspect --json: session, last checkpoint, execution observations.
+    recovery: {
+      session:    ['session'],
+      checkpoint: ['checkpoint'],
+      executions: ['executions'],
+      allVerified:['all_execution_states_verified'],
+      nextStep:   ['next_step'],
+      sideEffects:['side_effects_performed'],
+      sourceRefresh:['source_refresh_performed'],
+    },
+    executionObservation: {
+      id:         ['execution_id', 'id'],
+      state:      ['state'],
+      verified:   ['verified'],
+      basis:      ['basis'],
+      nextAction: ['next_action'],
+      operation:  ['operation_key'],
+      purpose:    ['purpose'],
+      exitCode:   ['exit_code'],
+    },
     // event history uses event_brief: type, not event_type.
     event: {
       id:         ['id'],
@@ -230,6 +250,8 @@
     sessions: { items: [], loaded: false, error: null, command: null, mayHaveMore: false },
     selectedSession: null,
     sessionDetail: null,
+    selectedRecovery: null,
+    recoveryDetail: null,
     events: { items: [], loaded: false, error: null, command: null, mayHaveMore: false },
     unsupported: new Set(),
     compile: null,
@@ -284,6 +306,7 @@
 
   const detailGuard = createGenerationGuard();
   const sessionGuard = createGenerationGuard();
+  const recoveryGuard = createGenerationGuard();
   let sourceGeneration = 0;
 
   // ───────────────────────── API ─────────────────────────
@@ -867,10 +890,16 @@
    * Show pending runtime operations only when status supplies them. Release 0.4.0
    * omits this field, so hide the entire panel instead of showing a permanent empty state.
    */
+  function pendingSessionId(op) {
+    if (!op || op.kind !== 'session' || op.id == null || op.id === '') return null;
+    return String(op.id);
+  }
+
   function renderPending(s) {
     const panel = $('pendingPanel');
-    if (!s.pendingOps.length && !s.pendingTotal) {
-      panel.hidden = true;
+    if (!s || (!s.pendingOps.length && !s.pendingTotal)) {
+      if (panel) panel.hidden = true;
+      if ($('recoveryDetail')) $('recoveryDetail').hidden = true;
       return;
     }
     panel.hidden = false;
@@ -882,11 +911,209 @@
     clear(list);
     for (const op of s.pendingOps.slice(0, 5)) {
       const li = el('li');
+      const selected = op.id != null && String(op.id) === state.selectedRecovery;
+      li.style.cursor = 'pointer';
+      li.setAttribute('aria-selected', selected ? 'true' : 'false');
+      li.setAttribute('aria-expanded', selected ? 'true' : 'false');
       li.appendChild(el('span', 'dot warn'));
       li.appendChild(el('span', 'what', op.code || i18n.t('ui.no_code')));
       li.appendChild(el('span', 'meta', [op.kind, op.id].filter(Boolean).join(' · ')));
       li.appendChild(el('span', 'age', ''));
+      li.addEventListener('click', () => {
+        void selectRecovery(op);
+      });
       list.appendChild(li);
+    }
+    renderRecoveryDetail();
+  }
+
+  function applyRecoveryInspect(id, response) {
+    const sid = id == null ? '' : String(id);
+    state.selectedRecovery = sid;
+    if (isUnsupported(response)) {
+      state.unsupported.add('recovery.inspect');
+      state.recoveryDetail = {
+        id: sid,
+        loaded: true,
+        error: response.error,
+        data: null,
+        command: response.command,
+      };
+      return;
+    }
+    state.unsupported.delete('recovery.inspect');
+    if (response && response.ok) {
+      state.recoveryDetail = {
+        id: sid,
+        loaded: true,
+        error: null,
+        data: response.data || {},
+        command: response.command,
+      };
+      return;
+    }
+    state.recoveryDetail = {
+      id: sid,
+      loaded: true,
+      error: (response && response.error) || { code: 'Error', message: '' },
+      data: null,
+      command: response && response.command,
+    };
+  }
+
+  async function selectRecovery(op) {
+    const sessionId = pendingSessionId(op);
+    const rowId = op && op.id != null ? String(op.id) : '';
+    if (!rowId) return;
+    if (state.selectedRecovery === rowId && state.recoveryDetail && state.recoveryDetail.loaded) {
+      recoveryGuard.invalidate();
+      state.selectedRecovery = null;
+      state.recoveryDetail = null;
+      renderPending(state.status);
+      return;
+    }
+    if (!sessionId) {
+      recoveryGuard.invalidate();
+      state.selectedRecovery = rowId;
+      state.recoveryDetail = {
+        id: rowId,
+        loaded: true,
+        error: null,
+        data: null,
+        command: null,
+        needsSession: true,
+        kind: op.kind || '',
+      };
+      renderPending(state.status);
+      return;
+    }
+    const token = recoveryGuard.begin(sessionId);
+    state.selectedRecovery = sessionId;
+    state.recoveryDetail = { id: sessionId, loaded: false, error: null, data: null, command: null };
+    renderPending(state.status);
+
+    let response;
+    if (state.mode === 'demo') {
+      const demo = window.AWR_DEMO && window.AWR_DEMO.recoveryInspects
+        ? window.AWR_DEMO.recoveryInspects[sessionId]
+        : null;
+      response = demo
+        ? { ok: true, data: demo, command: 'awr recovery inspect --session ' + sessionId }
+        : { ok: false, error: { code: 'NotFound', message: i18n.t('ui.session_show_missing') } };
+    } else {
+      response = await callApi('/api/recovery?session=' + encodeURIComponent(sessionId));
+    }
+    if (!recoveryGuard.isCurrent(token)) return;
+    applyRecoveryInspect(sessionId, response);
+    renderPending(state.status);
+  }
+
+  function renderRecoveryDetail() {
+    const host = $('recoveryDetail');
+    if (!host) return;
+    clear(host);
+    if (!state.selectedRecovery) {
+      host.hidden = true;
+      return;
+    }
+    host.hidden = false;
+    const bag = state.recoveryDetail;
+    if (!bag || !bag.loaded) {
+      host.appendChild(el('p', 'sub', i18n.t('ui.recovery_detail_loading')));
+      return;
+    }
+    if (bag.needsSession) {
+      host.appendChild(el(
+        'p',
+        null,
+        i18n.t('ui.recovery_needs_session', { kind: bag.kind || 'unknown', id: bag.id })
+      ));
+      return;
+    }
+    if (bag.error) {
+      host.appendChild(errorBlock(bag.error, bag.command));
+      return;
+    }
+    const data = bag.data || {};
+    const R = FIELD_MAP.recovery;
+    const C = FIELD_MAP.checkpoint;
+    const E = FIELD_MAP.executionObservation;
+    const session = pick(data, R.session, null);
+    const checkpoint = pick(data, R.checkpoint, null);
+    const executions = pick(data, R.executions, null);
+    const allVerified = pick(data, R.allVerified, null);
+    const nextStep = pick(data, R.nextStep, null);
+    const sideEffects = pick(data, R.sideEffects, null);
+    const sourceRefresh = pick(data, R.sourceRefresh, null);
+
+    host.appendChild(el('h3', null, i18n.t('ui.recovery_inspect')));
+    if (bag.command) {
+      const cmd = el('div', 'cmd');
+      cmd.appendChild(el('span', 'prompt', '$'));
+      cmd.appendChild(el('code', null, bag.command));
+      host.appendChild(cmd);
+    }
+    if (sideEffects === false && sourceRefresh === false) {
+      host.appendChild(el('p', 'sub', i18n.t('ui.recovery_no_side_effects')));
+    }
+
+    const next = checkpoint ? pick(checkpoint, C.nextAction, null) : null;
+    const loops = checkpoint ? pick(checkpoint, C.openLoops, null) : null;
+    const nextLine = el('p', null);
+    nextLine.appendChild(el('span', 'sub', i18n.t('ui.session_next_action') + ' '));
+    nextLine.appendChild(document.createTextNode(next || i18n.t('ui.session_no_checkpoint')));
+    host.appendChild(nextLine);
+
+    host.appendChild(el('p', 'sub', i18n.t('ui.session_open_loops')));
+    if (Array.isArray(loops) && loops.length) {
+      const ul = el('ul', 'open-loops');
+      for (const text of loops) ul.appendChild(el('li', null, String(text)));
+      host.appendChild(ul);
+    } else {
+      host.appendChild(el('p', null, i18n.t('ui.session_no_open_loops')));
+    }
+
+    host.appendChild(el('p', 'sub', i18n.t('ui.recovery_executions')));
+    if (Array.isArray(executions) && executions.length) {
+      const ul = el('ul', 'open-loops');
+      for (const item of executions) {
+        const bits = [
+          pick(item, E.id, null) != null ? String(pick(item, E.id)) : '',
+          pick(item, E.state, null),
+          pick(item, E.verified, null) === true
+            ? i18n.t('ui.recovery_verified')
+            : pick(item, E.verified, null) === false
+              ? i18n.t('ui.recovery_unverified')
+              : '',
+          pick(item, E.operation, null),
+          pick(item, E.exitCode, null) != null ? 'exit=' + pick(item, E.exitCode) : '',
+          pick(item, E.basis, null),
+        ].filter(Boolean);
+        const li = el('li', null, bits.join(' · '));
+        const action = pick(item, E.nextAction, null);
+        if (action) {
+          li.appendChild(document.createTextNode(' — ' + action));
+        }
+        ul.appendChild(li);
+      }
+      host.appendChild(ul);
+    } else {
+      host.appendChild(el('p', null, i18n.t('ui.recovery_no_executions')));
+    }
+
+    if (allVerified === true) {
+      host.appendChild(el('p', 'sub', i18n.t('ui.recovery_all_verified')));
+    } else if (allVerified === false) {
+      host.appendChild(el('p', 'sub', i18n.t('ui.recovery_not_all_verified')));
+    }
+    if (nextStep) {
+      const step = el('p', null);
+      step.appendChild(el('span', 'sub', i18n.t('ui.recovery_next_step') + ' '));
+      step.appendChild(document.createTextNode(String(nextStep)));
+      host.appendChild(step);
+    }
+    if (session && pick(session, FIELD_MAP.session.id, null) != null) {
+      host.appendChild(el('p', 'sub', 'session=' + pick(session, FIELD_MAP.session.id)));
     }
   }
 
@@ -1917,6 +2144,7 @@
     ++workPageGeneration;
     detailGuard.invalidate();
     sessionGuard.invalidate();
+    recoveryGuard.invalidate();
     state.overviewWork = null;
     state.selectedWork = null;
     state.workFilter = 'all';
@@ -1930,15 +2158,19 @@
     state.sessions = { items: [], loaded: false, error: null, command: null, mayHaveMore: false };
     state.selectedSession = null;
     state.sessionDetail = null;
+    state.selectedRecovery = null;
+    state.recoveryDetail = null;
     state.events = { items: [], loaded: false, error: null, command: null, mayHaveMore: false };
     state.unsupported = new Set();
     state.compile = null;
     state.raw = {};
     for (const id of ['fWork', 'workRows', 'workFilters', 'workPagination', 'workEmpty', 'workDetail',
-      'statusStrip', 'queueList', 'queueTabs', 'cpList', 'pendingList', 'sessionList', 'sessionDetail', 'eventList',
+      'statusStrip', 'queueList', 'queueTabs', 'cpList', 'pendingList', 'recoveryDetail', 'sessionList', 'sessionDetail', 'eventList',
       'rawWorkBody', 'rawContextBody', 'rawOverviewBody', 'rawSourcesBody']) clear($(id));
     for (const id of ['navWorkCount', 'navSourceCount', 'workSub', 'queueSub', 'gapSub', 'pendingSub',
       'sessionSub', 'eventSub', 'srcTitle', 'srcSub', 'srcCmd', 'compileHint']) setText(id, '');
+    if ($('pendingPanel')) $('pendingPanel').hidden = true;
+    if ($('recoveryDetail')) $('recoveryDetail').hidden = true;
     if ($('sessionPanel')) $('sessionPanel').hidden = true;
     if ($('sessionDetail')) $('sessionDetail').hidden = true;
     if ($('eventPanel')) $('eventPanel').hidden = true;
@@ -2447,6 +2679,7 @@
       createGenerationGuard, state, detailGuard, renderWorkDetail, normStatus, renderWork, loadWorkPage,
       renderPacketSize, doCompile, renderQueueList, fillWorkSelect, loadAll,
       renderSessions, renderEvents, applyListResponse, applySessionShow, selectSession,
+      renderPending, applyRecoveryInspect, selectRecovery,
     };
   }
 })();

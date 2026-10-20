@@ -171,6 +171,41 @@ if (mode === 'slow') {
   });
 } else if (joined.includes('source reindex')) {
   emit({ ok: true, project_revision: 8 });
+} else if (joined.includes('recovery inspect')) {
+  emit({
+    ok: true,
+    project_revision: 7,
+    session: { id: 11, agent_id: 'stub-agent', status: 'active', work_item_id: 1 },
+    checkpoint: {
+      id: 3,
+      next_action: 'Collect the report then review the failed import',
+      open_loops: ['Independent report review remains'],
+    },
+    executions: [{
+      execution_id: 44,
+      operation_key: 'live-report',
+      purpose: 'slow_child',
+      origin_session_id: 11,
+      state: 'running',
+      verified: true,
+      basis: 'loopback supervisor',
+      next_action: 'Wait for the supervisor completion event',
+    }, {
+      execution_id: 45,
+      operation_key: 'failed-report',
+      purpose: 'failed_child',
+      origin_session_id: 11,
+      state: 'failed',
+      verified: true,
+      exit_code: 7,
+      basis: 'supervisor completion event',
+      next_action: 'Read the result and logs before advancing work',
+    }],
+    all_execution_states_verified: true,
+    source_refresh_performed: false,
+    side_effects_performed: false,
+    next_step: 'Use doctor for read-only current-source and artifact diagnostics, then session resume.',
+  });
 } else if (joined.includes('session show')) {
   emit({
     ok: true,
