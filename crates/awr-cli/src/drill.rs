@@ -238,7 +238,8 @@ fn history(
         .cursor
         .as_deref()
         .map(serde_json::from_str::<EventCursor>)
-        .transpose()?;
+        .transpose()
+        .map_err(|_| Error::InvalidInput("invalid event cursor JSON".into()))?;
     query.limit = window.limit;
     let page = db.store.query_events(db.project.id, &query)?;
     let mut value = db.metadata(page.project_revision);

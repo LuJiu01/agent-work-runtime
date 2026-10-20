@@ -707,7 +707,8 @@ pub fn work(root: &Path, command: &WorkCommand, json_output: bool) -> Result<()>
                 .cursor
                 .as_ref()
                 .map(|s| serde_json::from_str::<EventCursor>(s))
-                .transpose()?;
+                .transpose()
+                .map_err(|_| Error::InvalidInput("invalid event cursor JSON".into()))?;
             let query = EventQuery {
                 work_item_id: Some(work),
                 session_id: args.session,
