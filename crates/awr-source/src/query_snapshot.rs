@@ -1,5 +1,5 @@
-use crate::{IndexReport, IndexedSource, Manifest, index_project_locked};
-use awr_core::{Freshness, Id, Result};
+use crate::{IndexReport, IndexedSource, Manifest, index_project, index_project_locked};
+use awr_core::{Error, Freshness, Id, Project, Result};
 use awr_store::Store;
 use serde_json::json;
 use std::path::Path;
@@ -15,6 +15,29 @@ pub fn source_state_fingerprint(store: &Store, project: Id) -> Result<String> {
     Ok(crate::fingerprint(&serde_json::to_vec(
         &json!({"version":1,"project_id":project,"sources":sources}),
     )?))
+}
+/// Verify sources against a disposable RAM snapshot without publishing an ephemeral revision.
+/// Call before and after computing a read result; never pass a persistent store here.
+pub fn verify_read_snapshot(
+    store: &mut Store,
+    root: &Path,
+    project: &Project,
+) -> Result<IndexReport> {
+    if store.project(project.id)?.project_revision != project.project_revision {
+        return Err(Error::SourceStale(
+            "the read snapshot changed; run awr source reindex and inspect again".into(),
+        ));
+    }
+    let refresh = index_project(store, root, &Manifest::load(root)?, false)?;
+    if !refresh.ok
+        || refresh.pending != 0
+        || refresh.indexed != 0
+        || refresh.retired != 0
+        || refresh.project_revision != project.project_revision
+    {
+        return Err(Error::SourceStale("source files or mappings differ from their indexed projection; run awr source reindex and inspect again".into()));
+    }
+    Ok(refresh)
 }
 /// Hold the same source transition guard through refresh and SQLite's coherent RAM copy.
 /// Runtime events may advance the snapshot beyond the source refresh interval.

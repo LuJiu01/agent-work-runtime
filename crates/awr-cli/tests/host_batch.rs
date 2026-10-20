@@ -105,6 +105,35 @@ impl Drop for Host {
 }
 
 #[test]
+fn specification_refs_in_batch_fields_and_imports_remain_yaml_only() {
+    for md in [false, true] {
+        let h = Host::new(md);
+        let refs = json!([{"specification":"reading", "item":"R", "source_fingerprint":format!("sha256:{}", "a".repeat(64))}]);
+        for operation in [
+            json!({"operation":"fields","target":"W","fields":{"spec_refs":refs}}),
+            json!({"operation":"import","external_key":"N","title":"New reading","fields":{"spec_refs":refs},"duplicate":"fail"}),
+        ] {
+            let key = operation["operation"].as_str().unwrap();
+            let before = h.text(h.file);
+            let revision = h.revision();
+            h.request(key, json!([operation]));
+            if md {
+                h.error(
+                    &["batch", "change", "--input", "batch.json"],
+                    "MutationUnsupported",
+                );
+                assert_eq!(h.text(h.file), before);
+                assert_eq!(h.revision(), revision);
+            } else {
+                h.accept(&h.preview());
+                let target = if key == "fields" { "W" } else { "N" };
+                assert_eq!(h.ok(&["work", "show", target])["work"]["spec_refs"], refs);
+            }
+        }
+    }
+}
+
+#[test]
 fn all_operations_are_preflighted_before_writing_and_exact_preview_is_required() {
     for md in [false, true] {
         let h = Host::new(md);

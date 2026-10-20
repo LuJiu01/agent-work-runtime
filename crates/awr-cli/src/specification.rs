@@ -1,5 +1,5 @@
 use awr_core::*;
-use awr_source::{Manifest, index_project};
+use awr_source::verify_read_snapshot;
 use awr_store::Store;
 use clap::Subcommand;
 use serde_json::json;
@@ -23,23 +23,7 @@ pub fn run(root: &Path, command: &SpecificationCommand, json_output: bool) -> Re
     let runtime = crate::source::runtime_dir(&root, false)?;
     let mut store = Store::read_snapshot(&runtime.join("state.db"), 256 * 1024 * 1024)?;
     let project = store.project_by_root(&root)?;
-    let manifest = Manifest::load(&root)?;
-    let verify = |store: &mut Store| -> Result<()> {
-        let r = index_project(store, &root, &manifest, false)?;
-        if !r.ok
-            || r.pending != 0
-            || r.indexed != 0
-            || r.retired != 0
-            || r.project_revision != project.project_revision
-        {
-            return Err(Error::SourceStale(
-                "spec check requires current indexed sources; run source reindex and inspect again"
-                    .into(),
-            ));
-        }
-        Ok(())
-    };
-    verify(&mut store)?;
+    verify_read_snapshot(&mut store, &root, &project)?;
     let mut value = awr_runtime::check_specifications(
         &store,
         &root,
@@ -48,7 +32,7 @@ pub fn run(root: &Path, command: &SpecificationCommand, json_output: bool) -> Re
             limit: *limit,
         },
     )?;
-    verify(&mut store)?;
+    verify_read_snapshot(&mut store, &root, &project)?;
     value["ok"] = json!(true);
     value["project_id"] = json!(project.id);
     value["project_revision"] = json!(project.project_revision);

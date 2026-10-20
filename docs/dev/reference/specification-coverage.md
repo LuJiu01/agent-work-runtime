@@ -109,6 +109,9 @@ decisions without these optional fields keep their existing behavior.
 Use existing reviewed source editing/batch operations to update the binding.
 `spec_refs` is supported by YAML work creation and field changes; changing it is
 part of the planning contract and cannot bypass an active execution claim.
+Markdown task ledgers reject `spec_refs` during source parsing, creation and field
+changes, including HTML metadata. Remove that field explicitly from a Markdown
+ledger before reindexing; this contribution does not add Markdown reference support.
 After upgrading, explicitly reindex: the ledger and decision adapter versions
 change so previously ignored metadata is projected. No database schema migration
 or additional task authority is introduced.

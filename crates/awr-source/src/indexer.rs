@@ -97,7 +97,7 @@ fn mapping_key(spec: &SourceSpec) -> String {
 /// Configuration identity shared by indexing, source mutations and read-only diagnosis.
 pub fn source_configuration(spec: &SourceSpec, minimal_context: bool) -> serde_json::Value {
     let mut config = json!({"mapping_key":mapping_key(spec),"adapter_options":spec.options,"adapter_version":match spec.adapter.as_str() {
-        "markdown-ledger-v1" => 5,
+        "markdown-ledger-v1" => 6,
         "yaml-ledger-v1" => 6,
         "markdown-directory-v1" => 5,
         "yaml-workstream-ledger-v1" => 4,

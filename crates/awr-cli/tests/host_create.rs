@@ -85,6 +85,29 @@ impl Drop for Host {
 }
 
 #[test]
+fn yaml_creation_preserves_explicit_specification_refs() {
+    let h = Host::new("work_items: []\n", "");
+    let refs = json!([{"specification":"reading", "item":"R", "source_fingerprint":format!("sha256:{}", "a".repeat(64))}]);
+    h.write("draft.json", &json!({"version":1,"request_key":"specification","title":"Review requirement", "fields":{"spec_refs":refs}}).to_string());
+    let preview = h.ok(&["work", "create", "--input", "draft.json"]);
+    let saved = h.ok(&[
+        "work",
+        "create",
+        "--input",
+        "draft.json",
+        "--accept",
+        "--expected-preview",
+        preview["preview"]["fingerprint"].as_str().unwrap(),
+        "--expected-revision",
+        &preview["project_revision"].to_string(),
+    ]);
+    let work = h.ok(&["work", "show", saved["external_key"].as_str().unwrap()]);
+    assert_eq!(work["work"]["spec_refs"], refs);
+    assert!(work["source_ref"]["section_fingerprint"].is_string());
+    assert_eq!(work["work"]["status"], "draft");
+}
+
+#[test]
 fn structured_creation_preserves_known_facts_and_binds_them_to_the_request() {
     let h = Host::new("work_items: []\n", "");
     let mut input = json!({"version":1,"request_key":"structured-one","title":"核对一张发票",

@@ -486,6 +486,13 @@ impl YamlLedgerAdapter {
             let work = WorkItem {
                 spec_refs: match value.get("spec_refs") {
                     None => vec![],
+                    Some(_) if context.source.adapter == "markdown-ledger-v1" => {
+                        return Err(invalid(
+                            &format!("{pointer}/spec_refs"), "ledger.spec_refs",
+                            "spec_refs is supported only in YAML ledgers",
+                            "Remove spec_refs from the Markdown ledger; use a registered YAML ledger for specification references.",
+                        ));
+                    }
                     Some(value) => {
                         let refs: Vec<awr_core::SpecificationReference> = serde_json::from_value(value.clone()).map_err(|_| invalid(
                             &format!("{pointer}/spec_refs"), "ledger.spec_refs",

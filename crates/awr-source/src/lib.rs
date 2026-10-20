@@ -19,6 +19,7 @@ mod query_snapshot;
 mod source_concurrency;
 pub use query_snapshot::{
     QuerySnapshot, recorded_snapshot, refresh_snapshot, source_state_fingerprint,
+    verify_read_snapshot,
 };
 mod yaml_create;
 mod yaml_edit;

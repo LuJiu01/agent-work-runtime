@@ -45,7 +45,6 @@ fn replacement(
 fn document_status(
     start: &Projected<Decision>,
     documents: &BTreeMap<&str, Vec<&Projected<Decision>>>,
-    trusted_adoptions: &BTreeSet<Id>,
 ) -> (&'static str, Option<&'static str>) {
     let mut current = start;
     let mut seen = BTreeSet::new();
@@ -77,7 +76,7 @@ fn document_status(
             DecisionStatus::Superseded => (),
             _ => return ("unknown", Some("document_replacement_not_approved")),
         }
-        if current.item.adoption.is_some() && !trusted_adoptions.contains(&current.item.meta.id) {
+        if current.item.adoption.is_some() && current.item.adoption_valid != Some(true) {
             return ("unknown", Some("document_replacement_adoption_unverified"));
         }
         let Some(reference) = &current.item.superseded_by else {
@@ -104,7 +103,7 @@ fn document_status(
             .source_ref
             .source_fingerprint
             .eq_ignore_ascii_case(&reference.source_fingerprint)
-            || (trusted_adoptions.contains(&target.item.meta.id)
+            || (target.item.adoption_valid == Some(true)
                 && target.item.adoption.as_ref().is_some_and(|a| {
                     a.candidate.source_id == reference.source_id
                         && a.candidate.external_key == reference.external_key
@@ -142,20 +141,13 @@ pub fn check_specifications(
             .or_default()
             .push(d);
     }
-    let mut trusted_adoptions = BTreeSet::new();
-    for d in &decisions {
-        // Reuse the adapter's exact receipt check; prose extraction warnings are unrelated.
-        if d.item.adoption.is_some() && d.item.adoption_valid == Some(true) {
-            trusted_adoptions.insert(d.item.meta.id);
-        }
-    }
     let assessments = decisions
         .iter()
         .map(|d| {
             (
                 d.item.meta.id,
                 if documents[d.item.meta.external_key.as_str()].len() == 1 {
-                    document_status(d, &documents, &trusted_adoptions)
+                    document_status(d, &documents)
                 } else {
                     ("unknown", Some("specification_ambiguous"))
                 },

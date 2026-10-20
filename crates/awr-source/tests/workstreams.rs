@@ -50,6 +50,21 @@ fn manifest() -> Manifest {
 }
 
 #[test]
+fn scoped_yaml_keeps_specification_refs_and_work_contract_fingerprints() {
+    let fixture = Fixture::new();
+    let mut ledger: Value = serde_yaml_ng::from_str(LEDGER).unwrap();
+    let refs = json!([{"specification":"reading", "item":"R", "source_fingerprint":format!("sha256:{}", "a".repeat(64))}]);
+    ledger["work_items"][0]["spec_refs"] = refs.clone();
+    fixture.write(&serde_json::to_string_pretty(&ledger).unwrap());
+    let mut store = fixture.store();
+    let report = index_project(&mut store, &fixture.0, &manifest(), false).unwrap();
+    assert!(report.ok, "{report:?}");
+    let work = store.work_item(report.project_id, "API-1").unwrap().item;
+    assert_eq!(serde_json::to_value(work.spec_refs).unwrap(), refs);
+    assert!(work.meta.source_ref.section_fingerprint.is_some());
+}
+
+#[test]
 fn complete_source_import_is_idempotent_and_preserves_work_identity() {
     for ledger in ledger_line_endings() {
         check_complete_source_import(&ledger);

@@ -51,6 +51,9 @@ pub(crate) fn edit_markdown_fields(
     target: &str,
     changes: &Map<String, Value>,
 ) -> Result<String> {
+    if changes.contains_key("spec_refs") {
+        return Err(unsupported("spec_refs is supported only in YAML ledgers"));
+    }
     let row = locate(text, spec, target)?;
     let mut expected: Vec<_> = rows(text, spec)?.into_iter().map(|r| r.values).collect();
     let idx = expected

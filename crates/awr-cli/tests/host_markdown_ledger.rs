@@ -98,6 +98,90 @@ const TABLE: &str = "# Reading ledger\n\n| ID | 标题 | 状态 | 目标 | 验�
 const LIST: &str = "# Reading\n\n- [ ] Read notes <!-- awr:id=\"W\" --> <!-- awr:goal=\"g#reading\" --> <!-- awr:acceptance=[\"Useful note\"] --> <!-- awr:next_action=\"Read it\" -->\n- [ ] Another task <!-- awr:id=\"U\" -->\n\nKeep this prose.\n";
 
 #[test]
+fn specification_refs_are_rejected_when_reading_markdown_records() {
+    for (original, title) in [(TABLE, "Read A \\| B"), (LIST, "Read notes")] {
+        let h = Host::new(original);
+        for refs in [
+            json!([]),
+            json!(null),
+            json!([{
+                "specification":"reading", "item":"R", "source_fingerprint":format!("sha256:{}", "a".repeat(64))
+            }]),
+        ] {
+            let text = original.replace(title, &format!("{title} <!-- awr:spec_refs={refs} -->"));
+            h.write("work.md", &text);
+            let output = h.run(&["source", "reindex"]);
+            assert!(!output.status.success());
+            let report: Value = serde_json::from_slice(&output.stdout).unwrap();
+            assert_eq!(report["ok"], false, "{report}");
+            assert!(
+                report["issues"].as_array().unwrap().iter().any(|issue| {
+                    issue["code"] == "InvalidInput"
+                        && issue["details"]["rule"] == "ledger.spec_refs"
+                }),
+                "{report}"
+            );
+            h.error(&["spec", "check"], "SourceStale");
+            assert_eq!(h.text("work.md"), text);
+        }
+    }
+}
+
+#[test]
+fn specification_refs_cannot_be_created_or_edited_in_markdown() {
+    for text in [TABLE, LIST] {
+        let h = Host::new(text);
+        for refs in [
+            json!([]),
+            json!(null),
+            json!([{
+                "specification":"reading", "item":"R", "source_fingerprint":format!("sha256:{}", "a".repeat(64))
+            }]),
+        ] {
+            let revision = h.revision();
+            h.write("new.json", &json!({"version":1,"request_key":"unsupported-spec","title":"New work", "fields":{"spec_refs":refs}}).to_string());
+            h.error(
+                &["work", "create", "--input", "new.json"],
+                "MutationUnsupported",
+            );
+            h.fields("unsupported-spec", "human", "W", json!({"spec_refs":refs}));
+            h.error(
+                &["host", "preview", "--input", "save.json"],
+                "MutationUnsupported",
+            );
+            h.error(
+                &[
+                    "host",
+                    "save",
+                    "--input",
+                    "save.json",
+                    "--expected-revision",
+                    &revision,
+                ],
+                "MutationUnsupported",
+            );
+            assert_eq!(h.text("work.md"), text);
+            assert_eq!(h.revision(), revision);
+        }
+    }
+}
+
+#[test]
+fn previous_markdown_projections_require_explicit_reindex_before_spec_check() {
+    let h = Host::new(LIST);
+    h.sql("UPDATE sources SET config_json=json_set(config_json,'$.adapter_version',5) WHERE adapter='markdown-ledger-v1';");
+    let revision = h.revision();
+    h.error(&["spec", "check"], "SourceStale");
+    assert_eq!(h.revision(), revision);
+    assert_eq!(h.text("work.md"), LIST);
+    assert_eq!(h.ok(&["source", "reindex"])["ok"], true);
+    assert_eq!(
+        h.ok(&["spec", "check"])["freshness_basis"],
+        "source_verified_readonly"
+    );
+}
+
+#[test]
 fn table_field_edits_preserve_every_other_byte_and_stable_ids() {
     for newline in ["\n", "\r\n"] {
         let before = TABLE.replace('\n', newline);

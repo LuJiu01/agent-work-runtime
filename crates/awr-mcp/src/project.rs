@@ -1,5 +1,5 @@
 use awr_core::*;
-use awr_source::{Manifest, index_project};
+use awr_source::{Manifest, index_project, verify_read_snapshot};
 use awr_store::Store;
 use serde_json::{Value, json};
 use std::path::{Path, PathBuf};
@@ -53,23 +53,7 @@ impl ReadProject {
         Ok(view)
     }
     pub fn finish(&mut self, root: &Path) -> Result<()> {
-        // The exact CLI indexer runs against disposable RAM. Reject any changed projection
-        // or registration; never publish an ephemeral revision as real project state.
-        let revision = self.store.project(self.project.id)?.project_revision;
-        if revision != self.project.project_revision {
-            return Err(Error::SourceStale(
-                "the read snapshot changed; run awr source reindex and inspect again".into(),
-            ));
-        }
-        let refresh = index_project(&mut self.store, root, &Manifest::load(root)?, false)?;
-        if !refresh.ok
-            || refresh.pending != 0
-            || refresh.indexed != 0
-            || refresh.retired != 0
-            || refresh.project_revision != revision
-        {
-            return Err(Error::SourceStale("source files or mappings differ from their indexed projection; run awr source reindex and inspect again".into()));
-        }
+        let refresh = verify_read_snapshot(&mut self.store, root, &self.project)?;
         self.source_warnings = refresh
             .sources
             .iter()

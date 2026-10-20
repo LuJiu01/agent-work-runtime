@@ -867,7 +867,13 @@ fn multi_step_adoption_resolves_history_and_invalidated_receipts_remain_unknown(
 
 #[test]
 fn extraction_warnings_preserve_valid_history_but_invalid_adoptions_stay_unknown() {
-    for invalidation in ["content", "identity", "receipt_version"] {
+    for invalidation in [
+        "content",
+        "identity",
+        "receipt_version",
+        "candidate_key",
+        "candidate_pin",
+    ] {
         let p = Project::new(json!([{"id":"R","disposition":"required"}]), json!([]));
         p.document("second", json!({"id":"second","status":"proposed","specification":{"version":"1","items":[{"id":"R","disposition":"required"}]}}));
         let path = p.0.join("decisions/second.md");
@@ -946,6 +952,15 @@ fn extraction_warnings_preserve_valid_history_but_invalid_adoptions_stay_unknown
                 metadata["adoption"]["version"] = json!(2);
                 body.to_owned()
             }
+            "candidate_key" => {
+                metadata["adoption"]["candidate"]["external_key"] = json!("another-document");
+                body.to_owned()
+            }
+            "candidate_pin" => {
+                metadata["adoption"]["candidate"]["source_fingerprint"] =
+                    json!(format!("sha256:{}", "b".repeat(64)));
+                body.to_owned()
+            }
             _ => unreachable!(),
         };
         fs::write(
@@ -965,9 +980,18 @@ fn extraction_warnings_preserve_valid_history_but_invalid_adoptions_stay_unknown
                 .as_array()
                 .unwrap()
                 .iter()
-                .find(|d| d["key"] == "second")
+                .find(|d| d["key"]
+                    == if invalidation == "candidate_pin" {
+                        "dashboard"
+                    } else {
+                        "second"
+                    })
                 .unwrap()["diagnostic"],
-            "document_replacement_adoption_unverified",
+            if invalidation == "candidate_pin" {
+                "document_replacement_version_changed"
+            } else {
+                "document_replacement_adoption_unverified"
+            },
             "{invalidation}: {r}"
         );
         assert_eq!(
