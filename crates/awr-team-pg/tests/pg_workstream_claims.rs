@@ -480,11 +480,13 @@ async fn request_bounds_epoch_changes_and_completed_work_fail_without_reinterpre
         )
         .await
         .unwrap();
+    // Naming the changed coordinator epoch is the variant `claim.renew` already used
+    // above; `RecoveryBlocked` now means a workstream or ownership mismatch only.
     assert!(matches!(
         commands
             .execute(TENANT, PROJECT, A, acquire(&store, "epoch-takeover").await)
             .await,
-        Err(PgError::RecoveryBlocked)
+        Err(PgError::EpochChanged)
     ));
     admin.batch_execute("UPDATE awr_team.projects SET coordinator_epoch='epoch-a' WHERE tenant_id='reader-tenant';
         INSERT INTO awr_team.completion_receipts(tenant_id,project_id,id,work_id,scope_id,
@@ -738,6 +740,52 @@ async fn legacy_or_reassigned_active_rows_cannot_be_silently_adopted_after_expir
         }
         assert_eq!(snapshot(&admin).await, before);
     }
+}
+
+#[tokio::test]
+async fn rejected_claim_acquire_leaves_claims_fence_and_revision_unchanged() {
+    let (_guard, admin, _, store) = setup().await;
+    enable_writes(&admin).await;
+    let commands = store.commands();
+    commands
+        .execute(TENANT, PROJECT, A, acquire(&store, "take").await)
+        .await
+        .unwrap();
+    let live = snapshot(&admin).await;
+    assert!(matches!(
+        commands
+            .execute(TENANT, PROJECT, A, acquire(&store, "second").await)
+            .await,
+        Err(PgError::ClaimHeld)
+    ));
+    assert_eq!(snapshot(&admin).await, live);
+    admin
+        .batch_execute("UPDATE awr_team.claims SET fence=fence+1")
+        .await
+        .unwrap();
+    let stale = snapshot(&admin).await;
+    assert!(matches!(
+        commands
+            .execute(TENANT, PROJECT, A, acquire(&store, "stale").await)
+            .await,
+        Err(PgError::StaleFence)
+    ));
+    assert_eq!(snapshot(&admin).await, stale);
+    admin
+        .batch_execute(
+            "UPDATE awr_team.claims SET fence=fence-1;
+             UPDATE awr_team.projects SET coordinator_epoch='new-epoch' WHERE tenant_id='reader-tenant';",
+        )
+        .await
+        .unwrap();
+    let moved = snapshot(&admin).await;
+    assert!(matches!(
+        commands
+            .execute(TENANT, PROJECT, A, acquire(&store, "epoch").await)
+            .await,
+        Err(PgError::EpochChanged)
+    ));
+    assert_eq!(snapshot(&admin).await, moved);
 }
 
 #[tokio::test]
